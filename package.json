@@ -1,0 +1,45 @@
+{
+  "name": "apkstart",
+  "productName": "ApkStart",
+  "version": "0.1.0",
+  "description": "极致轻量的 Windows 安卓应用运行器：双击 APK 即装，应用以独立窗口与桌面图标运行",
+  "main": "src/main.js",
+  "author": "RoutineMiku",
+  "license": "MIT",
+  "private": true,
+  "homepage": "https://github.com/RoutineMiku/apkstart#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RoutineMiku/apkstart.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RoutineMiku/apkstart/issues"
+  },
+  "keywords": [
+    "android",
+    "emulator",
+    "apk",
+    "windows",
+    "qemu",
+    "electron",
+    "wsa",
+    "freeform"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node test/run-tests.js && node test/engine-test.js",
+    "pack": "node build/pack.js",
+    "assoc:on": "node scripts/assoc.js on",
+    "assoc:off": "node scripts/assoc.js off"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}

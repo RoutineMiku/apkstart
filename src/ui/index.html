@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+<title>ApkStart</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="titlebar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="18" height="18"><rect x="1" y="1" width="22" height="22" rx="6" fill="#12161b"/><path d="M9 7.5v9l7-4.5-7-4.5z" fill="#3ddc84"/></svg>
+    </div>
+    <span class="brand-name">ApkStart</span>
+    <span class="brand-tag" id="engineTag">未连接运行时</span>
+  </div>
+  <div class="titlebar-spacer"></div>
+  <div class="titlebar-actions">
+    <button class="icon-btn" id="btnSettings" title="设置">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6h.09A1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="shell">
+  <section class="toolbar">
+    <div class="search">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="text" placeholder="搜索已安装应用" autocomplete="off" />
+    </div>
+    <div class="toolbar-right">
+      <button class="btn ghost" id="btnRuntime">运行时</button>
+      <button class="btn ghost" id="btnShare" title="打开与安卓互通的共享目录">共享目录</button>
+      <button class="btn primary" id="btnInstall">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v10"/><path d="m7 12 5 5 5-5"/><path d="M5 20h14"/></svg>
+        安装 APK
+      </button>
+    </div>
+  </section>
+
+  <section class="content" id="content">
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty">
+      <div class="empty-art">
+        <svg viewBox="0 0 160 120" width="220">
+          <rect x="18" y="16" width="124" height="50" rx="10" fill="#eef1f4" stroke="#dde2e8"/>
+          <rect x="34" y="34" width="30" height="14" rx="4" fill="#cfd8e3"/>
+          <rect x="72" y="34" width="52" height="6" rx="3" fill="#dde5ee"/>
+          <rect x="72" y="44" width="36" height="6" rx="3" fill="#e6ecf3"/>
+          <path d="M80 76v22m0 0-9-9m9 9 9-9" stroke="#9fb0c2" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <rect x="40" y="100" width="80" height="8" rx="4" fill="#eef1f4"/>
+        </svg>
+      </div>
+      <h2>把 APK 拖进来就能装</h2>
+      <p>安装完成后会自动生成桌面图标，双击即以独立窗口运行，和普通 Windows 软件一样。<br/>已注册 .apk 关联时，在资源管理器里双击 APK 也会直接装到 ApkStart。</p>
+      <button class="btn primary lg" id="btnInstall2">选择 APK 文件</button>
+      <p class="hint" id="emptyHint"></p>
+    </div>
+  </section>
+
+  <section class="setup" id="setupView" hidden>
+    <div class="setup-card">
+      <header class="setup-head">
+        <div>
+          <h1>准备 ApkStart 运行时</h1>
+          <p>ApkStart 自带完整的安卓运行时（adb + QEMU + Android-x86），<b>不需要安装任何第三方模拟器</b>。</p>
+        </div>
+        <div class="setup-hv" id="setupHv"></div>
+      </header>
+
+      <div class="steps" id="setupSteps"></div>
+
+      <div class="setup-foot">
+        <button class="btn primary lg" id="btnDeployAll">一键部署</button>
+        <button class="btn ghost" id="btnSetupAdvanced">高级：连接已有运行时</button>
+        <span class="inline-note" id="setupNote"></span>
+      </div>
+    </div>
+
+    <div class="setup-guide" id="setupGuide" hidden>
+      <h2>安装 Android 到虚拟磁盘</h2>
+      <p class="guide-sub">虚拟机窗口已打开。按下面 6 步操作一次，之后 ApkStart 会直接从磁盘启动，不再需要镜像。</p>
+      <ol class="guide-list">
+        <li><b>启动菜单</b>：用 <kbd>↓</kbd> 选到 <code>Installation - Install Android-x86 to harddisk</code>，回车</li>
+        <li><b>Choose Partition</b>：选 <code>Create/Modify partitions</code>；询问是否使用 GPT 时选 <code>No</code></li>
+        <li><b>cfdisk 分区</b>：<code>New</code> → <code>Primary</code> → 容量直接回车 → <code>Bootable</code> → <code>Write</code> → 输入 <code>yes</code> → <code>Quit</code></li>
+        <li><b>格式化</b>：选 <code>vda1</code> → 提示格式化时选 <code>ext4</code> → <code>Yes</code></li>
+        <li><b>引导与系统</b>：<code>Install GRUB</code> 选 <code>Yes</code>；<code>Install /system as read-write</code> 选 <code>Yes</code></li>
+        <li><b>完成</b>：进度到 100% 后点下面的「我已安装完成」（ApkStart 会自动重启并接管）</li>
+      </ol>
+      <p class="guide-tip">如果之后提示 adb 未连接：在虚拟机窗口按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F1</kbd> 进入终端，执行
+        <code>setprop service.adb.tcp.port 5555</code>、<code>stop adbd</code>、<code>start adbd</code>，
+        再按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F7</kbd> 回到图形界面。</p>
+      <div class="guide-foot">
+        <button class="btn primary" id="btnMarkInstalled">我已安装完成</button>
+        <button class="btn ghost" id="btnGuideClose">稍后再说</button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="statusbar">
+    <div class="status-left">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">正在检查运行时…</span>
+    </div>
+    <div class="status-right">
+      <span class="status-item" id="statusDevice"></span>
+      <span class="sep"></span>
+      <span class="status-item" id="statusStats"></span>
+    </div>
+  </footer>
+</main>
+
+<!-- 安装进度 -->
+<div class="toast-wrap" id="toastWrap"></div>
+
+<!-- 拖放遮罩 -->
+<div class="dropzone" id="dropzone">
+  <div class="dropzone-inner">
+    <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>
+    <strong>松手开始安装</strong>
+    <span>支持单个或多个 .apk 文件</span>
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div class="ctxmenu" id="ctxmenu"></div>
+
+<!-- 设置 -->
+<div class="modal-mask" id="settingsMask">
+  <div class="modal">
+    <header class="modal-head">
+      <h2>设置</h2>
+      <button class="icon-btn" id="btnCloseSettings">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <div class="modal-body">
+      <div class="group">
+        <div class="group-title">运行时</div>
+        <div class="field">
+          <label>引擎模式</label>
+          <select id="setEngineMode">
+            <option value="builtin">自带运行时（推荐，QEMU + Android-x86，无第三方依赖）</option>
+            <option value="attach">连接已有运行时（高级：复用 WSA / 其他模拟器的 adb 端口）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>adb 路径</label>
+          <input id="setAdbPath" type="text" placeholder="留空则自动在 PATH / Android SDK 中查找" />
+        </div>
+        <div class="field">
+          <label>设备地址</label>
+          <div class="row">
+            <input id="setDevice" type="text" placeholder="127.0.0.1:58526" />
+            <button class="btn ghost sm" id="btnProbe">探测</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>系统镜像（ISO）</label>
+          <input id="setSystemImage" type="text" placeholder="Android-x86 / Bliss OS 的 ISO 或 IMG 路径，留空使用默认位置" />
+        </div>
+        <div class="field two">
+          <div>
+            <label>内存 (MB)</label>
+            <input id="setMemory" type="number" min="1024" step="512" />
+          </div>
+          <div>
+            <label>CPU 核心</label>
+            <input id="setCores" type="number" min="1" max="16" />
+          </div>
+        </div>
+        <div class="field">
+          <label>空闲回收（分钟，0 = 不回收）</label>
+          <input id="setIdle" type="number" min="0" step="1" />
+        </div>
+        <div class="runtime-actions">
+          <button class="btn ghost sm" id="btnRuntimeStart">启动运行时</button>
+          <button class="btn ghost sm" id="btnRuntimeStop">停止内置虚拟机</button>
+          <span class="inline-note" id="probeResult"></span>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">桌面与应用</div>
+        <div class="field switch-field">
+          <div>
+            <label>安装后自动创建桌面快捷方式</label>
+            <span class="sub">快捷方式带真实应用图标，双击直接进应用</span>
+          </div>
+          <input type="checkbox" id="setAutoShortcut" class="switch" />
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>以独立窗口运行（freeform）</label>
+            <span class="sub">关闭后应用会在运行时的整屏里显示</span>
+          </div>
+          <input type="checkbox" id="setFreeform" class="switch" />
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>从桌面图标启动后隐藏 ApkStart 窗口</label>
+            <span class="sub">获得最接近原生应用的启动体验</span>
+          </div>
+          <input type="checkbox" id="setHideAfterLaunch" class="switch" />
+        </div>
+        <div class="field">
+          <label>快捷方式目录</label>
+          <input id="setShortcutDir" type="text" placeholder="留空 = 桌面" />
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">文件互通</div>
+        <div class="field">
+          <label>本机共享目录</label>
+          <div class="row">
+            <input id="setSharedDir" type="text" />
+            <button class="btn ghost sm" id="btnOpenShared">打开</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>安卓内对应目录</label>
+          <input id="setDeviceSharedDir" type="text" placeholder="/sdcard/ApkStartShared" />
+        </div>
+        <p class="note">两侧目录会持续双向同步；在安卓应用里保存到该目录的文件，会出现在本机共享目录中。</p>
+      </div>
+
+      <div class="group">
+        <div class="group-title">系统集成</div>
+        <div class="field switch-field">
+          <div>
+            <label>关联 .apk 文件</label>
+            <span class="sub">双击 APK 直接安装到 ApkStart（仅写入当前用户，无需管理员）</span>
+          </div>
+          <button class="btn ghost sm" id="btnAssoc">检查中…</button>
+        </div>
+        <div class="field">
+          <label>数据目录</label>
+          <div class="row">
+            <input id="setDataDir" type="text" readonly />
+            <button class="btn ghost sm" id="btnOpenData">打开</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="modal-foot">
+      <span class="inline-note">设置修改后立即生效</span>
+      <button class="btn primary" id="btnDoneSettings">完成</button>
+    </footer>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

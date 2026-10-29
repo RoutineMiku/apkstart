@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建便携版并发布
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖（含 Electron 运行时）
+        run: npm ci
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      - name: 测试
+        run: npm test
+
+      - name: 打包便携版
+        run: npm run pack
+
+      - name: 压缩产物
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          Compress-Archive -Path dist/ApkStart-win64-portable/* -DestinationPath "ApkStart-$tag-win64-portable.zip" -CompressionLevel Optimal
+          Get-Item "ApkStart-$tag-win64-portable.zip" | Select-Object Name, Length
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          $zip = "ApkStart-$tag-win64-portable.zip"
+          gh release create $tag $zip --title "ApkStart $tag" --generate-notes

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+test/out/
+test/fixtures/
+test/shot*.png
+*.log
+*.zip
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# 运行时产物（本地下载，不入库）
+engine/qemu/
+engine/*.iso
+engine/*.img
+engine/*.qcow2
+tools/platform-tools/adb.exe
+tools/platform-tools/*.dll
