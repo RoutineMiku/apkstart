@@ -57,12 +57,18 @@ class EmulatorEngine {
       `avd.ini.encoding=UTF-8\npath=${avdDir.replace(/\\/g, '/')}\ntarget=android-${p.sysApi}\n`,
     );
 
+    // hw.cpu.arch 必须是 ABI 本身（x86_64 不能截成 x86），
+    // 否则模拟器会按 32 位启动却加载 64 位内核，报 "requires an x86-64 CPU, but only detected an i686 CPU"。
+    const cpuArch = p.sysAbi === 'arm64-v8a' ? 'arm64'
+      : p.sysAbi === 'armeabi-v7a' ? 'arm'
+        : p.sysAbi;
+
     const cfg = [
       `AvdId=${AVD_NAME}`,
       'avd.ini.displayname=ApkStart',
       'avd.ini.encoding=UTF-8',
       `abi.type=${p.sysAbi}`,
-      `hw.cpu.arch=${p.sysAbi.split('_')[0]}`,
+      `hw.cpu.arch=${cpuArch}`,
       `hw.cpu.ncore=${cores}`,
       `hw.ramSize=${memoryMB}`,
       'vm.heapSize=512',

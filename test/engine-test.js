@@ -194,6 +194,41 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     assert(new ZipArchive(fs.readFileSync(zipPath)).has('platform-tools/adb.exe'), 'zip 读取异常');
   });
 
+  await test('SDK 索引里的相对 url 会被补全成绝对地址', async () => {
+    const { absUrl, baseOf, SOURCES } = require('../src/core/provision');
+    // repository2-3.xml（emulator）相对仓库根
+    assert(absUrl('emulator-windows_x64-16847572.zip') === `${baseOf(SOURCES.sdkIndex)}emulator-windows_x64-16847572.zip`,
+      'emulator 相对路径未补全');
+    // sys-img 索引相对 sys-img/android/，不能错拼到仓库根
+    const sysBase = baseOf(SOURCES.sysImgIndexes[0]);
+    assert(sysBase.endsWith('/sys-img/android/'), `sys-img 基准目录异常: ${sysBase}`);
+    assert(absUrl('x86_64-30_r11.zip', sysBase) === 'https://dl.google.com/android/repository/sys-img/android/x86_64-30_r11.zip',
+      'sys-img 相对路径补全错误');
+    // 绝对地址原样返回
+    assert(absUrl('https://example.com/a.zip') === 'https://example.com/a.zip', '绝对地址被改写');
+  });
+
+  await test('解析出的 emulator / 系统镜像地址都是可下载的绝对 URL', async () => {
+    const p = new Provisioner(TMP);
+    const emuUrl = await p.resolveEmulatorUrl();
+    const imgUrl = await p.resolveSysimgUrl();
+    for (const u of [emuUrl, imgUrl]) {
+      assert(/^https?:\/\//i.test(u), `不是绝对 URL: ${u}`);
+      assert(/\.zip$/i.test(u), `不是 zip 包: ${u}`);
+    }
+    assert(/windows_x64/i.test(emuUrl), `emulator 包平台不对: ${emuUrl}`);
+  });
+
+  await test('AVD 配置使用 64 位架构（x86_64 不能被截成 x86）', async () => {
+    const { EmulatorEngine } = require('../src/core/emulator');
+    const emu = new EmulatorEngine(TMP);
+    const r = emu.ensureAvd({ memoryMB: 2048, cores: 2 });
+    const cfg = fs.readFileSync(path.join(r.avdDir, 'config.ini'), 'utf8');
+    assert(/^hw\.cpu\.arch=x86_64$/m.test(cfg), `hw.cpu.arch 应为 x86_64，实际：${cfg.match(/^hw\.cpu\.arch=.*$/m)}`);
+    assert(/^abi\.type=x86_64$/m.test(cfg), 'abi.type 应为 x86_64');
+    assert(/^image\.sysdir\.1=system-images\//m.test(cfg), 'image.sysdir.1 缺失');
+  });
+
   await test('镜像校验：区分有效 ISO9660 / 损坏 / 未下完', async () => {
     const p = new Provisioner(TMP);
     const mk = (file, size, writeMagic) => {

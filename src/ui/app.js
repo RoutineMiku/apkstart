@@ -186,6 +186,11 @@ async function refreshStatus() {
       text.textContent = '运行时引擎未安装 —— 点击右上角「运行时」一键部署';
       tag.textContent = '需要部署';
       tag.className = 'brand-tag';
+    } else if (s.needsSetup === 'boot') {
+      dot.className = 'dot warn';
+      text.textContent = '运行时已就绪 —— 点「运行时」里的「启动运行时」开机，或直接安装一个 APK';
+      tag.textContent = '待开机';
+      tag.className = 'brand-tag';
     } else if (s.installing) {
       dot.className = 'dot warn';
       text.textContent = '安装程序运行中 —— 请在虚拟机窗口里完成安装';

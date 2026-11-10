@@ -8,7 +8,10 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const OUT = path.join(ROOT, 'dist', 'ApkStart-win64-portable');
+// 允许指定输出目录（用于目标目录被正在运行的实例占用时，先构建到别处再替换）
+const OUT = process.env.APKSTART_PACK_OUT
+  ? path.resolve(process.env.APKSTART_PACK_OUT)
+  : path.join(ROOT, 'dist', 'ApkStart-win64-portable');
 const ELECTRON_DIST = path.join(ROOT, 'node_modules', 'electron', 'dist');
 
 function rmrf(p) {

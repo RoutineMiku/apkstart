@@ -42,6 +42,27 @@ const SOURCES = {
   isoSizeHint: 900 * 1024 * 1024,
 };
 
+/**
+ * SDK 索引里的 <url> 是相对路径，基准目录各不相同：
+ *   repository2-3.xml      → https://dl.google.com/android/repository/
+ *   sys-img/android/*.xml  → https://dl.google.com/android/repository/sys-img/android/
+ * 所以基准目录一律取「索引文件自身所在目录」。此前直接拿文件名当 URL 会抛 Invalid URL。
+ */
+const REPO_BASE = 'https://dl.google.com/android/repository/';
+
+function baseOf(indexUrl) {
+  const s = String(indexUrl || '');
+  const i = s.lastIndexOf('/');
+  return i > 0 ? s.slice(0, i + 1) : REPO_BASE;
+}
+
+function absUrl(u, base = REPO_BASE) {
+  const s = String(u || '').trim();
+  if (!s) return '';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return s;
+  return base + s.replace(/^\/+/, '');
+}
+
 /** 想默认使用的系统镜像（API 级别 + 渠道）。AOSP 版体积小、无 GMS 授权问题。 */
 const DEFAULT_SYSIMG = { api: '30', tag: 'default', abi: 'x86_64' };
 
@@ -336,13 +357,14 @@ class Provisioner {
   /** 从 SDK 索引里动态解析最新的 Windows emulator 包地址 */
   async resolveEmulatorUrl() {
     const cached = store.getSettings().runtime.emulatorUrl;
-    if (cached && cached.trim()) return cached.trim();
+    if (cached && cached.trim()) return absUrl(cached);
     if (this._cache.emulatorUrl) return this._cache.emulatorUrl;
     try {
       const xml = await this._fetchText(SOURCES.sdkIndex);
       const block = /<remotePackage path="emulator"[\s\S]*?<\/remotePackage>/.exec(xml);
       if (block) {
-        const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => m[1]);
+        const base = baseOf(SOURCES.sdkIndex);
+        const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base));
         const win = urls.find((u) => /windows_x64.*\.zip$/i.test(u));
         if (win) {
           this._cache.emulatorUrl = win;
@@ -357,7 +379,7 @@ class Provisioner {
   /** 从 sys-img 索引里解析默认 AOSP 系统镜像地址 */
   async resolveSysimgUrl() {
     const cached = store.getSettings().runtime.sysimgUrl;
-    if (cached && cached.trim()) return cached.trim();
+    if (cached && cached.trim()) return absUrl(cached, baseOf(SOURCES.sysImgIndexes[0]));
     if (this._cache.sysimgUrl) return this._cache.sysimgUrl;
     const want = `system-images;android-${DEFAULT_SYSIMG.api};${DEFAULT_SYSIMG.tag};${DEFAULT_SYSIMG.abi}`;
     for (const idx of SOURCES.sysImgIndexes) {
@@ -367,7 +389,8 @@ class Provisioner {
         const re = new RegExp(`<remotePackage path="${want.replace(/[;]/g, ';')}"[\\s\\S]*?</remotePackage>`);
         const block = re.exec(xml);
         if (block) {
-          const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => m[1])
+          const base = baseOf(idx);
+          const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base))
             .filter((u) => /x86_64.*\.zip$/i.test(u));
           if (urls.length) {
             this._cache.sysimgUrl = urls[urls.length - 1];
@@ -748,4 +771,4 @@ class Provisioner {
   }
 }
 
-module.exports = { Provisioner, SOURCES, MIN_SIZE };
+module.exports = { Provisioner, SOURCES, MIN_SIZE, absUrl, baseOf };
