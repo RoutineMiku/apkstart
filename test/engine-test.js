@@ -229,6 +229,18 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     assert(/^image\.sysdir\.1=system-images\//m.test(cfg), 'image.sysdir.1 缺失');
   });
 
+  await test('安装失败原因翻译：NO_MATCHING_ABIS 给出中文指引', async () => {
+    const { friendlyInstallError } = require('../src/core/adb');
+    const out = friendlyInstallError(
+      'Performing Streamed Install\nadb.exe: failed to install x.apk: '
+      + 'Failure [INSTALL_FAILED_NO_MATCHING_ABIS: Failed to extract native libraries, res=-113]',
+    );
+    assert(out.includes('ARM 原生库'), `应解释 ARM 原生库问题：${out}`);
+    assert(out.includes('INSTALL_FAILED_NO_MATCHING_ABIS'), '应保留原始错误码');
+    const other = friendlyInstallError('Failure [INSTALL_FAILED_INVALID_APK: x]');
+    assert(other.includes('损坏') || other.includes('不完整'), `未知错误也应可读：${other}`);
+  });
+
   await test('镜像校验：区分有效 ISO9660 / 损坏 / 未下完', async () => {
     const p = new Provisioner(TMP);
     const mk = (file, size, writeMagic) => {

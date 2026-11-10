@@ -16,6 +16,38 @@ const COMMON_ADB_PATHS = [
   'C:\\Program Files\\BlueStacks_nxt\\HD-Adb.exe',
 ];
 
+/**
+ * 把 pm install 的原始失败原因翻译成用户能看懂的中文。
+ * 保留原始错误码在末尾，便于搜索排查。
+ */
+function friendlyInstallError(raw) {
+  const code = /INSTALL_[A-Z_]+/.exec(raw);
+  const tag = code ? code[0] : '';
+  const table = {
+    INSTALL_FAILED_NO_MATCHING_ABIS:
+      '安装失败：这个应用只提供 ARM 原生库（多数国产应用如此），'
+      + '而当前运行时是 x86_64 架构且未启用 ARM 转译，系统拒绝安装。'
+      + '可在「运行时」设置里切换到内置 ARM 翻译的 Google Play 兼容镜像后重试。',
+    INSTALL_FAILED_OLDER_SDK:
+      '安装失败：应用要求的 Android 版本高于当前运行时（需更高系统镜像）。',
+    INSTALL_PARSE_FAILED_NO_CERTIFICATES:
+      '安装失败：APK 没有有效签名，无法安装。',
+    INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES:
+      '安装失败：与已安装版本签名不一致，请先卸载旧版再装。',
+    INSTALL_FAILED_VERSION_DOWNGRADE:
+      '安装失败：设备上已安装更高版本，不能降级覆盖。',
+    INSTALL_FAILED_INSUFFICIENT_STORAGE:
+      '安装失败：运行时磁盘空间不足，请清理后重试。',
+    INSTALL_FAILED_INVALID_APK:
+      '安装失败：APK 文件损坏或不完整（可能下载未完成），请重新获取。',
+    INSTALL_FAILED_INVALID_URI: '安装失败：APK 路径含特殊字符，请把文件移到纯英文路径后重试。',
+    INSTALL_FAILED_ALREADY_EXISTS: '安装失败：已存在同名应用且签名不同，请先卸载。',
+    INSTALL_FAILED_UPDATE_INCOMPATIBLE: '安装失败：与已安装版本签名不一致，请先卸载旧版。',
+  };
+  const msg = table[tag];
+  return msg ? `${msg}（${tag}）` : `安装失败：${raw}`;
+}
+
 class AdbError extends Error {
   constructor(message, stderr, code) {
     super(message);
@@ -138,7 +170,7 @@ class AdbClient {
     if (!fs.existsSync(apkPath)) throw new Error(`APK 不存在: ${apkPath}`);
     const { stdout } = await this.exec(['install', '-r', '-g', '-t', apkPath], { timeout: 180000 });
     if (/Failure|Error/i.test(stdout) && !/Success/i.test(stdout)) {
-      throw new Error(stdout.trim());
+      throw new Error(friendlyInstallError(stdout.trim()));
     }
     return stdout.trim();
   }
@@ -304,4 +336,4 @@ class AdbClient {
   }
 }
 
-module.exports = { AdbClient, AdbError, parseStatList };
+module.exports = { AdbClient, AdbError, parseStatList, friendlyInstallError };
