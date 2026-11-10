@@ -24,6 +24,26 @@ class AdbError extends Error {
   }
 }
 
+/**
+ * 解析 `find -exec stat -c '%Y|%s|%n'` 的输出。
+ * 返回 null 表示输出不像 stat 结果（设备不支持）。
+ */
+function parseStatList(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const rows = [];
+  for (const l of lines) {
+    const m = /^(\d{9,})\|(\d+)\|(.+)$/.exec(l);
+    if (!m) continue;
+    const rel = m[3].replace(/^\.\//, '');
+    if (!rel || rel.endsWith('/')) continue;
+    rows.push({ rel, size: Number(m[2]), mtime: Number(m[1]) * 1000 });
+  }
+  // 有输出但一行都解析不出来 → 说明不是 stat 格式
+  if (!rows.length) return null;
+  return rows;
+}
+
 class AdbClient {
   constructor({ adbPath, serial }) {
     this.adbPath = adbPath || 'adb';
@@ -247,6 +267,23 @@ class AdbClient {
     }).filter(Boolean);
   }
 
+  /**
+   * 带真实 mtime 的远端列表（toybox stat）。
+   * ls -l 的日期是「月 日 时:分」，无法可靠换算，会导致同步误判为「每次都变了」。
+   * 返回 null 表示设备不支持 stat，调用方应退回 listRemote。
+   */
+  async listRemoteStat(remote) {
+    let out = '';
+    try {
+      out = await this.shell(`cd "${remote}" 2>/dev/null && find . -type f -exec stat -c '%Y|%s|%n' {} + 2>/dev/null`);
+    } catch (_) {
+      return null;
+    }
+    const rows = parseStatList(out);
+    if (!rows) return null;
+    return rows;
+  }
+
   /** 清除应用数据 */
   async clearData(pkg) {
     await this.shell(`pm clear ${pkg}`);
@@ -267,4 +304,4 @@ class AdbClient {
   }
 }
 
-module.exports = { AdbClient, AdbError };
+module.exports = { AdbClient, AdbError, parseStatList };

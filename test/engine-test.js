@@ -29,7 +29,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
 
 (async () => {
   console.log('\n[download.js]');
-  const { download, head, sha256File } = require('../src/core/download');
+  const { download, downloadParallel, head, sha256File } = require('../src/core/download');
 
   // 本地 HTTP 服务模拟下载源（含 Range 续传）
   const payload = Buffer.alloc(300 * 1024);
@@ -47,6 +47,28 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
         return res.end(payload.subarray(start));
       }
       res.writeHead(200, { 'Content-Length': payload.length });
+      return res.end(payload);
+    }
+    // 完整支持 start-end 的 Range（用于并行分块测试）
+    if (req.url === '/ranged.bin') {
+      server.rangeHits = (server.rangeHits || 0) + 1;
+      const range = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range || '');
+      if (!range) {
+        res.writeHead(200, { 'Content-Length': payload.length, 'Accept-Ranges': 'bytes' });
+        return res.end(payload);
+      }
+      const start = Number(range[1]);
+      const end = Math.min(Number(range[2]), payload.length - 1);
+      res.writeHead(206, {
+        'Accept-Ranges': 'bytes',
+        'Content-Range': `bytes ${start}-${end}/${payload.length}`,
+        'Content-Length': end - start + 1,
+      });
+      return res.end(payload.subarray(start, end + 1));
+    }
+    // 明确不支持 Range
+    if (req.url === '/norange.bin') {
+      res.writeHead(200, { 'Content-Length': payload.length, 'Accept-Ranges': 'none' });
       return res.end(payload);
     }
     if (req.url === '/redirect') {
@@ -91,6 +113,31 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     } catch (_) { threw = true; }
     assert(threw, '应当抛错');
     assert(!fs.existsSync(dest), '校验失败应删除文件');
+  });
+
+  await test('并行分块下载：多连接拼接内容一致', async () => {
+    const dest = path.join(TMP, 'dl4.bin');
+    server.rangeHits = 0;
+    let maxPercent = 0;
+    const r = await downloadParallel(`http://127.0.0.1:${port}/ranged.bin`, dest, {
+      connections: 8,
+      minChunk: 32 * 1024,
+      onProgress: (p) => { maxPercent = Math.max(maxPercent, p.percent); },
+    });
+    assert(fs.readFileSync(dest).equals(payload), '分块拼接后内容不一致');
+    assert(r.parallel > 1, `未启用并行：${r.parallel}`);
+    assert(server.rangeHits >= r.parallel, `分块请求数偏少：${server.rangeHits}`);
+    assert(maxPercent > 0, '未上报进度');
+  });
+
+  await test('源不支持 Range 时自动回退单流', async () => {
+    const dest = path.join(TMP, 'dl5.bin');
+    const r = await downloadParallel(`http://127.0.0.1:${port}/norange.bin`, dest, {
+      connections: 8,
+      minChunk: 32 * 1024,
+    });
+    assert(fs.readFileSync(dest).equals(payload), '回退后内容不一致');
+    assert(!r.parallel, '不应走并行');
   });
 
   server.close();
@@ -145,6 +192,45 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     p.extractZip(zipPath, out);
     assert(fs.readFileSync(path.join(out, 'platform-tools', 'adb.exe')).toString() === 'fake-adb-binary', '解压内容不符');
     assert(new ZipArchive(fs.readFileSync(zipPath)).has('platform-tools/adb.exe'), 'zip 读取异常');
+  });
+
+  await test('镜像校验：区分有效 ISO9660 / 损坏 / 未下完', async () => {
+    const p = new Provisioner(TMP);
+    const mk = (file, size, writeMagic) => {
+      const fd = fs.openSync(file, 'w');
+      fs.ftruncateSync(fd, size);
+      if (writeMagic) {
+        fs.writeSync(fd, Buffer.from([1]), 0, 1, 0x8000);
+        fs.writeSync(fd, Buffer.from('CD001', 'latin1'), 0, 5, 0x8001);
+      }
+      fs.closeSync(fd);
+      return file;
+    };
+
+    const good = mk(path.join(TMP, 'good.iso'), 450 * 1024 * 1024, true);
+    const a = p.inspectIso(good);
+    assert(a.ok && a.iso9660, `有效 ISO 被判无效：${a.reason}`);
+
+    const broken = mk(path.join(TMP, 'broken.iso'), 450 * 1024 * 1024, false);
+    const b = p.inspectIso(broken);
+    assert(!b.ok && /ISO9660/.test(b.reason), `损坏镜像未被拦截：${JSON.stringify(b)}`);
+
+    const partial = mk(path.join(TMP, 'partial.iso'), 2 * 1024 * 1024, true);
+    const c = p.inspectIso(partial);
+    assert(!c.ok && /未完成/.test(c.reason), `未下完的镜像未被拦截：${JSON.stringify(c)}`);
+
+    for (const f of [good, broken, partial]) fs.rmSync(f, { force: true });
+  });
+
+  await test('远端 stat 列表解析（真实 mtime，避免无限重传）', async () => {
+    const { parseStatList } = require('../src/core/adb');
+    const rows = parseStatList('1794309868|1234|./a.txt\n1794309900|99|./sub/b.png');
+    assert(rows && rows.length === 2, `解析数量异常：${JSON.stringify(rows)}`);
+    assert(rows[0].rel === 'a.txt' && rows[0].size === 1234, '首行字段错误');
+    assert(rows[1].rel === 'sub/b.png', '子目录相对路径错误');
+    assert(rows[1].mtime === 1794309900000, 'mtime 未换算为毫秒');
+    assert(parseStatList('ls: /nope: No such file') === null, '非 stat 输出应返回 null 以便回退');
+    assert(Array.isArray(parseStatList('')) && parseStatList('').length === 0, '空目录应返回空数组');
   });
 
   console.log('\n[engine.js]');
@@ -209,6 +295,32 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     const r = await rt.ensure({ onLog: () => {} });
     assert(r.ok === false, '不应就绪');
     assert(['provision', 'install'].includes(r.needsSetup), `needsSetup=${r.needsSetup}`);
+  });
+
+  await test('启动就绪判定：必须等到 boot_completed + 包管理器', async () => {
+    const rt = new Runtime(TMP);
+    const calls = [];
+    const fake = {
+      isOnline: async () => true,
+      connect: async () => true,
+      shell: async (cmd) => {
+        calls.push(cmd);
+        if (cmd.includes('sys.boot_completed')) return '1';
+        if (cmd.includes('pm path android')) return 'package:/system/framework/framework-res.apk';
+        return '';
+      },
+    };
+    const r = await rt.waitAndroidReady(fake, 5000, () => {});
+    assert(r.ok, '应当判定为已就绪');
+    assert(calls.some((c) => c.includes('sys.boot_completed')), '未检查 boot_completed');
+    assert(calls.some((c) => c.includes('pm path android')), '未检查包管理器');
+  });
+
+  await test('系统未启动完成时返回阶段（kernel）', async () => {
+    const rt = new Runtime(TMP);
+    const fake = { isOnline: async () => true, connect: async () => true, shell: async () => '0' };
+    const r = await rt.waitAndroidReady(fake, 1200, () => {});
+    assert(!r.ok && r.stage === 'kernel', `应停在 kernel 阶段：${JSON.stringify(r)}`);
   });
 
   console.log(results.join('\n'));

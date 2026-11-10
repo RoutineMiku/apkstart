@@ -166,10 +166,15 @@ async function refreshStatus() {
       text.textContent = `运行时已就绪 · Android ${s.android || '?'}${s.freeform ? ' · 独立窗口已启用' : ''}`;
       tag.textContent = `Android ${s.android || ''}`.trim();
       tag.className = 'brand-tag ok';
-    } else if (s.vmStarting) {
-      dot.className = 'dot';
-      text.textContent = '运行时正在启动…';
-      tag.textContent = '启动中';
+    } else if (s.phase === 'booting' || s.vmStarting) {
+      dot.className = 'dot warn';
+      text.textContent = '正在引导 Android…首次启动可能要几分钟';
+      tag.textContent = '引导中';
+      tag.className = 'brand-tag';
+    } else if (s.installing) {
+      dot.className = 'dot warn';
+      text.textContent = '安装程序运行中 —— 请在虚拟机窗口里完成安装';
+      tag.textContent = '安装中';
       tag.className = 'brand-tag';
     } else {
       dot.className = 'dot';
@@ -232,6 +237,7 @@ function renderSetup(s) {
   const diskDone = !!(env.disk && env.disk.ok);
   const installed = !!s.installed;
   const busy = state.setupBusy;
+  const booting = s.phase === 'booting';
 
   const steps = [
     {
@@ -270,7 +276,9 @@ function renderSetup(s) {
       busy: busy === 'iso',
       desc: isoDone
         ? `已就绪 ${fmtGB(env.iso.size)} · ${env.iso.path}`
-        : 'Android-x86 9.0-r2（约 900 MB）；也可以导入本机已有的 ISO/IMG',
+        : (env.iso && env.iso.size
+          ? `${env.iso.reason || '镜像不可用'}，已下载 ${fmtGB(env.iso.size)}${env.iso.iso9660 ? '' : '（点「下载」可继续续传）'}`
+          : 'Android-x86 9.0-r2（约 900 MB）；也可以导入本机已有的 ISO/IMG'),
       actions: isoDone
         ? ''
         : '<button class="btn ghost sm" data-act="iso">下载</button><button class="btn ghost sm" data-act="isoImport">导入</button>',
@@ -297,11 +305,18 @@ function renderSetup(s) {
       tag: installed ? '已完成' : '一次性操作',
       done: installed,
       desc: installed
-        ? `已完成${s.android ? ` · 当前 Android ${s.android}` : ''}`
+        ? (s.deviceOnline
+          ? `已完成${s.android ? ` · 当前 Android ${s.android}` : ''}`
+          : booting ? '正在引导 Android…首次启动（未启用 WHPX 时）可能需要几分钟' : '已完成，点击「启动运行时」')
         : '在虚拟机窗口里走 6 步安装（ApkStart 会给出逐步提示），装好后永久免装',
       actions: installed
-        ? `<button class="btn ghost sm" data-act="vmStart">${s.deviceOnline ? '已启动' : '启动运行时'}</button>
-           <button class="btn ghost sm" data-act="vmStop">停止</button>`
+        ? (s.deviceOnline
+          ? `<button class="btn ghost sm" disabled>已启动</button>
+             <button class="btn ghost sm" data-act="vmStop">停止</button>`
+          : booting
+            ? `<button class="btn ghost sm" disabled>引导中…</button>
+               <button class="btn ghost sm" data-act="vmStop">中止</button>`
+            : '<button class="btn ghost sm" data-act="vmStart">启动运行时</button>')
         : `<button class="btn primary sm" data-act="install" ${isoDone && diskDone ? '' : 'disabled'}>开始安装</button>`,
     },
   ];

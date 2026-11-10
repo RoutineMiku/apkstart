@@ -86,14 +86,22 @@ class Sharer {
       }
 
       // --- 设备 → 本机 ---
-      let remoteList = [];
+      // 优先用 toybox stat 拿真实 mtime；拿不到才退回 ls 解析（此时只能按大小判断）
+      let remoteList = null;
       try {
-        remoteList = await this.listRemoteRecursive(client, this.remoteDir);
+        remoteList = await client.listRemoteStat(this.remoteDir);
       } catch (_) { /* ignore */ }
+      if (!remoteList) {
+        try {
+          remoteList = await this.listRemoteRecursive(client, this.remoteDir);
+        } catch (_) { remoteList = []; }
+      }
 
       for (const r of remoteList) {
         const prev = state[r.rel];
-        if (prev && Math.abs((prev.mtime || 0) - r.mtime) <= 1500 && prev.size === r.size) continue;
+        const sizeSame = prev && prev.size === r.size;
+        const mtimeSame = r.mtime ? Math.abs((prev.mtime || 0) - r.mtime) <= 1500 : true;
+        if (prev && sizeSame && mtimeSame) continue;
         const local = path.join(this.localDir, r.rel);
         try {
           fs.mkdirSync(path.dirname(local), { recursive: true });

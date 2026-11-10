@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const store = require('./store');
-const { download, downloadAny, head } = require('./download');
+const { download, downloadAny, downloadAnyParallel, head } = require('./download');
 const { ZipArchive } = require('./zip');
 
 const IS_WIN = process.platform === 'win32';
@@ -153,6 +153,33 @@ class Provisioner {
     return this._qemuCache.value;
   }
 
+  /** 校验 ISO9660 主卷描述符（偏移 0x8001 处的 "CD001"），防止把错误页/半截文件当镜像 */
+  inspectIso(file) {
+    const size = fileSize(file);
+    if (!size) return { ok: false, iso9660: false, size: 0, reason: '未下载' };
+    let magic = '';
+    try {
+      const fd = fs.openSync(file, 'r');
+      const b = Buffer.alloc(5);
+      fs.readSync(fd, b, 0, 5, 0x8001);
+      fs.closeSync(fd);
+      magic = b.toString('latin1');
+    } catch (_) { /* ignore */ }
+
+    const iso9660 = magic === 'CD001';
+    // 用户导入的 raw/已装磁盘镜像不含 ISO 引导区，按尺寸放行
+    const rawImage = !iso9660 && /\.(img|raw|qcow2)$/i.test(file) && size > MIN_SIZE.iso;
+    const ok = size > MIN_SIZE.iso && (iso9660 || rawImage);
+
+    let reason = '';
+    if (!ok) {
+      reason = size <= MIN_SIZE.iso
+        ? `文件只有 ${(size / 1048576).toFixed(1)}MB，下载未完成`
+        : '文件不是有效的 ISO9660 镜像（可能是下载到错误页或文件已损坏）';
+    }
+    return { ok, iso9660, rawImage, size, reason, magic };
+  }
+
   async checkEnv() {
     const p = this.ensureDirs();
     const s = store.getSettings();
@@ -160,18 +187,20 @@ class Provisioner {
 
     const isoPath = s.runtime.isoPath || p.iso;
     const diskPath = s.runtime.diskPath || p.disk;
-    const isoSize = fileSize(isoPath);
+    const iso = this.inspectIso(isoPath);
     const diskSize = fileSize(diskPath);
 
     return {
       adb: { ...adb, required: true },
       qemu: { ...qemu, required: true },
       iso: {
-        ok: isoSize > MIN_SIZE.iso,
+        ok: iso.ok,
         path: isoPath,
-        size: isoSize,
+        size: iso.size,
+        iso9660: iso.iso9660,
         required: false,
-        note: isoSize ? `${(isoSize / 1073741824).toFixed(2)} GB` : '未下载',
+        note: iso.size ? `${(iso.size / 1073741824).toFixed(2)} GB` : '未下载',
+        reason: iso.reason,
       },
       disk: {
         ok: diskSize > MIN_SIZE.disk,
@@ -309,9 +338,9 @@ class Provisioner {
     const custom = s.runtime.isoUrl && s.runtime.isoUrl.trim();
     const urls = custom ? [custom, ...SOURCES.iso] : SOURCES.iso;
 
-    onProgress({ stage: 'download', message: '下载 Android-x86 9.0-r2（约 900MB）…', percent: 1 });
-    const r = await downloadAny(urls, dest, {
-      resume: true,
+    onProgress({ stage: 'download', message: '下载 Android-x86 9.0-r2（约 900MB，8 线程分块）…', percent: 1 });
+    const r = await downloadAnyParallel(urls, dest, {
+      connections: 8,
       onProgress: (pr) => onProgress({
         stage: 'download',
         message: `下载系统镜像… ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
@@ -320,11 +349,15 @@ class Provisioner {
         canResume: true,
       }),
     });
-    if (fileSize(dest) < MIN_SIZE.iso) throw new Error('系统镜像下载不完整，可重试续传');
+
+    const info = this.inspectIso(dest);
+    if (!info.ok) {
+      throw new Error(`系统镜像不可用：${info.reason}${info.size && info.size < MIN_SIZE.iso ? '，可再次点击继续断点续传' : ''}`);
+    }
 
     store.saveSettings({ runtime: { isoPath: dest } });
-    onProgress({ stage: 'done', message: '系统镜像就绪', percent: 100, path: dest });
-    return r;
+    onProgress({ stage: 'done', message: `系统镜像就绪（${(info.size / 1073741824).toFixed(2)} GB）`, percent: 100, path: dest });
+    return { ...r, ...info };
   }
 
   /** 校验用户导入的镜像/ISO */
@@ -344,7 +377,12 @@ class Provisioner {
   }
 
   importIso(file) {
-    const info = this.inspectImage(file);
+    const info = this.inspectIso(file);
+    if (!info.ok) {
+      const e = new Error(info.reason || '镜像文件不可用');
+      e.invalidIso = true;
+      throw e;
+    }
     store.saveSettings({ runtime: { isoPath: file } });
     return { ok: true, ...info };
   }

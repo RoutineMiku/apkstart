@@ -36,8 +36,10 @@
     "dev": "electron . --dev",
     "test": "node test/run-tests.js && node test/engine-test.js",
     "pack": "node build/pack.js",
+    "selftest": "node scripts/selftest.js",
     "assoc:on": "node scripts/assoc.js on",
-    "assoc:off": "node scripts/assoc.js off"
+    "assoc:off": "node scripts/assoc.js off",
+    "test:boot": "node test/boot-test.js"
   },
   "devDependencies": {
     "electron": "^33.4.11"

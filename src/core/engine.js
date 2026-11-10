@@ -124,6 +124,14 @@ class Runtime {
     else if (!env.qemu.ok) result.needsSetup = 'qemu';
     else if (!result.installed) result.needsSetup = 'install';
 
+    result.phase = result.deviceOnline
+      ? 'ready'
+      : this.installing
+        ? 'installing'
+        : (this.vmProc && !this.vmProc.killed)
+          ? 'booting'
+          : 'idle';
+
     return result;
   }
 
@@ -235,17 +243,73 @@ class Runtime {
     this.vmStarting = false;
     if (!this.vmProc) throw new Error(`QEMU 启动失败，详见日志：${logFile}`);
 
+    // 装机模式：ISO 里是 Linux 安装程序，没有 adb，不能按「等 adb」处理
+    if (install) {
+      onLog('安装程序已启动，请在虚拟机窗口里按引导完成安装');
+      return { ok: true, install: true, needsManualInstall: true };
+    }
+
     const client = this.client('127.0.0.1:5555');
     const timeout = env.hypervisor.whpx ? 180000 : 900000;
-    const ok = await this.waitAdb(client, timeout, onLog);
-    if (!ok) {
+    const linked = await this.waitAdb(client, timeout, onLog);
+    if (!linked) {
       return {
         ok: false,
-        error: '虚拟机已启动，但 adb 未连接：请在虚拟机窗口里完成安装/开启网络调试后重试',
+        error: '虚拟机已启动，但 adb 未能连接：请在虚拟机里开启「开发者选项 → ADB over network」后重试',
+      };
+    }
+    const ready = await this.waitAndroidReady(client, Math.max(60000, timeout / 2), onLog);
+    if (!ready.ok) {
+      return {
+        ok: false,
+        error: ready.stage === 'kernel'
+          ? 'Android 内核未完成引导，请查看运行时日志（可能镜像损坏或加速未生效）'
+          : 'Android 已引导但系统服务未就绪（可能停在首次开机设置界面，请在虚拟机窗口里完成向导）',
       };
     }
     await this.prepare(client);
     return { ok: true, client };
+  }
+
+  /**
+   * 等待 Android 真正可用：adb 在线 ≠ 系统可用。
+   * 必须等到 sys.boot_completed=1 且包管理器可响应，否则 am start 会直接失败。
+   */
+  async waitAndroidReady(client, timeoutMs, onLog = () => {}) {
+    const start = Date.now();
+    let bootCompleted = false;
+    let lastNotice = 0;
+    while (Date.now() - start < timeoutMs) {
+      /* eslint-disable no-await-in-loop */
+      const online = await client.isOnline();
+      if (!online) {
+        await client.connect().catch(() => false);
+      } else {
+        if (!bootCompleted) {
+          const v = await client.shell('getprop sys.boot_completed').catch(() => '');
+          if (String(v).trim() === '1') {
+            bootCompleted = true;
+            onLog(`Android 内核已启动，等待系统服务就绪…（${Math.round((Date.now() - start) / 1000)}s）`);
+          }
+        }
+        if (bootCompleted) {
+          const pm = await client.shell('pm path android').catch(() => '');
+          if (/package:/.test(pm)) {
+            onLog(`Android 已就绪（${Math.round((Date.now() - start) / 1000)}s）`);
+            return { ok: true, ms: Date.now() - start };
+          }
+        }
+      }
+      if (Date.now() - lastNotice > 15000) {
+        lastNotice = Date.now();
+        onLog(bootCompleted
+          ? `正在等待系统服务… ${Math.round((Date.now() - start) / 1000)}s`
+          : `正在引导 Android… ${Math.round((Date.now() - start) / 1000)}s`);
+      }
+      /* eslint-enable no-await-in-loop */
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return { ok: false, stage: bootCompleted ? 'services' : 'kernel', ms: Date.now() - start };
   }
 
   async waitAdb(client, timeoutMs, onLog = () => {}) {
@@ -337,7 +401,9 @@ class Runtime {
 
   async startInstaller({ onLog = () => {} } = {}) {
     const env = await this.provisioner.checkEnv();
-    if (!env.iso.ok) throw new Error('请先下载/导入 Android 系统镜像（ISO）');
+    if (!env.iso.ok) {
+      throw new Error(env.iso.reason || '请先下载/导入 Android 系统镜像（ISO）');
+    }
     if (!env.disk.ok) await this.provisioner.createDisk(this.settings.runtime.diskSizeGB || 24, () => {});
     this.installing = true;
     const r = await this.boot({ install: true, onLog });
@@ -345,8 +411,11 @@ class Runtime {
     return r;
   }
 
-  /** 安装完成后：写标记 → 之后直接从磁盘启动 */
+  /** 安装完成后：关掉安装程序 → 写标记 → 之后直接从磁盘启动 */
   async markInstalled() {
+    if (this.installing) {
+      try { await this.stop({ graceful: true }); } catch (_) { /* ignore */ }
+    }
     store.saveSettings({ runtime: { installed: true } });
     this.installing = false;
     return true;

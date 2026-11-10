@@ -267,6 +267,16 @@ body {
 .dot { width: 7px; height: 7px; border-radius: 50%; background: #cbd2da; }
 .dot.ok { background: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .dot.err { background: #e8833a; }
+.dot.warn {
+  background: #f0b429;
+  box-shadow: 0 0 0 3px rgba(240, 180, 41, .18);
+  animation: dotPulse 1.4s ease-in-out infinite;
+}
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+
 
 /* ---------------- Toast ---------------- */
 

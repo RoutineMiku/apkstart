@@ -69,6 +69,7 @@ ApkStart 是一个**自持**的项目，运行时组件全部由自己下载、�
 ![运行时部署向导](docs/images/setup.png)
 
 - 支持 **WHPX 硬件加速**（在「启用或关闭 Windows 功能」勾选「虚拟机平台」后自动启用），未启用时自动回退纯软件模拟。
+- 大文件下载默认 **8 线程分块 + 断点续传**；部分网络环境下 SourceForge 各镜像会被限速到几十 KB/s，此时建议直接「导入」本机已有的 ISO（官网 android-x86.org 或任意镜像站下载均可），ApkStart 会做 ISO9660 完整性校验。
 - 高级用户也可以在设置里切换为「连接已有运行时」（复用 WSA 等的 adb 端口），但这只是可选项，不是依赖。
 - 自备镜像的用户可直接导入 ISO/IMG/已装好的虚拟磁盘，跳过下载。
 
@@ -111,10 +112,16 @@ ApkStart.exe --launch <包名>      直接启动应用（桌面快捷方式使�
 ## 测试
 
 ```powershell
-npm test                                   # 纯 Node 单元测试
+npm test                                   # 纯 Node 单元测试 + 引擎链路测试（不需要网络）
+npm run test:boot                          # 真实引导测试：用 61MB Alpine guest 验证 QEMU 参数/建盘/优雅关机
+npm run selftest                           # 运行时自检：装好 Android 后一键验证 安装→启动→截图→共享目录
 electron test/electron-integration.js      # ICO / 快捷方式集成测试
 electron . --smoke test\shot.png           # 启动应用并截图（界面冒烟）
 ```
+
+`npm run selftest` 是装好系统后的「验收命令」——它会对当前设备依次检查 adb 连接、
+Android 版本、freeform 支持、共享目录双向同步，加 `--apk 某应用.apk` 还会完整走一遍
+安装 → 独立窗口启动 → 前台确认 → 截图。
 
 ## 设计取舍（诚实说明）
 
