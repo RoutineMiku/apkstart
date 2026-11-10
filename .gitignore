@@ -10,8 +10,14 @@ Thumbs.db
 .vscode/
 .idea/
 
-# 运行时产物（本地下载，不入库）
+# 运行时产物（本地下载，不入库）：二进制、镜像、AVD 数据一律排除
 engine/qemu/
+engine/emulator/
+engine/system-images/
+engine/platform-tools/
+engine/avd/
+engine/aehd/
+engine/_dl/
 engine/*.iso
 engine/*.img
 engine/*.qcow2

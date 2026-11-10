@@ -168,8 +168,23 @@ async function refreshStatus() {
       tag.className = 'brand-tag ok';
     } else if (s.phase === 'booting' || s.vmStarting) {
       dot.className = 'dot warn';
-      text.textContent = '正在引导 Android…首次启动可能要几分钟';
+      text.textContent = '正在引导 Android…';
       tag.textContent = '引导中';
+      tag.className = 'brand-tag';
+    } else if (s.needsSetup === 'accel') {
+      dot.className = 'dot err';
+      text.textContent = '还差一步：需要启用硬件加速 —— 点击右上角「运行时」';
+      tag.textContent = '待启用加速';
+      tag.className = 'brand-tag';
+    } else if (s.needsSetup === 'sysimg') {
+      dot.className = 'dot err';
+      text.textContent = '缺少 Android 系统镜像 —— 点击右上角「运行时」下载（约 645MB）';
+      tag.textContent = '待下载镜像';
+      tag.className = 'brand-tag';
+    } else if (s.needsSetup === 'emulator') {
+      dot.className = 'dot err';
+      text.textContent = '运行时引擎未安装 —— 点击右上角「运行时」一键部署';
+      tag.textContent = '需要部署';
       tag.className = 'brand-tag';
     } else if (s.installing) {
       dot.className = 'dot warn';
@@ -222,6 +237,7 @@ function renderSetup(s) {
   if (!s) return;
   const env = s.env || {};
   const hv = env.hypervisor || {};
+  const accel = env.accel || s.accel || {};
   const needSetup = !!s.needsSetup;
 
   // 自动进入部署页：还没装过应用、且运行时未就绪
@@ -229,13 +245,15 @@ function renderSetup(s) {
     showSetup(true);
   }
 
-  $('setupHv').textContent = hv.whpx ? 'WHPX 硬件加速：已启用' : 'WHPX：未启用（软件模拟）';
-  $('setupHv').className = `setup-hv ${hv.whpx ? 'ok' : ''}`;
-  $('setupHv').title = hv.note || '';
+  const accelOk = accel.ok || hv.whpx;
+  $('setupHv').textContent = accelOk
+    ? `${accel.kind === 'whpx' || hv.whpx ? 'WHPX' : 'AEHD'} 硬件加速：已启用`
+    : '硬件加速：未启用';
+  $('setupHv').className = `setup-hv ${accelOk ? 'ok' : ''}`;
+  $('setupHv').title = accel.note || hv.note || '';
 
-  const isoDone = !!(env.iso && env.iso.ok);
-  const diskDone = !!(env.disk && env.disk.ok);
-  const installed = !!s.installed;
+  const emuDone = !!(env.emulator && env.emulator.ok);
+  const imgDone = !!(env.sysimg && env.sysimg.ok);
   const busy = state.setupBusy;
   const booting = s.phase === 'booting';
 
@@ -245,7 +263,6 @@ function renderSetup(s) {
       index: 1,
       title: 'adb 工具链',
       tag: '必需',
-      req: true,
       done: !!(env.adb && env.adb.ok),
       busy: busy === 'adb',
       desc: env.adb && env.adb.ok
@@ -254,77 +271,68 @@ function renderSetup(s) {
       actions: env.adb && env.adb.ok ? '' : '<button class="btn ghost sm" data-act="adb">下载</button>',
     },
     {
-      key: 'qemu',
+      key: 'emulator',
       index: 2,
-      title: 'QEMU 虚拟机引擎',
+      title: 'Android 运行时引擎',
       tag: '必需',
-      req: true,
-      done: !!(env.qemu && env.qemu.ok),
-      busy: busy === 'qemu',
-      desc: env.qemu && env.qemu.ok
-        ? `QEMU ${env.qemu.version} · ${env.qemu.path}`
-        : 'ApkStart 自带的虚拟机引擎（约 200 MB，静默安装，不污染系统）',
-      actions: env.qemu && env.qemu.ok ? '' : '<button class="btn ghost sm" data-act="qemu">下载</button>',
+      done: emuDone,
+      busy: busy === 'emulator',
+      desc: emuDone
+        ? `Android Emulator ${env.emulator.version} · ${(env.emulator.path || '').replace(/\\emulator\.exe$/i, '')}`
+        : 'Google 官方 Android 运行时（约 440 MB，走高速官方源，通常 1 分钟内下完）',
+      actions: emuDone ? '' : '<button class="btn ghost sm" data-act="emulator">下载</button>',
     },
     {
-      key: 'iso',
+      key: 'sysimg',
       index: 3,
       title: 'Android 系统镜像',
       tag: '必需',
-      req: true,
-      done: isoDone,
-      busy: busy === 'iso',
-      desc: isoDone
-        ? `已就绪 ${fmtGB(env.iso.size)} · ${env.iso.path}`
-        : (env.iso && env.iso.size
-          ? `${env.iso.reason || '镜像不可用'}，已下载 ${fmtGB(env.iso.size)}${env.iso.iso9660 ? '' : '（点「下载」可继续续传）'}`
-          : 'Android-x86 9.0-r2（约 900 MB）；也可以导入本机已有的 ISO/IMG'),
-      actions: isoDone
-        ? ''
-        : '<button class="btn ghost sm" data-act="iso">下载</button><button class="btn ghost sm" data-act="isoImport">导入</button>',
+      done: imgDone,
+      busy: busy === 'sysimg',
+      desc: imgDone
+        ? `Android ${env.sysimg.api} AOSP · ${fmtGB(env.sysimg.size)} · 无需安装系统`
+        : '官方 AOSP Android 11 镜像（约 645 MB）。镜像即系统，下完即可开机，不需要装系统',
+      actions: imgDone ? '' : '<button class="btn ghost sm" data-act="sysimg">下载</button>',
     },
     {
-      key: 'disk',
+      key: 'accel',
       index: 4,
-      title: '系统虚拟磁盘',
-      tag: '必需',
-      req: true,
-      done: diskDone,
-      busy: busy === 'disk',
-      desc: diskDone
-        ? `${fmtGB(env.disk.size)} · ${env.disk.path}`
-        : `${store_getDiskSize()} GB 稀疏磁盘，只占实际使用空间；也可以导入已装好 Android 的磁盘镜像`,
-      actions: diskDone
-        ? ''
-        : '<button class="btn ghost sm" data-act="disk">创建</button><button class="btn ghost sm" data-act="diskImport">导入</button>',
+      title: '硬件加速',
+      tag: accelOk ? '已就绪' : '需要',
+      done: accelOk,
+      busy: busy === 'accel',
+      desc: accelOk
+        ? (accel.note || '硬件加速已启用，Android 冷启动约 20-40 秒')
+        : '未启用时无法启动：点「启用」一键安装 AEHD 加速驱动（会弹一次管理员确认）',
+      actions: accelOk ? '' : '<button class="btn primary sm" data-act="accel">启用</button>',
     },
     {
-      key: 'install',
+      key: 'boot',
       index: 5,
-      title: '安装 Android 系统',
-      tag: installed ? '已完成' : '一次性操作',
-      done: installed,
-      desc: installed
-        ? (s.deviceOnline
-          ? `已完成${s.android ? ` · 当前 Android ${s.android}` : ''}`
-          : booting ? '正在引导 Android…首次启动（未启用 WHPX 时）可能需要几分钟' : '已完成，点击「启动运行时」')
-        : '在虚拟机窗口里走 6 步安装（ApkStart 会给出逐步提示），装好后永久免装',
-      actions: installed
-        ? (s.deviceOnline
-          ? `<button class="btn ghost sm" disabled>已启动</button>
-             <button class="btn ghost sm" data-act="vmStop">停止</button>`
-          : booting
-            ? `<button class="btn ghost sm" disabled>引导中…</button>
-               <button class="btn ghost sm" data-act="vmStop">中止</button>`
-            : '<button class="btn ghost sm" data-act="vmStart">启动运行时</button>')
-        : `<button class="btn primary sm" data-act="install" ${isoDone && diskDone ? '' : 'disabled'}>开始安装</button>`,
+      title: '开机',
+      tag: s.deviceOnline ? '运行中' : '随时',
+      done: !!(s.deviceOnline || s.installed),
+      desc: s.deviceOnline
+        ? `Android ${s.android || ''} 已就绪${s.freeform ? ' · 独立窗口已启用' : ''}`
+        : booting
+          ? '正在引导 Android…'
+          : '前三步就绪后点「启动」，之后每次双击桌面图标会自动拉起',
+      actions: s.deviceOnline
+        ? `<button class="btn ghost sm" disabled>已启动</button>
+           <button class="btn ghost sm" data-act="vmStop">停止</button>`
+        : booting
+          ? `<button class="btn ghost sm" disabled>引导中…</button>
+             <button class="btn ghost sm" data-act="vmStop">中止</button>`
+          : `<button class="btn ghost sm" data-act="vmStart" ${emuDone && imgDone && accelOk ? '' : 'disabled'}>启动运行时</button>`,
     },
   ];
 
   $('setupSteps').innerHTML = steps.map(stepRow).join('');
   $('btnDeployAll').disabled = !!busy;
-  $('btnDeployAll').textContent = busy ? '部署中…' : (installed ? '检查更新' : '一键部署');
-  $('setupNote').textContent = hv.note && !hv.whpx ? '提示：未启用 WHPX 时首次启动较慢（纯软件模拟）' : '';
+  $('btnDeployAll').textContent = busy ? '部署中…' : (imgDone && emuDone ? '检查更新' : '一键部署');
+  $('setupNote').textContent = accelOk
+    ? ''
+    : '提示：Android 在 Windows 上必须启用硬件加速（AEHD 或 WHPX），否则无法开机。';
 }
 
 function store_getDiskSize() {
@@ -357,23 +365,40 @@ function updateStepProgress(component, p) {
 }
 
 async function deployAll() {
-  const steps = ['adb', 'qemu', 'iso', 'disk'];
-  for (const key of steps) {
+  const order = ['adb', 'emulator', 'sysimg', 'accel'];
+  const doneOf = (key, env) => (key === 'adb' ? env.adb && env.adb.ok
+    : key === 'emulator' ? env.emulator && env.emulator.ok
+      : key === 'sysimg' ? env.sysimg && env.sysimg.ok
+        : (env.accel && env.accel.ok) || (env.hypervisor && env.hypervisor.whpx));
+
+  for (const key of order) {
     const env = (state.status && state.status.env) || {};
-    const done = key === 'adb' ? env.adb && env.adb.ok
-      : key === 'qemu' ? env.qemu && env.qemu.ok
-        : key === 'iso' ? env.iso && env.iso.ok
-          : env.disk && env.disk.ok;
-    if (done) continue;
+    if (doneOf(key, env)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (key === 'accel' && (!env.emulator || !env.emulator.ok || !env.sysimg || !env.sysimg.ok)) continue;
     // eslint-disable-next-line no-await-in-loop
     const r = await runStep(key);
     if (!r.ok) {
+      if (key === 'accel') {
+        toast({
+          title: '还差最后一步：启用硬件加速',
+          body: '请点第 4 步的「启用」并允许管理员权限；或手动在「Windows 功能」里勾选「虚拟机平台」后重启。',
+          type: 'error',
+          sticky: true,
+        });
+        return;
+      }
       toast({ title: `${key} 部署失败`, body: r.error, type: 'error', sticky: true });
       return;
     }
   }
   await refreshStatus();
-  toast({ title: '运行时组件已就绪', body: '下一步：点击「开始安装」，在虚拟机窗口里完成 Android 安装。', type: 'ok' });
+  const st = state.status || {};
+  if (st.sysimgOk && st.emulatorOk && (st.accel && st.accel.ok)) {
+    toast({ title: '运行时已就绪', body: '点第 5 步「启动运行时」，之后双击桌面图标即可直接打开应用。', type: 'ok' });
+  } else {
+    toast({ title: '部署完成', body: '还差硬件加速，请点第 4 步「启用」。', type: 'info' });
+  }
 }
 
 async function runStep(key) {
@@ -382,7 +407,19 @@ async function runStep(key) {
   let r;
   try {
     if (key === 'adb') r = await api.installAdb();
-    else if (key === 'qemu') r = await api.installQemu();
+    else if (key === 'emulator') r = await api.installEmulator();
+    else if (key === 'sysimg') r = await api.installSysimg();
+    else if (key === 'accel') {
+      const t = toast({
+        title: '正在安装硬件加速驱动…',
+        body: '请在弹出的是否允许窗口点「是」',
+        sticky: true,
+        spinner: true,
+      });
+      r = await api.enableAccel();
+      if (r.ok) t.update({ title: '硬件加速已启用', type: 'ok' });
+      else t.update({ title: '加速未启用', body: r.error, type: 'error', sticky: true });
+    } else if (key === 'qemu') r = await api.installQemu();
     else if (key === 'iso') r = await api.downloadIso();
     else if (key === 'disk') r = await api.createDisk(store_getDiskSize());
     else r = { ok: false, error: '未知步骤' };
@@ -695,7 +732,8 @@ function bindEvents() {
     const btn = e.target.closest('[data-act]');
     if (!btn || btn.disabled) return;
     const act = btn.dataset.act;
-    if (act === 'adb' || act === 'qemu' || act === 'iso' || act === 'disk') {
+    if (act === 'emulator' || act === 'sysimg' || act === 'accel'
+      || act === 'adb' || act === 'qemu' || act === 'iso' || act === 'disk') {
       const r = await runStep(act);
       if (!r.ok) toast({ title: '操作失败', body: r.error, type: 'error', sticky: true });
       return;

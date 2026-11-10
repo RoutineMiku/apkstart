@@ -37,9 +37,18 @@ for (const item of ['package.json', 'src', 'LICENSE']) {
 }
 
 // 3. 可选目录
+// engine/ 下只有文档类内容随包分发；大体积运行时组件（emulator、system-images、
+// platform-tools、avd）由应用首次启动时自动从官方源下载，不进安装包。
+const ENGINE_SKIP = new Set(['emulator', 'system-images', 'platform-tools', 'avd', 'aehd', '_dl', 'qemu']);
 for (const opt of ['tools', 'engine']) {
   const src = path.join(ROOT, opt);
-  if (fs.existsSync(src)) copy(src, path.join(appDir, opt));
+  if (!fs.existsSync(src)) continue;
+  const dest = path.join(appDir, opt);
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (opt === 'engine' && ENGINE_SKIP.has(entry.name)) continue;
+    fs.cpSync(path.join(src, entry.name), path.join(dest, entry.name), { recursive: true });
+  }
 }
 
 // 4. 改名主程序

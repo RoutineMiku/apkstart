@@ -189,7 +189,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
 
     const out = path.join(TMP, 'unzip');
     const p = new Provisioner(TMP);
-    p.extractZip(zipPath, out);
+    await p.extractZip(zipPath, out);
     assert(fs.readFileSync(path.join(out, 'platform-tools', 'adb.exe')).toString() === 'fake-adb-binary', '解压内容不符');
     assert(new ZipArchive(fs.readFileSync(zipPath)).has('platform-tools/adb.exe'), 'zip 读取异常');
   });

@@ -22,7 +22,17 @@ const SOURCES = {
   qemuFallback: [
     'https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe',
   ],
-  // Android-x86 9.0-r2（x86_64）：公认最稳的 QEMU 可引导 Android
+  // Google 官方 SDK 索引：emulator 与系统镜像的真实地址从这里动态解析，不写死版本号
+  sdkIndex: 'https://dl.google.com/android/repository/repository2-3.xml',
+  sysImgIndexes: [
+    'https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml',
+    'https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-3.xml',
+  ],
+  aehdFallback: 'https://dl.google.com/android/repository/aehd-windows_v2.2.zip',
+  // 兜底：索引不可用时直接用的已知版本
+  emulatorFallback: 'https://dl.google.com/android/repository/emulator-windows_x64-16847572.zip',
+  sysimgFallback: 'https://dl.google.com/android/repository/sys-img/android/x86_64-30_r11.zip',
+  // Android-x86 9.0-r2（x86_64）：仅在用户已自备 ISO 时使用
   iso: [
     'https://master.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso?viasf=1',
     'https://nchc.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso',
@@ -32,11 +42,17 @@ const SOURCES = {
   isoSizeHint: 900 * 1024 * 1024,
 };
 
+/** 想默认使用的系统镜像（API 级别 + 渠道）。AOSP 版体积小、无 GMS 授权问题。 */
+const DEFAULT_SYSIMG = { api: '30', tag: 'default', abi: 'x86_64' };
+
 const MIN_SIZE = {
   adb: 5 * 1024 * 1024,
   qemu: 60 * 1024 * 1024,
   iso: 400 * 1024 * 1024,
   disk: 1024 * 1024,
+  emulator: 200 * 1024 * 1024,
+  sysimg: 300 * 1024 * 1024,
+  aeHD: 64 * 1024,
 };
 
 function run(cmd, args, { timeout = 60000, cwd, windowsHide = true } = {}) {
@@ -67,6 +83,9 @@ class Provisioner {
 
   paths() {
     const root = this.root;
+    const sysTag = DEFAULT_SYSIMG.tag;
+    const sysApi = DEFAULT_SYSIMG.api;
+    const sysAbi = DEFAULT_SYSIMG.abi;
     return {
       root,
       qemuDir: path.join(root, 'qemu'),
@@ -74,16 +93,24 @@ class Provisioner {
       qemuImg: path.join(root, 'qemu', 'qemu-img.exe'),
       adbDir: path.join(root, 'platform-tools'),
       adbExe: path.join(root, 'platform-tools', 'adb.exe'),
+      // emulator 运行时（Google 官方）：root 同时充当 ANDROID_SDK_ROOT
+      emulatorDir: path.join(root, 'emulator'),
+      emulatorExe: path.join(root, 'emulator', 'emulator.exe'),
+      sysImgRoot: path.join(root, 'system-images'),
+      sysImgDir: path.join(root, 'system-images', `android-${sysApi}`, sysTag, sysAbi),
+      avdHome: path.join(root, 'avd'),
+      aehdDir: path.join(root, 'aehd'),
       imagesDir: path.join(root, 'images'),
       iso: path.join(root, 'images', 'android-x86.iso'),
       disk: path.join(root, 'images', 'android.qcow2'),
       tmp: path.join(root, '_tmp'),
+      sysTag, sysApi, sysAbi,
     };
   }
 
   ensureDirs() {
     const p = this.paths();
-    for (const d of [p.root, p.qemuDir, p.adbDir, p.imagesDir, p.tmp]) {
+    for (const d of [p.root, p.qemuDir, p.adbDir, p.imagesDir, p.tmp, p.avdHome]) {
       fs.mkdirSync(d, { recursive: true });
     }
     return p;
@@ -94,19 +121,16 @@ class Provisioner {
   async hypervisor() {
     if (this._hypervisor !== null) return this._hypervisor;
     if (!IS_WIN) { this._hypervisor = { whpx: false, note: '非 Windows 平台' }; return this._hypervisor; }
+    // 只做毫秒级的文件检查。真正"WHPX 是否可用"由 emulator -accel-check 给出权威答案，
+    // 避免在这里拉起 PowerShell（冷启动 1-2 秒）拖慢每次状态轮询。
     const dll = fs.existsSync('C:\\Windows\\System32\\WinHvPlatform.dll');
-    const ps = await run('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      '(Get-CimInstance Win32_ComputerSystem).HypervisorPresent',
-    ], { timeout: 15000 });
-    const present = /true/i.test(ps.stdout);
     this._hypervisor = {
-      whpx: dll && present,
+      whpx: false,          // 由 emulatorAccel() 覆盖为真实值
       dll,
-      hypervisorPresent: present,
-      note: dll && present
-        ? '已启用 WHPX 硬件加速'
-        : '未检测到 Windows Hypervisor Platform：将以纯软件模拟运行（较慢），可在「启用或关闭 Windows 功能」中勾选「虚拟机平台」后重启提速',
+      hypervisorPresent: false,
+      note: dll
+        ? '虚拟机平台组件存在（可用性由运行时引擎检测）'
+        : '未检测到 Windows Hypervisor Platform 组件：可在「启用或关闭 Windows 功能」中勾选「虚拟机平台」后重启',
     };
     return this._hypervisor;
   }
@@ -183,16 +207,34 @@ class Provisioner {
   async checkEnv() {
     const p = this.ensureDirs();
     const s = store.getSettings();
-    const [adb, qemu, hv] = await Promise.all([this.adbVersion(), this.qemuVersion(), this.hypervisor()]);
+    const [adb, qemu, hv, emulator, accel] = await Promise.all([
+      this.adbVersion(), this.qemuVersion(), this.hypervisor(),
+      this.emulatorVersion(), this.emulatorAccel(),
+    ]);
 
     const isoPath = s.runtime.isoPath || p.iso;
     const diskPath = s.runtime.diskPath || p.disk;
     const iso = this.inspectIso(isoPath);
     const diskSize = fileSize(diskPath);
+    const sysimg = this.systemImageInfo();
+
+    // 两条路径：emulator（推荐，Google 官方）或 QEMU+ISO（用户自备镜像时）
+    const emulatorReady = emulator.ok && sysimg.ok;
+    const qemuReady = qemu.ok && diskSize > MIN_SIZE.disk;
 
     return {
       adb: { ...adb, required: true },
-      qemu: { ...qemu, required: true },
+      emulator: { ...emulator, required: true, note: emulator.ok ? emulator.version : '未安装' },
+      sysimg: {
+        ok: sysimg.ok,
+        dir: sysimg.dir,
+        size: sysimg.size,
+        api: sysimg.api,
+        required: false,
+        note: sysimg.ok ? `Android ${sysimg.api}（${(sysimg.size / 1073741824).toFixed(2)} GB）` : (sysimg.note || '未下载'),
+      },
+      accel,
+      qemu: { ...qemu, required: false },
       iso: {
         ok: iso.ok,
         path: isoPath,
@@ -206,11 +248,12 @@ class Provisioner {
         ok: diskSize > MIN_SIZE.disk,
         path: diskPath,
         size: diskSize,
-        required: true,
+        required: false,
         note: diskSize ? `${(diskSize / 1073741824).toFixed(2)} GB` : '尚未创建',
       },
       hypervisor: hv,
-      ready: !!(adb.ok && qemu.ok && diskSize > MIN_SIZE.disk),
+      ready: !!(adb.ok && (emulatorReady || qemuReady)),
+      engine: emulatorReady ? 'emulator' : (qemuReady ? 'qemu' : 'none'),
       paths: p,
     };
   }
@@ -234,7 +277,7 @@ class Provisioner {
     if (fileSize(zipPath) < MIN_SIZE.adb) throw new Error('adb 安装包下载不完整');
 
     onProgress({ stage: 'extract', message: '解压 adb…', percent: 92 });
-    this.extractZip(zipPath, p.root);
+    await this.extractZip(zipPath, p.root);
 
     const v = await this.adbVersion();
     if (!v.ok) throw new Error('adb 解压后无法运行，请检查是否被杀毒软件拦截');
@@ -246,10 +289,17 @@ class Provisioner {
     return v;
   }
 
-  /** 用自带的 ZIP 解析器解压（避免依赖系统解压工具） */
-  extractZip(zipPath, destDir) {
+  /**
+   * 用自带的 ZIP 解析器解压（避免依赖系统解压工具）
+   * 大条目（GB 级 system.img）走流式，小条目整块读，避免撞 Node 的单 Buffer 上限。
+   */
+  async extractZip(zipPath, destDir, opts = {}) {
     const buf = fs.readFileSync(zipPath);
     const zip = new ZipArchive(buf);
+    const STREAM_THRESHOLD = 64 * 1024 * 1024;
+    const total = zip.names().length;
+    let done = 0;
+
     for (const name of zip.names()) {
       if (name.endsWith('/')) {
         fs.mkdirSync(path.join(destDir, name), { recursive: true });
@@ -257,9 +307,277 @@ class Provisioner {
       }
       const target = path.join(destDir, name);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, zip.read(name));
+      const e = zip.entries.get(name);
+      if (e.uncompSize > STREAM_THRESHOLD) {
+        await zip.pipeTo(name, fs.createWriteStream(target));
+      } else {
+        fs.writeFileSync(target, zip.read(name));
+      }
+      done += 1;
+      if (opts.onEntry) opts.onEntry(name, done, total);
     }
     return destDir;
+  }
+
+  // ---------------- Emulator（Google 官方运行时） ----------------
+
+  /** 抓取一段 XML 文本（带大小上限，索引文件约 400KB） */
+  async _fetchText(url, limit = 2 * 1024 * 1024) {
+    const { openStream } = require('./download');
+    const res = await openStream(url);
+    return new Promise((resolve, reject) => {
+      let d = '';
+      res.on('data', (c) => { d += c; if (d.length > limit) res.destroy(); });
+      res.on('end', () => resolve(d));
+      res.on('error', () => resolve(d));
+    });
+  }
+
+  /** 从 SDK 索引里动态解析最新的 Windows emulator 包地址 */
+  async resolveEmulatorUrl() {
+    const cached = store.getSettings().runtime.emulatorUrl;
+    if (cached && cached.trim()) return cached.trim();
+    if (this._cache.emulatorUrl) return this._cache.emulatorUrl;
+    try {
+      const xml = await this._fetchText(SOURCES.sdkIndex);
+      const block = /<remotePackage path="emulator"[\s\S]*?<\/remotePackage>/.exec(xml);
+      if (block) {
+        const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => m[1]);
+        const win = urls.find((u) => /windows_x64.*\.zip$/i.test(u));
+        if (win) {
+          this._cache.emulatorUrl = win;
+          return win;
+        }
+      }
+    } catch (_) { /* 落兜底 */ }
+    this._cache.emulatorUrl = SOURCES.emulatorFallback;
+    return SOURCES.emulatorFallback;
+  }
+
+  /** 从 sys-img 索引里解析默认 AOSP 系统镜像地址 */
+  async resolveSysimgUrl() {
+    const cached = store.getSettings().runtime.sysimgUrl;
+    if (cached && cached.trim()) return cached.trim();
+    if (this._cache.sysimgUrl) return this._cache.sysimgUrl;
+    const want = `system-images;android-${DEFAULT_SYSIMG.api};${DEFAULT_SYSIMG.tag};${DEFAULT_SYSIMG.abi}`;
+    for (const idx of SOURCES.sysImgIndexes) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const xml = await this._fetchText(idx);
+        const re = new RegExp(`<remotePackage path="${want.replace(/[;]/g, ';')}"[\\s\\S]*?</remotePackage>`);
+        const block = re.exec(xml);
+        if (block) {
+          const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => m[1])
+            .filter((u) => /x86_64.*\.zip$/i.test(u));
+          if (urls.length) {
+            this._cache.sysimgUrl = urls[urls.length - 1];
+            return this._cache.sysimgUrl;
+          }
+        }
+      } catch (_) { /* 换下一个索引 */ }
+    }
+    this._cache.sysimgUrl = SOURCES.sysimgFallback;
+    return SOURCES.sysimgFallback;
+  }
+
+  async emulatorVersion() {
+    if (this._cache.emulatorVersion && this._cache.emulatorVerAt && Date.now() - this._cache.emulatorVerAt < 30000) {
+      return this._cache.emulatorVersion;
+    }
+    const p = this.paths();
+    const candidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe')];
+    for (const c of candidates) {
+      if (!fs.existsSync(c)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const r = await run(c, ['-version'], { timeout: 20000 });
+      const text = `${r.stdout}${r.stderr}`;
+      const m = /Android emulator version\s+([\d.]+)/i.exec(text);
+      if (m) {
+        this._cache.emulatorVersion = { ok: true, path: c, version: m[1] };
+        this._cache.emulatorVerAt = Date.now();
+        return this._cache.emulatorVersion;
+      }
+    }
+    return { ok: false, path: '', version: '' };
+  }
+
+  /** 系统镜像是否完整（system.img 是硬指标，缺失或过小都视为没下完） */
+  systemImageInfo() {
+    const p = this.paths();
+    const dirs = [p.sysImgDir, path.join(this.appRoot, 'engine', 'system-images',
+      `android-${DEFAULT_SYSIMG.api}`, DEFAULT_SYSIMG.tag, DEFAULT_SYSIMG.abi)];
+    for (const dir of dirs) {
+      const system = path.join(dir, 'system.img');
+      const kernel = path.join(dir, 'kernel-ranchu');
+      const size = fileSize(system);
+      if (size > MIN_SIZE.sysimg && fs.existsSync(kernel)) {
+        return { ok: true, dir, size, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag };
+      }
+      if (fs.existsSync(dir)) {
+        return { ok: false, dir, size, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag, note: size ? '镜像不完整' : '缺少 system.img' };
+      }
+    }
+    return { ok: false, dir: p.sysImgDir, size: 0, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag, note: '未下载' };
+  }
+
+  /**
+   * 硬件加速状态。
+   * emulator 在 Windows 上支持两种加速：WHPX（系统功能，需重启）与 AEHD（Google 自家驱动，装完即用）。
+   */
+  async emulatorAccel() {
+    // 状态轮询每几秒一次，而 -accel-check 要拉起一个 emulator 进程，必须缓存
+    if (this._cache.accel && this._cache.accelAt && Date.now() - this._cache.accelAt < 30000) {
+      return this._cache.accel;
+    }
+    const p = this.paths();
+    const exe = fs.existsSync(p.emulatorExe) ? p.emulatorExe
+      : path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe');
+    if (!fs.existsSync(exe)) return { ok: false, kind: 'none', note: '未安装 emulator' };
+
+    const aehdSys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'aehd.sys');
+    const hasAehdFile = fs.existsSync(aehdSys) || fs.existsSync(path.join(p.aehdDir, 'aehd.sys'));
+    const hv = await this.hypervisor();
+
+    const r = await run(exe, ['-accel-check'], { timeout: 30000 });
+    const text = `${r.stdout}${r.stderr}`;
+    const usable = /accel:\s*\n?0\b/.test(text) && !/ERROR_ACCESS_DENIED|not installed/i.test(text);
+
+    let result;
+    if (usable) {
+      const kind = hasAehdFile && /aehd/i.test(text) ? 'aehd' : 'whpx';
+      result = { ok: true, kind, note: kind === 'whpx' ? 'WHPX 硬件加速已启用' : 'AEHD 硬件加速已启用' };
+    } else if (hasAehdFile && /aehd/i.test(text) && !/ERROR_ACCESS_DENIED/i.test(text)) {
+      result = { ok: true, kind: 'aehd', note: 'AEHD 硬件加速已启用' };
+    } else if (hv.dll && /whpx/i.test(text) && !/error|denied/i.test(text)) {
+      result = { ok: true, kind: 'whpx', note: 'WHPX 硬件加速已启用' };
+    } else {
+      result = {
+        ok: false,
+        kind: 'none',
+        whpx: hv.whpx,
+        aehdInstalled: hasAehdFile,
+        viaTcg: true,
+        note: '未启用硬件加速：将回退软件模拟（能跑但很慢）。建议安装 AEHD 驱动或开启「虚拟机平台」',
+      };
+    }
+    this._cache.accel = result;
+    this._cache.accelAt = Date.now();
+    return result;
+  }
+
+  /** 下载并安装 emulator（zip 顶层就是 emulator/，直接解到 SDK root） */
+  async installEmulator(onProgress = () => {}) {
+    const p = this.ensureDirs();
+    const url = await this.resolveEmulatorUrl();
+    const zip = path.join(p.tmp, 'emulator.zip');
+    onProgress({ stage: 'download', message: '下载运行时引擎（约 440MB，走 Google 官方源）…', percent: 1 });
+
+    await downloadAnyParallel([url], zip, {
+      connections: 8,
+      minChunk: 4 * 1024 * 1024,
+      onProgress: (pr) => onProgress({
+        stage: 'download',
+        message: `下载运行时引擎 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
+          + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
+        percent: Math.round(pr.percent * 0.85),
+        canResume: true,
+      }),
+    });
+    if (fileSize(zip) < MIN_SIZE.emulator) throw new Error('运行时引擎下载不完整，可重试续传');
+
+    onProgress({ stage: 'extract', message: '解压运行时引擎…', percent: 88 });
+    await this.extractZip(zip, p.root);
+    fs.rmSync(zip, { force: true });
+
+    // SDK root 必须同时具备 platform-tools，否则 emulator 拒绝启动
+    this.ensurePlatformTools();
+
+    const v = await this.emulatorVersion();
+    if (!v.ok) throw new Error('emulator 解压后无法运行，请检查是否被杀毒软件拦截');
+    this._cache.emulatorVersion = v.version;
+    onProgress({ stage: 'done', message: `运行时引擎 ${v.version} 就绪`, percent: 100 });
+    return v;
+  }
+
+  /** emulator 要求 SDK root 下有 platform-tools 目录，否则直接 FATAL */
+  ensurePlatformTools() {
+    const p = this.paths();
+    fs.mkdirSync(p.adbDir, { recursive: true });
+    if (fs.existsSync(p.adbExe)) return true;
+    const src = [
+      path.join(this.appRoot, 'engine', 'platform-tools'),
+      path.join(this.appRoot, 'tools', 'platform-tools'),
+      path.dirname(this.adbVersionPath() || ''),
+    ].find((d) => d && fs.existsSync(path.join(d, 'adb.exe')));
+    if (!src) return false;
+    for (const f of ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll']) {
+      const from = path.join(src, f);
+      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(p.adbDir, f));
+    }
+    return fs.existsSync(p.adbExe);
+  }
+
+  adbVersionPath() {
+    try {
+      const s = store.getSettings();
+      if (s.adbPath && fs.existsSync(s.adbPath)) return s.adbPath;
+    } catch (_) { /* ignore */ }
+    return '';
+  }
+
+  /** 下载并安装系统镜像（zip 顶层是 x86_64/，解到 android-30/<tag>/ 下） */
+  async installSystemImage(onProgress = () => {}) {
+    const p = this.ensureDirs();
+    const url = await this.resolveSysimgUrl();
+    const zip = path.join(p.tmp, 'sysimg.zip');
+    onProgress({ stage: 'download', message: '下载 Android 系统镜像（约 645MB）…', percent: 1 });
+
+    await downloadAnyParallel([url], zip, {
+      connections: 8,
+      minChunk: 4 * 1024 * 1024,
+      onProgress: (pr) => onProgress({
+        stage: 'download',
+        message: `下载系统镜像 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
+          + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
+        percent: Math.round(pr.percent * 0.8),
+        canResume: true,
+      }),
+    });
+    if (fileSize(zip) < MIN_SIZE.sysimg) throw new Error('系统镜像下载不完整，可重试续传');
+
+    const dest = path.join(p.sysImgRoot, `android-${DEFAULT_SYSIMG.api}`, DEFAULT_SYSIMG.tag);
+    fs.mkdirSync(dest, { recursive: true });
+    onProgress({ stage: 'extract', message: '解压系统镜像（3GB，需十余秒）…', percent: 82 });
+    await this.extractZip(zip, dest, {
+      onEntry: (_n, i, total) => onProgress({
+        stage: 'extract',
+        message: `解压系统镜像 ${i}/${total}`,
+        percent: 82 + Math.round((i / Math.max(1, total)) * 15),
+      }),
+    });
+    fs.rmSync(zip, { force: true });
+
+    const info = this.systemImageInfo();
+    if (!info.ok) throw new Error('系统镜像解压后校验失败（system.img 缺失或不完整）');
+    onProgress({ stage: 'done', message: `Android ${DEFAULT_SYSIMG.api} 系统镜像就绪`, percent: 100 });
+    return info;
+  }
+
+  /** 下载 AEHD 驱动（小文件）；安装需要管理员权限，交给引导流程 */
+  async installAehd(onProgress = () => {}) {
+    const p = this.ensureDirs();
+    const zip = path.join(p.tmp, 'aehd.zip');
+    onProgress({ stage: 'download', message: '下载 AEHD 驱动…', percent: 10 });
+    await downloadAnyParallel([SOURCES.aehdFallback], zip, { connections: 2 });
+    fs.mkdirSync(p.aehdDir, { recursive: true });
+    await this.extractZip(zip, p.aehdDir);
+    fs.rmSync(zip, { force: true });
+    const has = fs.existsSync(path.join(p.aehdDir, 'aehd.Sys')) || fs.existsSync(path.join(p.aehdDir, 'aehd.sys'));
+    if (!has) throw new Error('AEHD 驱动包解压异常');
+    this._cache.accel = null;
+    this._cache.accelAt = 0;
+    onProgress({ stage: 'done', message: 'AEHD 驱动已就绪，需管理员权限安装', percent: 100 });
+    return { ok: true, dir: p.aehdDir, installer: path.join(p.aehdDir, 'silent_install.bat') };
   }
 
   // ---------------- QEMU ----------------

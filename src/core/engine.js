@@ -14,9 +14,12 @@ const path = require('path');
 const { AdbClient } = require('./adb');
 const store = require('./store');
 const { Provisioner } = require('./provision');
+const { EmulatorEngine } = require('./emulator');
 
 const LOG_DIR = path.join(store.DATA_DIR, 'logs');
 const MONITOR_PORT = 5556;
+const EMU_PORT = 5554;
+const EMU_SERIAL = `emulator-${EMU_PORT}`;
 
 const ATTACH_ENDPOINTS = [
   { name: 'Windows Subsystem for Android', serial: '127.0.0.1:58526' },
@@ -30,6 +33,7 @@ class Runtime {
   constructor(appRoot) {
     this.appRoot = appRoot;
     this.provisioner = new Provisioner(appRoot);
+    this.emulator = new EmulatorEngine(appRoot);
     this.vmProc = null;
     this.vmStarting = false;
     this.installing = false;
@@ -44,6 +48,9 @@ class Runtime {
 
   get settings() { return store.getSettings(); }
 
+  /** emulator 引擎是否在运行 */
+  get emuRunning() { return this.emulator.running(); }
+
   // ---------------- 基础 ----------------
 
   adbPath() {
@@ -57,7 +64,8 @@ class Runtime {
   }
 
   client(serial) {
-    const useSerial = serial || (this.settings.engine.mode === 'attach' ? this.settings.device : '127.0.0.1:5555');
+    const useSerial = serial
+      || (this.settings.engine.mode === 'attach' ? this.settings.device : EMU_SERIAL);
     const adbPath = this.adbPath();
     if (!this._client || this._client.serial !== useSerial || this._client.adbPath !== adbPath) {
       this._client = new AdbClient({ adbPath, serial: useSerial });
@@ -82,7 +90,13 @@ class Runtime {
       mode: s.engine.mode,
       installed: !!s.runtime.installed,
       env,
-      vmRunning: !!(this.vmProc && !this.vmProc.killed),
+      engineKind: env.engine,
+      emulatorOk: env.emulator.ok,
+      emulatorVersion: env.emulator.version,
+      sysimgOk: env.sysimg.ok,
+      sysimgNote: env.sysimg.note,
+      accel: env.accel,
+      vmRunning: this.emulator.running() || !!(this.vmProc && !this.vmProc.killed),
       vmStarting: this.vmStarting,
       installing: this.installing,
       adbOk: env.adb.ok,
@@ -121,14 +135,16 @@ class Runtime {
     }
 
     if (result.deviceOnline) result.ready = true;
-    else if (!env.qemu.ok) result.needsSetup = 'qemu';
-    else if (!result.installed) result.needsSetup = 'install';
+    else if (!env.emulator.ok) result.needsSetup = 'emulator';
+    else if (!env.sysimg.ok) result.needsSetup = 'sysimg';
+    else if (!env.accel.ok && !s.engine.forceTcg) result.needsSetup = 'accel';
+    else result.needsSetup = 'boot';
 
     result.phase = result.deviceOnline
       ? 'ready'
       : this.installing
         ? 'installing'
-        : (this.vmProc && !this.vmProc.killed)
+        : result.vmRunning
           ? 'booting'
           : 'idle';
 
@@ -188,18 +204,91 @@ class Runtime {
   }
 
   async boot({ install = false, onLog = () => {} } = {}) {
-    if (this.vmProc && !this.vmProc.killed) return { ok: true, reused: true };
+    const env = await this.provisioner.checkEnv();
+    this._hv = env.hypervisor;
+
+    // 首选：官方 emulator（自带设备模型与 GPU 转译，体验最好）
+    if (env.emulator.ok && env.sysimg.ok) {
+      return this.bootEmulator({ env, onLog });
+    }
+
+    return this.bootQemu({ install, env, onLog });
+  }
+
+  /**
+   * 用官方 emulator 启动 Android。
+   * 与 QEMU+ISO 不同，这里没有"安装系统"这一步：镜像本身就是系统，首次启动即开机。
+   */
+  async bootEmulator({ env, onLog = () => {} } = {}) {
+    if (this.emulator.running()) {
+      const client = this.client(EMU_SERIAL);
+      if (!(await client.isOnline())) {
+        // 进程还在但还没就绪，等它
+      } else {
+        await this.prepare(client);
+        return { ok: true, client, reused: true };
+      }
+    }
+
     if (this.vmStarting) {
       const started = Date.now();
-      while (this.vmStarting && Date.now() - started < 180000) {
+      while (this.vmStarting && Date.now() - started < 300000) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 500));
       }
-      return { ok: !!(this.vmProc && !this.vmProc.killed), reused: true };
+      const client = this.client(EMU_SERIAL);
+      if (await client.isOnline()) {
+        await this.prepare(client);
+        return { ok: true, client, reused: true };
+      }
     }
 
-    const env = await this.provisioner.checkEnv();
-    this._hv = env.hypervisor;
+    const s = this.settings;
+    const accel = env.accel || await this.provisioner.emulatorAccel();
+
+    // Windows 上纯软件模拟（TCG）不可用：qemu 会挂在 boot 阶段且不消耗 CPU。
+    // 与其让用户干等十几分钟，不如直接给出可执行的解决办法。
+    if (!accel.ok && !s.engine.forceTcg) {
+      throw new Error(
+        '需要启用硬件加速才能启动 Android。'
+        + '请点上方「启用硬件加速」按钮（一键安装 AEHD 驱动，需管理员确认），'
+        + '或在「启用或关闭 Windows 功能」里勾选「虚拟机平台」后重启电脑。',
+      );
+    }
+    if (!accel.ok) onLog('已强制软件模拟：Windows 下 TCG 可能卡在内核引导阶段');
+
+    this.vmStarting = true;
+    try {
+      const st = await this.emulator.start({
+        headless: s.engine.headless !== false,
+        onLog,
+      });
+      this.lastActivity = Date.now();
+
+      const client = this.client(EMU_SERIAL);
+      const timeout = accel.ok ? 240000 : 900000;
+      onLog(`等待 Android 开机…（${accel.ok ? '硬件加速' : '软件模拟，可能很慢'}）`);
+      const linked = await this.waitAdb(client, timeout, onLog);
+      if (!linked) {
+        return { ok: false, error: '运行时已启动，但 adb 未能连上。请查看运行时日志（%APPDATA%\\apkstart\\logs\\emulator.log）' };
+      }
+      const ready = await this.waitAndroidReady(client, timeout, onLog);
+      if (!ready.ok) {
+        return {
+          ok: false,
+          error: ready.stage === 'kernel'
+            ? 'Android 内核未完成引导：可能是硬件加速未真正生效，或镜像文件损坏'
+            : 'Android 已引导但系统服务未就绪（可能停在首次开机向导）',
+        };
+      }
+      await this.prepare(client);
+      return { ok: true, client, engine: 'emulator', serial: st.serial };
+    } finally {
+      this.vmStarting = false;
+    }
+  }
+
+  async bootQemu({ install = false, env, onLog = () => {} } = {}) {
     if (!env.qemu.ok) throw new Error('未安装 QEMU，请先完成运行时部署');
     if (install && !env.iso.ok) throw new Error('系统镜像（ISO）未就绪');
 
@@ -315,9 +404,14 @@ class Runtime {
   async waitAdb(client, timeoutMs, onLog = () => {}) {
     const start = Date.now();
     let lastNotice = 0;
+    const needConnect = String(client.serial || '').includes(':')
+      && !/^emulator-/.test(client.serial);
     while (Date.now() - start < timeoutMs) {
-      // eslint-disable-next-line no-await-in-loop
-      await client.connect().catch(() => false);
+      // emulator-5554 这类由 emulator 自己注册，不需要 adb connect
+      if (needConnect) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.connect().catch(() => false);
+      }
       // eslint-disable-next-line no-await-in-loop
       if (await client.isOnline()) return true;
       if (Date.now() - lastNotice > 20000) {
@@ -337,8 +431,12 @@ class Runtime {
     this.startWatchdog();
   }
 
-  /** 用 QEMU monitor 优雅退出（避免直接杀进程损坏磁盘） */
+  /** 优雅停止：emulator 走控制台关机，QEMU 走 monitor */
   async stop({ graceful = true } = {}) {
+    if (this.emulator.running()) {
+      await this.emulator.stop({ adbPath: this.adbPath() });
+      return true;
+    }
     if (!this.vmProc) return false;
     if (graceful) {
       try { await this.monitorCmd('system_powerdown'); } catch (_) { /* ignore */ }
@@ -448,12 +546,35 @@ class Runtime {
     }
 
     // 默认：自带运行时
+    const env = await this.provisioner.checkEnv();
+
+    // emulator 路径：镜像即系统，没有"安装到磁盘"这一步
+    if (env.emulator.ok && env.sysimg.ok) {
+      if (!env.accel.ok && !s.engine.forceTcg) {
+        return {
+          ok: false,
+          needsSetup: 'accel',
+          error: '需要启用硬件加速才能启动 Android（点「启用硬件加速」一键安装驱动）',
+          env,
+        };
+      }
+      try {
+        const r = await this.boot({ onLog });
+        if (r.ok) return { ok: true, client: r.client, engine: 'emulator' };
+        return { ok: false, error: r.error, env };
+      } catch (e) {
+        return { ok: false, error: e.message, env };
+      }
+    }
+
+    // QEMU 路径（用户自备 ISO 并已装到虚拟磁盘）
     if (!s.runtime.installed) {
-      const env = await this.provisioner.checkEnv();
       return {
         ok: false,
-        needsSetup: env.qemu.ok ? 'install' : 'provision',
-        error: env.qemu.ok ? '运行时已就绪，但还没有安装 Android 系统' : '运行时组件尚未部署完成',
+        needsSetup: env.emulator.ok ? 'sysimg' : 'provision',
+        error: env.emulator.ok
+          ? '还差系统镜像：点「下载系统镜像」即可'
+          : '运行时组件尚未部署完成',
         env,
       };
     }
@@ -474,7 +595,7 @@ class Runtime {
     this._watchdog = setInterval(async () => {
       const s = this.settings;
       const limit = (s.engine.idleShutdownMinutes || 0) * 60000;
-      if (!limit || !this.vmProc || this.installing) return;
+      if (!limit || !this.vmRunning) return;
       if (Date.now() - this.lastActivity < limit) return;
       try {
         const running = await this.client().runningPackages();
@@ -486,8 +607,13 @@ class Runtime {
     if (this._watchdog.unref) this._watchdog.unref();
   }
 
+  get vmRunning() { return this.emulator.running() || !!(this.vmProc && !this.vmProc.killed); }
+
   dispose() {
     if (this._watchdog) clearInterval(this._watchdog);
+    if (this.emulator.running()) {
+      try { this.emulator.proc.kill(); } catch (_) { /* ignore */ }
+    }
     if (this.vmProc) {
       try { this.vmProc.kill(); } catch (_) { /* ignore */ }
       this.vmProc = null;

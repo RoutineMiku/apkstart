@@ -24,6 +24,9 @@ const DEFAULT_SETTINGS = {
     cores: 4,
     idleShutdownMinutes: 15,
     startVisible: true,
+    headless: true,          // 无头运行：画面由 ApkStart 自己的窗口承载
+    gpuMode: 'swiftshader_indirect', // swiftshader_indirect（兼容） | host（用独显） | off
+    forceTcg: false,         // 允许无硬件加速的纯软件模拟（Windows 上极慢，仅排障用）
   },
   runtime: {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime
@@ -34,6 +37,8 @@ const DEFAULT_SETTINGS = {
     diskSizeGB: 24,
     headless: false,         // 不显示虚拟机窗口（仅调试）
     installMode: 'guided',   // guided（引导手动安装） | auto（实验性自动安装）
+    emulatorUrl: '',         // 手动指定 emulator 包地址（空 = 自动从 SDK 索引解析最新版）
+    sysimgUrl: '',           // 手动指定系统镜像包地址
   },
   sharedDir: path.join(os.homedir(), 'ApkStartShared'),
   deviceSharedDir: '/sdcard/ApkStartShared',

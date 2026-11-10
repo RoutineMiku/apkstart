@@ -271,6 +271,71 @@ function registerIpc() {
 
   // ---------------- 运行时自举 ----------------
 
+  ipcMain.handle('provision:installEmulator', async () => {
+    try {
+      const r = await runtime.provisioner.installEmulator(
+        (p) => send('provision:progress', { ...p, component: 'emulator' }),
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('provision:installSysimg', async () => {
+    try {
+      const r = await runtime.provisioner.installSystemImage(
+        (p) => send('provision:progress', { ...p, component: 'sysimg' }),
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('provision:installAehd', async () => {
+    try {
+      const r = await runtime.provisioner.installAehd(
+        (p) => send('provision:progress', { ...p, component: 'aehd' }),
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /** 提权安装 AEHD 驱动：弹出 UAC，用户确认后静默安装 */
+  ipcMain.handle('provision:enableAccel', async () => {
+    try {
+      const p = runtime.provisioner.paths();
+      const bat = path.join(p.aehdDir, 'silent_install.bat');
+      if (!fs.existsSync(bat)) {
+        const r = await runtime.provisioner.installAehd(
+          (x) => send('provision:progress', { ...x, component: 'aehd' }),
+        );
+        if (!fs.existsSync(bat)) throw new Error(r.error || 'AEHD 驱动包未就绪');
+      }
+
+      await new Promise((resolve, reject) => {
+        const { spawn: sp } = require('child_process');
+        const esc = bat.replace(/'/g, "''");
+        const ps = `try { $p = Start-Process -FilePath '${esc}' -WorkingDirectory '${path.dirname(bat).replace(/'/g, "''")}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit 2 }`;
+        const proc = sp('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+          windowsHide: true,
+        });
+        proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(
+          code === 2 ? '已取消管理员授权（需要点「是」才能安装驱动）' : `驱动安装失败（退出码 ${code}）`,
+        ))));
+        proc.on('error', (e) => reject(e));
+      });
+
+      const accel = await runtime.provisioner.emulatorAccel();
+      return { ok: accel.ok, accel, error: accel.ok ? '' : accel.note };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('provision:installAdb', async () => {
     try {
       const r = await runtime.provisioner.installAdb((p) => send('provision:progress', { ...p, component: 'adb' }));
@@ -449,6 +514,12 @@ if (!gotLock) {
       mainWindow.webContents.once('did-finish-load', () => {
         setTimeout(async () => {
           try {
+            if (process.argv.includes('--setup')) {
+              await mainWindow.webContents.executeJavaScript(
+                "document.getElementById('btnRuntime').click(); true;",
+              );
+              await new Promise((r) => setTimeout(r, 2500));
+            }
             const img = await mainWindow.webContents.capturePage();
             fs.writeFileSync(out, img.toPNG());
           } catch (e) {
@@ -456,7 +527,7 @@ if (!gotLock) {
           }
           quitting = true;
           app.quit();
-        }, 3500);
+        }, 6500);
       });
     }
 

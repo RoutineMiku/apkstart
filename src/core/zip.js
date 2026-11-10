@@ -70,6 +70,56 @@ class ZipArchive {
   find(re) {
     return [...this.entries.keys()].filter((n) => re.test(n));
   }
+
+  /**
+   * 流式解压单个条目到可写流。
+   * system.img 这类 GB 级条目无法整块 inflate 进内存（会撞上 Node 的 2GB 单 Buffer 上限），
+   * 必须边解压边落盘。
+   */
+  pipeTo(name, dest) {
+    const e = this.entries.get(name);
+    if (!e) return Promise.reject(new Error(`条目不存在: ${name}`));
+    const buf = this.buf;
+    if (buf.readUInt32LE(e.localOffset) !== LOC_SIG) {
+      return Promise.reject(new Error(`本地文件头损坏: ${name}`));
+    }
+    const nameLen = buf.readUInt16LE(e.localOffset + 26);
+    const extraLen = buf.readUInt16LE(e.localOffset + 28);
+    const start = e.localOffset + 30 + nameLen + extraLen;
+    const raw = buf.subarray(start, start + e.compSize);
+
+    return new Promise((resolve, reject) => {
+      const done = (err) => { if (err) reject(err); else resolve(e.uncompSize); };
+      dest.on('error', done);
+      dest.on('finish', () => done(null));
+
+      if (e.method === 0) {
+        dest.end(raw);
+        return;
+      }
+      if (e.method !== 8) return done(new Error(`不支持的压缩方式 ${e.method}: ${name}`));
+
+      const inflater = zlib.createInflateRaw();
+      // 分片喂入，避免一次性把 GB 数据塞进 zlib 缓冲区
+      const SLICE = 1 << 20;
+      let pos = 0;
+      const pump = () => {
+        while (pos < raw.length) {
+          const end = Math.min(pos + SLICE, raw.length);
+          const chunk = raw.subarray(pos, end);
+          pos = end;
+          if (!inflater.write(chunk)) {
+            inflater.once('drain', pump);
+            return;
+          }
+        }
+        inflater.end();
+      };
+      inflater.on('error', done);
+      inflater.pipe(dest);
+      pump();
+    });
+  }
 }
 
 module.exports = { ZipArchive };
