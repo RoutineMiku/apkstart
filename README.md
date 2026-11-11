@@ -138,7 +138,7 @@ ApkStart 由 **RoutineMiku** 开发维护。
 - GitHub：<https://github.com/RoutineMiku/apkstart>
 - 微信公众号：扫码关注
 
-<p align="center"><img src="src/ui/assets/wechat-qr.jpg" alt="微信公众号二维码" width="180" /></p>
+<p align="center"><img src="docs/images/brand.png" alt="关于面板：公众号二维码与项目链接" width="560" /></p>
 
 <p align="center"><i>Powered by <b>RoutineMiku</b></i></p>
 
