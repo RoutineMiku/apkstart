@@ -56,6 +56,12 @@ body {
 
 .brand { display: flex; align-items: center; gap: 8px; }
 .logo { display: flex; }
+.logo img {
+  width: 20px; height: 20px;
+  border-radius: 6px;
+  display: block;
+  -webkit-user-drag: none;
+}
 .brand-name { font-weight: 650; font-size: 13.5px; letter-spacing: .2px; }
 .brand-tag {
   margin-left: 4px;
@@ -603,6 +609,14 @@ kbd {
   display: flex;
   gap: 16px;
   align-items: flex-start;
+}
+.about-brand { flex: none; }
+.about-logo {
+  width: 56px; height: 56px;
+  border-radius: 14px;
+  display: block;
+  box-shadow: 0 2px 10px rgba(15, 23, 32, .18);
+  -webkit-user-drag: none;
 }
 .about-qr {
   display: flex;

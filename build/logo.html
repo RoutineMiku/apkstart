@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; width: 1024px; height: 1024px; overflow: hidden; }
+  .stage { width: 1024px; height: 1024px; position: relative; display: grid; place-items: center; }
+  .tile {
+    position: relative; width: 896px; height: 896px; border-radius: 208px;
+    background:
+      radial-gradient(120% 90% at 18% 8%, #243444 0%, #131c25 46%, #0b1016 100%);
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.14), inset 0 -30px 70px rgba(0,0,0,.55);
+    overflow: hidden;
+  }
+  /* 斜向高光 */
+  .tile::before {
+    content: ""; position: absolute; inset: -40% -20% auto -60%; height: 130%;
+    background: linear-gradient(104deg, rgba(255,255,255,0) 34%, rgba(255,255,255,.10) 47%, rgba(255,255,255,0) 60%);
+    transform: rotate(-6deg);
+  }
+  /* 网格点阵 */
+  .dots {
+    position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(255,255,255,.10) 1.6px, transparent 1.7px);
+    background-size: 46px 46px; background-position: 22px 22px;
+    opacity: .5;
+    mask-image: radial-gradient(78% 78% at 50% 46%, #000 30%, transparent 78%);
+    -webkit-mask-image: radial-gradient(78% 78% at 50% 46%, #000 30%, transparent 78%);
+  }
+  /* 底部绿色辉光 */
+  .glow {
+    position: absolute; left: 50%; bottom: -180px; width: 860px; height: 460px;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(61,220,132,.42), rgba(61,220,132,0) 72%);
+    filter: blur(8px);
+  }
+  .content { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .apk {
+    font-family: "Arial Black", "Segoe UI Black", "Segoe UI", Arial, sans-serif;
+    font-weight: 900; font-size: 292px; line-height: .86; letter-spacing: -8px;
+    background: linear-gradient(178deg, #ffffff 26%, #dfe9f2 62%, #b9cad9 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 12px 34px rgba(0,0,0,.45);
+    margin-top: -34px;
+  }
+  .bar {
+    width: 372px; height: 12px; border-radius: 8px; margin: 26px 0 30px;
+    background: linear-gradient(90deg, rgba(61,220,132,0) 0%, #3ddc84 22%, #6ff0a8 50%, #3ddc84 78%, rgba(61,220,132,0) 100%);
+    box-shadow: 0 0 34px rgba(61,220,132,.55);
+  }
+  .start {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700; font-size: 146px; line-height: 1; letter-spacing: 3px;
+    color: #3ddc84;
+    text-shadow: 0 0 42px rgba(61,220,132,.45);
+  }
+  /* 点缀：播放键 + 火花 */
+  .spark { position: absolute; background: #6ff0a8; border-radius: 50%; box-shadow: 0 0 26px rgba(111,240,168,.8); }
+  .s1 { width: 16px; height: 16px; right: 176px; top: 214px; opacity: .95; }
+  .s2 { width: 9px; height: 9px; right: 136px; top: 268px; opacity: .6; }
+  .s3 { width: 11px; height: 11px; left: 168px; bottom: 236px; opacity: .55; }
+  .tri { position: absolute; left: 150px; top: 200px; width: 0; height: 0;
+    border-left: 30px solid #3ddc84; border-top: 18px solid transparent; border-bottom: 18px solid transparent;
+    filter: drop-shadow(0 0 18px rgba(61,220,132,.7)); opacity: .9;
+  }
+  /* 四角刻度 */
+  .corner { position: absolute; width: 62px; height: 62px; border: 5px solid rgba(255,255,255,.16); border-radius: 18px; }
+  .c1 { left: 92px; top: 92px; border-right: 0; border-bottom: 0; }
+  .c2 { right: 92px; bottom: 92px; border-left: 0; border-top: 0; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="tile">
+      <div class="dots"></div>
+      <div class="glow"></div>
+      <div class="corner c1"></div>
+      <div class="corner c2"></div>
+      <div class="content">
+        <div class="apk">APK</div>
+        <div class="bar"></div>
+        <div class="start">start</div>
+      </div>
+      <div class="tri"></div>
+      <div class="spark s1"></div>
+      <div class="spark s2"></div>
+      <div class="spark s3"></div>
+    </div>
+  </div>
+</body>
+</html>

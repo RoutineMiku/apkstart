@@ -13,7 +13,20 @@ const { Installer } = require('./core/installer');
 const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
-const { pngToIco } = require('./core/shortcut');
+
+// 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
+const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
+const LOGO_FILE = path.join(LOGO_DIR, 'logo.png');
+const APPICON_FILE = path.join(LOGO_DIR, 'appicon.ico');
+function loadBrandIcon(size) {
+  try {
+    if (fs.existsSync(LOGO_FILE)) {
+      const img = nativeImage.createFromPath(LOGO_FILE);
+      return size ? img.resize({ width: size, height: size, quality: 'best' }) : img;
+    }
+  } catch (_) { /* 落到程序化图标 */ }
+  return nativeImage.createFromBuffer(drawAppIcon(size || 256));
+}
 const assoc = require('./core/assoc');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
@@ -23,7 +36,7 @@ const APP_ROOT = path.join(__dirname, '..');
 const IS_DEV = process.argv.includes('--dev');
 // 冒烟截图等自动化场景下跳过注册表探测（避免依赖 reg.exe）
 const NO_SHELL_PROBE = process.argv.includes('--smoke') || process.env.APKSTART_NO_SHELL_PROBE === '1';
-const ICON_PNG = drawAppIcon(256);
+const ICON_PNG = loadBrandIcon().toPNG();
 
 let mainWindow = null;
 let tray = null;
@@ -123,7 +136,7 @@ function send(channel, payload) {
 // ---------------- 托盘 ----------------
 
 function buildTray() {
-  const icon = nativeImage.createFromBuffer(drawAppIcon(64)).resize({ width: 16, height: 16 });
+  const icon = loadBrandIcon(16);
   try {
     tray = new Tray(icon);
   } catch (_) {
@@ -468,8 +481,13 @@ function registerIpc() {
     const l = launcherInfo();
     const icoPath = path.join(store.ICON_DIR, 'apkstart.ico');
     if (!fs.existsSync(icoPath)) {
-      const ico = pngToIco(ICON_PNG);
-      if (ico) fs.writeFileSync(icoPath, ico);
+      // 优先用随包分发的多尺寸品牌 ICO，缺失时从 Logo PNG 现算
+      if (fs.existsSync(APPICON_FILE)) fs.copyFileSync(APPICON_FILE, icoPath);
+      else {
+        const { pngToIco } = require('./core/shortcut');
+        const ico = pngToIco(ICON_PNG);
+        if (ico) fs.writeFileSync(icoPath, ico);
+      }
     }
     return assoc.registerAssociation(l.target, icoPath, l.args);
   });
