@@ -39,6 +39,7 @@ const DEFAULT_SETTINGS = {
     installMode: 'guided',   // guided（引导手动安装） | auto（实验性自动安装）
     emulatorUrl: '',         // 手动指定 emulator 包地址（空 = 自动从 SDK 索引解析最新版）
     sysimgUrl: '',           // 手动指定系统镜像包地址
+    compatImage: false,      // ARM 兼容模式：改用 Google Play 镜像（内置 native bridge，可装 ARM-only 应用）
   },
   sharedDir: path.join(os.homedir(), 'ApkStartShared'),
   deviceSharedDir: '/sdcard/ApkStartShared',

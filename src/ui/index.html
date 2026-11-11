@@ -109,6 +109,8 @@
       <span class="status-item" id="statusDevice"></span>
       <span class="sep"></span>
       <span class="status-item" id="statusStats"></span>
+      <span class="sep"></span>
+      <a class="status-item powered-link" href="https://github.com/RoutineMiku/apkstart" target="_blank" rel="noopener">Powered by RoutineMiku</a>
     </div>
   </footer>
 </main>
@@ -176,6 +178,20 @@
           <label>空闲回收（分钟，0 = 不回收）</label>
           <input id="setIdle" type="number" min="0" step="1" />
         </div>
+        <div class="field switch-field">
+          <div>
+            <label>ARM 兼容模式（Google Play 镜像）</label>
+            <span class="sub">改用内置 ARM 翻译层的 Google Play 镜像，可安装仅含 ARM 原生库的应用（约 1.3GB）。注意：抖音/红果等字节系应用因自带反调试 hook，在任何官方模拟器上都无法运行。</span>
+          </div>
+          <input type="checkbox" id="setCompat" class="switch" />
+        </div>
+        <div class="field" id="compatInstallField" hidden>
+          <label>兼容镜像</label>
+          <div class="row">
+            <span class="inline-note" id="compatImgStatus">未下载</span>
+            <button class="btn ghost sm" id="btnInstallPlay">下载兼容镜像</button>
+          </div>
+        </div>
         <div class="runtime-actions">
           <button class="btn ghost sm" id="btnRuntimeStart">启动运行时</button>
           <button class="btn ghost sm" id="btnRuntimeStop">停止内置虚拟机</button>
@@ -242,6 +258,23 @@
           <div class="row">
             <input id="setDataDir" type="text" readonly />
             <button class="btn ghost sm" id="btnOpenData">打开</button>
+          </div>
+        </div>
+      </div>
+      <div class="group" id="aboutGroup">
+        <div class="group-title">关于</div>
+        <div class="about-box">
+          <div class="about-qr">
+            <img src="assets/wechat-qr.jpg" alt="微信公众号二维码" width="112" height="112" />
+            <span class="about-qr-tip">扫码关注公众号</span>
+          </div>
+          <div class="about-info">
+            <div class="about-name">ApkStart <span class="about-ver" id="aboutVer"></span></div>
+            <p class="note">双击即装的 Windows 安卓应用启动器：APK 安装、桌面快捷方式、独立窗口运行、文件双向互通。</p>
+            <div class="about-links">
+              <a href="https://github.com/RoutineMiku/apkstart" target="_blank" rel="noopener">GitHub · RoutineMiku/apkstart</a>
+              <span class="powered">Powered by <b>RoutineMiku</b></span>
+            </div>
           </div>
         </div>
       </div>

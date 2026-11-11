@@ -16,8 +16,13 @@ const { drawAppIcon } = require('./core/png');
 const { pngToIco } = require('./core/shortcut');
 const assoc = require('./core/assoc');
 
+// Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
 const APP_ROOT = path.join(__dirname, '..');
 const IS_DEV = process.argv.includes('--dev');
+// 冒烟截图等自动化场景下跳过注册表探测（避免依赖 reg.exe）
+const NO_SHELL_PROBE = process.argv.includes('--smoke') || process.env.APKSTART_NO_SHELL_PROBE === '1';
 const ICON_PNG = drawAppIcon(256);
 
 let mainWindow = null;
@@ -73,6 +78,17 @@ function createWindow({ show = true } = {}) {
 
   mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
   if (show) mainWindow.once('ready-to-show', () => mainWindow.show());
+
+  // 外链一律交给系统浏览器（公众号/GitHub 等），绝不把应用窗口导航走
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (url.startsWith('file://')) return;
+    e.preventDefault();
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  });
 
   mainWindow.on('close', (e) => {
     if (quitting) return;
@@ -293,6 +309,17 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('provision:installPlayImage', async () => {
+    try {
+      const r = await runtime.provisioner.installPlayImage(
+        (p) => send('provision:progress', { ...p, component: 'playimg' }),
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('provision:installAehd', async () => {
     try {
       const r = await runtime.provisioner.installAehd(
@@ -426,6 +453,8 @@ function registerIpc() {
   });
 
   ipcMain.handle('assoc:status', () => {
+    // 冒烟/无 shell 环境：不探测注册表（reg.exe 可能被策略拦截）
+    if (NO_SHELL_PROBE) return { registered: false, skipped: true };
     const { execFileSync } = require('child_process');
     try {
       const out = execFileSync('reg', ['query', 'HKCU\\Software\\Classes\\.apk', '/ve'], { windowsHide: true, encoding: 'utf8' });
@@ -520,8 +549,41 @@ if (!gotLock) {
               );
               await new Promise((r) => setTimeout(r, 2500));
             }
-            const img = await mainWindow.webContents.capturePage();
-            fs.writeFileSync(out, img.toPNG());
+            if (process.argv.includes('--settings')) {
+              const opened = await mainWindow.webContents.executeJavaScript(`
+                (async () => {
+                  document.getElementById('btnSettings').click();
+                  for (let i = 0; i < 50; i++) {
+                    await new Promise((r) => setTimeout(r, 100));
+                    if (document.getElementById('settingsMask').classList.contains('on')) return true;
+                  }
+                  return false;
+                })()
+              `);
+              console.log('[smoke] settings opened =', opened);
+              await new Promise((r) => setTimeout(r, 600));
+              const dbg = await mainWindow.webContents.executeJavaScript(
+                "JSON.stringify({ on: document.getElementById('settingsMask').classList.contains('on'), qr: !!document.querySelector('#aboutGroup img'), qrH: (document.querySelector('#aboutGroup img')||{}).naturalHeight, ver: (document.getElementById('aboutVer')||{}).textContent })",
+              );
+              console.log('[smoke] dom =', dbg);
+            }
+            // 窗口可能被遮挡导致拿到旧帧：强制重绘 + 连拍两帧取后一帧
+            const snap = async (file) => {
+              mainWindow.webContents.invalidate();
+              await mainWindow.webContents.capturePage().catch(() => null);
+              await new Promise((r) => setTimeout(r, 400));
+              const im = await mainWindow.webContents.capturePage();
+              fs.writeFileSync(file, im.toPNG());
+              console.log('[smoke] saved', file);
+            };
+            await snap(out);
+            if (process.argv.includes('--settings')) {
+              // 再拍一张「关于」区（二维码 / GitHub / Powered by）
+              await mainWindow.webContents.executeJavaScript(
+                "document.getElementById('aboutGroup').scrollIntoView({ block: 'center' }); true;",
+              );
+              await snap(out.replace(/\.png$/i, '-about.png'));
+            }
           } catch (e) {
             console.error('[smoke] 截图失败', e);
           }

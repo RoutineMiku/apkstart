@@ -48,14 +48,31 @@ class EmulatorEngine {
    */
   ensureAvd({ memoryMB = 4096, cores = 4, width = 1080, height = 1920, density = 420, gpu = 'swiftshader_indirect' } = {}) {
     const p = this.provisioner.ensureDirs();
+    const s = this.settings;
     const home = p.avdHome;
     const avdDir = path.join(home, `${AVD_NAME}.avd`);
     fs.mkdirSync(avdDir, { recursive: true });
+
+    // ARM 兼容模式：使用 Google Play 版镜像（内置 native bridge，可安装仅含 ARM 原生库的应用）
+    const compat = !!(s.runtime && s.runtime.compatImage) && this.provisioner.playImageInfo().ok;
+    const tag = compat ? 'google_apis_playstore' : p.sysTag;
+    const tagDisplay = compat ? 'Google Play (ARM 兼容)' : 'AOSP';
 
     fs.writeFileSync(
       path.join(home, `${AVD_NAME}.ini`),
       `avd.ini.encoding=UTF-8\npath=${avdDir.replace(/\\/g, '/')}\ntarget=android-${p.sysApi}\n`,
     );
+
+    // 切换镜像 tag（普通 ↔ ARM 兼容）时旧 userdata 不兼容（APEX 模块引导循环），
+    // 下次启动带上 -wipe-data 让模拟器重建干净的用户数据
+    const cfgPath = path.join(avdDir, 'config.ini');
+    this.wipePending = false;
+    if (fs.existsSync(cfgPath)) {
+      const prevTag = /tag\.id=(.+)$/m.exec(fs.readFileSync(cfgPath, 'utf8'));
+      if (prevTag && prevTag[1].trim() !== tag) {
+        this.wipePending = true;
+      }
+    }
 
     // hw.cpu.arch 必须是 ABI 本身（x86_64 不能截成 x86），
     // 否则模拟器会按 32 位启动却加载 64 位内核，报 "requires an x86-64 CPU, but only detected an i686 CPU"。
@@ -72,9 +89,9 @@ class EmulatorEngine {
       `hw.cpu.ncore=${cores}`,
       `hw.ramSize=${memoryMB}`,
       'vm.heapSize=512',
-      `image.sysdir.1=system-images/android-${p.sysApi}/${p.sysTag}/${p.sysAbi}/`,
-      `tag.id=${p.sysTag}`,
-      'tag.display=AOSP',
+      `image.sysdir.1=system-images/android-${p.sysApi}/${tag}/${p.sysAbi}/`,
+      `tag.id=${tag}`,
+      `tag.display=${tagDisplay}`,
       'disk.dataPartition.size=16G',
       'hw.gpu.enabled=yes',
       `hw.gpu.mode=${gpu}`,
@@ -84,7 +101,7 @@ class EmulatorEngine {
       `hw.lcd.density=${density}`,
       'hw.mainKeys=no',
       'ShowDeviceFrame=no',
-      'PlayStore.enabled=false',
+      `PlayStore.enabled=${compat}`,
       'fastboot.forceColdBoot=yes',
       'hw.sdCard=no',
       'hw.audioInput=none',
@@ -106,6 +123,9 @@ class EmulatorEngine {
       ANDROID_HOME: root,
       ANDROID_AVD_HOME: path.join(root, 'avd'),
       ANDROID_EMULATOR_HOME: path.join(root, 'avd'),
+      // 专用 adb server 端口：避免与 WSA / 其他模拟器的 adb（5037）互相踢掉注册，
+      // 否则设备会一直显示 offline（实测问题）
+      ANDROID_ADB_SERVER_PORT: process.env.ANDROID_ADB_SERVER_PORT || '5044',
       // 不弹 metrics 询问、不写用户级配置
       ANDROID_EMULATOR_USE_SYSTEM_LIBS: '',
     };
@@ -148,7 +168,9 @@ class EmulatorEngine {
 
     const accelInfo = await this.provisioner.emulatorAccel();
     const accel = accelInfo.ok ? 'auto' : 'off';
-    const args = this.buildArgs({ headless, accel, port, wipe });
+    // 镜像 tag 切换后旧 userdata 不兼容，用 -wipe-data 重建
+    const args = this.buildArgs({ headless, accel, port, wipe: wipe || !!this.wipePending });
+    this.wipePending = false;
 
     const env = this.env(loc.root);
     // 没有硬件加速时必须显式授权 TCG，否则 emulator 直接拒绝启动

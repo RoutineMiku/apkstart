@@ -32,6 +32,9 @@ const SOURCES = {
   // 兜底：索引不可用时直接用的已知版本
   emulatorFallback: 'https://dl.google.com/android/repository/emulator-windows_x64-16847572.zip',
   sysimgFallback: 'https://dl.google.com/android/repository/sys-img/android/x86_64-30_r11.zip',
+  // ARM 兼容镜像（Google Play 版，内置 native bridge）
+  playImgIndex: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-3.xml',
+  playImgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-30_r09.zip',
   // Android-x86 9.0-r2（x86_64）：仅在用户已自备 ISO 时使用
   iso: [
     'https://master.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso?viasf=1',
@@ -65,6 +68,8 @@ function absUrl(u, base = REPO_BASE) {
 
 /** 想默认使用的系统镜像（API 级别 + 渠道）。AOSP 版体积小、无 GMS 授权问题。 */
 const DEFAULT_SYSIMG = { api: '30', tag: 'default', abi: 'x86_64' };
+// ARM 兼容镜像：Google Play 版自带 native bridge（ARM 翻译层），可安装仅含 ARM 原生库的应用
+const PLAY_SYSIMG = { api: '30', tag: 'google_apis_playstore', abi: 'x86_64' };
 
 const MIN_SIZE = {
   adb: 5 * 1024 * 1024,
@@ -254,6 +259,7 @@ class Provisioner {
         required: false,
         note: sysimg.ok ? `Android ${sysimg.api}（${(sysimg.size / 1073741824).toFixed(2)} GB）` : (sysimg.note || '未下载'),
       },
+      playImage: this.playImageInfo(),
       accel,
       qemu: { ...qemu, required: false },
       iso: {
@@ -583,6 +589,75 @@ class Provisioner {
     const info = this.systemImageInfo();
     if (!info.ok) throw new Error('系统镜像解压后校验失败（system.img 缺失或不完整）');
     onProgress({ stage: 'done', message: `Android ${DEFAULT_SYSIMG.api} 系统镜像就绪`, percent: 100 });
+    return info;
+  }
+
+  /** ARM 兼容镜像（Google Play 版）是否已就位 */
+  playImageInfo() {
+    const p = this.paths();
+    const dir = path.join(p.sysImgRoot, `android-${PLAY_SYSIMG.api}`, PLAY_SYSIMG.tag, PLAY_SYSIMG.abi);
+    const size = fileSize(path.join(dir, 'system.img'));
+    if (size > MIN_SIZE.sysimg && fs.existsSync(path.join(dir, 'kernel-ranchu'))) {
+      return { ok: true, dir, size, api: PLAY_SYSIMG.api, tag: PLAY_SYSIMG.tag };
+    }
+    return { ok: false, dir, size, note: size ? '镜像不完整' : '未下载' };
+  }
+
+  /** 解析 Google Play 版镜像地址（<url> 相对索引文件所在目录） */
+  async resolvePlayUrl() {
+    if (this._cache.playUrl) return this._cache.playUrl;
+    try {
+      const xml = await this._fetchText(SOURCES.playImgIndex);
+      const want = `system-images;android-${PLAY_SYSIMG.api};${PLAY_SYSIMG.tag};${PLAY_SYSIMG.abi}`;
+      const block = new RegExp(`<remotePackage path="${want}"[\\s\\S]*?</remotePackage>`).exec(xml);
+      if (block) {
+        const base = baseOf(SOURCES.playImgIndex);
+        const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base))
+          .filter((u) => /x86_64.*\.zip$/i.test(u));
+        if (urls.length) {
+          this._cache.playUrl = urls[urls.length - 1];
+          return this._cache.playUrl;
+        }
+      }
+    } catch (_) { /* 落兜底 */ }
+    this._cache.playUrl = SOURCES.playImgFallback;
+    return this._cache.playUrl;
+  }
+
+  /** 下载并安装 ARM 兼容镜像（Google Play 版，约 1.3GB） */
+  async installPlayImage(onProgress = () => {}) {
+    const p = this.ensureDirs();
+    const url = await this.resolvePlayUrl();
+    const zip = path.join(p.tmp, 'play-sysimg.zip');
+    onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（约 1.3GB）…', percent: 1 });
+    await downloadAnyParallel([url], zip, {
+      connections: 8,
+      minChunk: 4 * 1024 * 1024,
+      onProgress: (pr) => onProgress({
+        stage: 'download',
+        message: `下载兼容镜像 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
+          + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
+        percent: Math.round(pr.percent * 0.8),
+        canResume: true,
+      }),
+    });
+    if (fileSize(zip) < MIN_SIZE.sysimg) throw new Error('兼容镜像下载不完整，可重试续传');
+
+    const dest = path.join(p.sysImgRoot, `android-${PLAY_SYSIMG.api}`, PLAY_SYSIMG.tag);
+    fs.mkdirSync(dest, { recursive: true });
+    onProgress({ stage: 'extract', message: '解压兼容镜像（3GB，需十余秒）…', percent: 82 });
+    await this.extractZip(zip, dest, {
+      onEntry: (_n, i, total) => onProgress({
+        stage: 'extract',
+        message: `解压兼容镜像 ${i}/${total}`,
+        percent: 82 + Math.round((i / Math.max(1, total)) * 15),
+      }),
+    });
+    fs.rmSync(zip, { force: true });
+
+    const info = this.playImageInfo();
+    if (!info.ok) throw new Error('兼容镜像解压后校验失败');
+    onProgress({ stage: 'done', message: 'ARM 兼容镜像就绪，重新启动运行时即可生效', percent: 100 });
     return info;
   }
 

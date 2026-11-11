@@ -616,6 +616,7 @@ function fillSettings(s) {
   $('setMemory').value = s.engine.memoryMB;
   $('setCores').value = s.engine.cores;
   $('setIdle').value = s.engine.idleShutdownMinutes;
+  $('setCompat').checked = !!(s.runtime && s.runtime.compatImage);
   $('setAutoShortcut').checked = !!s.createShortcutOnInstall;
   $('setFreeform').checked = !!s.freeform;
   $('setHideAfterLaunch').checked = !!s.hideAfterLaunch;
@@ -629,6 +630,8 @@ async function openSettings() {
   fillSettings(state.settings);
   const info = await api.info();
   $('setDataDir').value = info.dataDir;
+  const verEl = document.getElementById('aboutVer');
+  if (verEl && info.version) verEl.textContent = `v${info.version}`;
   const assoc = await api.assocStatus();
   const btn = $('btnAssoc');
   btn.textContent = assoc.registered ? '已关联 · 点击取消' : '未关联 · 点击开启';
@@ -655,6 +658,15 @@ function bindSettings() {
   $('setMemory').addEventListener('change', (e) => save({ engine: { memoryMB: Number(e.target.value) || 4096 } }));
   $('setCores').addEventListener('change', (e) => save({ engine: { cores: Number(e.target.value) || 4 } }));
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
+  $('setCompat').addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    await save({ runtime: { compatImage: on } });
+    const env = ((state.status = await api.runtimeStatus()).env) || {};
+    const ok = env.playImage && env.playImage.ok;
+    $('compatInstallField').hidden = !on || !!ok;
+    if (on && !ok) toast({ title: 'ARM 兼容模式已开启', body: '还需要下载 Google Play 兼容镜像（约 1.3GB），点击下方按钮开始', type: 'info' });
+    else if (on) toast({ title: 'ARM 兼容模式已开启', body: '重启运行时后生效', type: 'info' });
+  });
   $('setAutoShortcut').addEventListener('change', (e) => save({ createShortcutOnInstall: e.target.checked }));
   $('setFreeform').addEventListener('change', (e) => save({ freeform: e.target.checked }));
   $('setHideAfterLaunch').addEventListener('change', (e) => save({ hideAfterLaunch: e.target.checked }));
@@ -663,6 +675,49 @@ function bindSettings() {
   $('setDeviceSharedDir').addEventListener('change', (e) => save({ deviceSharedDir: e.target.value.trim() }));
 
   $('btnOpenShared').addEventListener('click', () => api.openSharedDir());
+
+  // ARM 兼容镜像下载（带进度 toast）
+  $('btnInstallPlay').addEventListener('click', async () => {
+    const btn = $('btnInstallPlay');
+    btn.disabled = true;
+    const t = toast({ title: '开始下载 ARM 兼容镜像', body: '准备中…', sticky: true, spinner: true, progress: 3 });
+    const un = api.on('provision:progress', (p) => {
+      if (p.component !== 'playimg') return;
+      t.update({ title: '下载 ARM 兼容镜像', body: p.message || '', progress: p.percent });
+    });
+    try {
+      const r = await api.installPlayImage();
+      if (r && r.ok) {
+        t.update({ title: 'ARM 兼容镜像就绪', body: '重启运行时后生效', progress: 100 });
+        setTimeout(() => t.dismiss(), 3000);
+        $('compatInstallField').hidden = true;
+        refreshStatus();
+      } else {
+        t.update({ title: '兼容镜像下载失败', body: (r && r.error) || '未知错误', progress: null });
+        t.dismiss();
+        toast({ title: '兼容镜像下载失败', body: (r && r.error) || '未知错误', type: 'error' });
+      }
+    } catch (e) {
+      t.dismiss();
+      toast({ title: '兼容镜像下载失败', body: e.message, type: 'error' });
+    } finally {
+      un();
+      btn.disabled = false;
+    }
+  });
+
+  // 兼容镜像状态显示
+  (async () => {
+    const env = ((state.status = await api.runtimeStatus()).env) || {};
+    const s = state.settings;
+    const on = !!(s && s.runtime && s.runtime.compatImage);
+    const ok = env.playImage && env.playImage.ok;
+    $('compatInstallField').hidden = !on || !!ok;
+    if (env.playImage) {
+      $('compatImgStatus').textContent = ok
+        ? `已就绪（${(env.playImage.size / 1073741824).toFixed(2)} GB）` : '未下载';
+    }
+  })();
   $('btnOpenData').addEventListener('click', async () => {
     const info = await api.info();
     window.open(`file:///${info.dataDir.replace(/\\/g, '/')}`);
@@ -715,6 +770,14 @@ function bindSettings() {
 /* ---------------- 事件绑定 ---------------- */
 
 function bindEvents() {
+  // 链接统一走系统浏览器
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href^="http"]');
+    if (!a) return;
+    e.preventDefault();
+    api.openExternal(a.getAttribute('href'));
+  });
+
   $('btnSettings').addEventListener('click', openSettings);
   $('btnCloseSettings').addEventListener('click', closeSettings);
   $('btnDoneSettings').addEventListener('click', closeSettings);

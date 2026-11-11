@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   installQemu: () => invoke('provision:installQemu'),
   installEmulator: () => invoke('provision:installEmulator'),
   installSysimg: () => invoke('provision:installSysimg'),
+  installPlayImage: () => invoke('provision:installPlayImage'),
   installAehd: () => invoke('provision:installAehd'),
   enableAccel: () => invoke('provision:enableAccel'),
   downloadIso: () => invoke('provision:downloadIso'),

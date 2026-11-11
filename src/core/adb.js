@@ -108,6 +108,9 @@ class AdbClient {
         maxBuffer: 64 * 1024 * 1024,
         encoding: binary ? 'buffer' : 'utf8',
         windowsHide: true,
+        // 与运行时模拟器共用专用 adb server 端口（默认 5044），与 5037 上的
+        // WSA / 第三方模拟器 adb 隔离，避免注册被反复踢掉导致设备 offline
+        env: { ...process.env, ANDROID_ADB_SERVER_PORT: process.env.ANDROID_ADB_SERVER_PORT || '5044' },
       }, (err, stdout, stderr) => {
         if (err) {
           return reject(new AdbError(
