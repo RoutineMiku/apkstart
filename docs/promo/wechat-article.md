@@ -3,7 +3,11 @@ title: 自己写了个 Windows 安卓启动器：双击 .apk 就能用，还把�
 cover: ./assets/wechat-cover.jpg
 description: ApkStart v0.2.2 发布：开源免费的 Windows 安卓应用启动器，全新「完整版」内置引擎与 Android 14 兼容镜像，解压双击即用，零下载零设置。
 author: RoutineMiku
+source_url: https://github.com/RoutineMiku/apkstart/releases/tag/v0.2.2
 sourceUrl: https://github.com/RoutineMiku/apkstart/releases/tag/v0.2.2
+digest: 开源免费的 Windows 安卓应用启动器，v0.2.2 完整版内置引擎与 Android 14 兼容镜像，解压双击即用。
+need_open_comment: 1
+only_fans_can_comment: 0
 ---
 
 # 双击 .apk，就在电脑上跑安卓应用
