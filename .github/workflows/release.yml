@@ -70,5 +70,22 @@ jobs:
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           $zip = "ApkStart-$tag-win64-portable.zip"
-          $full = Get-ChildItem "ApkStart-$tag-win64-full.7z.*" | ForEach-Object { $_.FullName }
-          gh release create $tag $zip @full --title "ApkStart $tag" --generate-notes
+          $vols = @(Get-ChildItem "ApkStart-$tag-win64-full.7z.*" | ForEach-Object { $_.FullName })
+          if (-not $vols.Count) { Write-Error "未找到完整版分卷"; exit 1 }
+          foreach ($v in $vols) {
+            $gb = (Get-Item $v).Length / 1GB
+            Write-Host "asset: $v = $([Math]::Round($gb,2)) GB"
+            if ($gb -ge 2) { Write-Error "分卷超过 GitHub 2GiB 上限: $v"; exit 1 }
+          }
+          gh release create $tag --title "ApkStart $tag" --generate-notes
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $assets = @($zip) + $vols
+          foreach ($a in $assets) {
+            $ok = $false
+            for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+              gh release upload $tag $a --clobber
+              if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 15 }
+            }
+            if (-not $ok) { Write-Error "上传失败: $a"; exit 1 }
+          }
+          gh release view $tag --json assets --jq '.assets[].name'
