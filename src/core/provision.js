@@ -34,7 +34,7 @@ const SOURCES = {
   sysimgFallback: 'https://dl.google.com/android/repository/sys-img/android/x86_64-30_r11.zip',
   // ARM 兼容镜像（Google Play 版，内置 native bridge）
   playImgIndex: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-3.xml',
-  playImgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-30_r09.zip',
+  playImgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
   // Android-x86 9.0-r2（x86_64）：仅在用户已自备 ISO 时使用
   iso: [
     'https://master.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso?viasf=1',
@@ -68,8 +68,10 @@ function absUrl(u, base = REPO_BASE) {
 
 /** 想默认使用的系统镜像（API 级别 + 渠道）。AOSP 版体积小、无 GMS 授权问题。 */
 const DEFAULT_SYSIMG = { api: '30', tag: 'default', abi: 'x86_64' };
-// ARM 兼容镜像：Google Play 版自带 native bridge（ARM 翻译层），可安装仅含 ARM 原生库的应用
-const PLAY_SYSIMG = { api: '30', tag: 'google_apis_playstore', abi: 'x86_64' };
+// ARM 兼容镜像：Google Play 版自带 native bridge（ARM 翻译层），可安装仅含 ARM 原生库的应用。
+// 必须 Android 14（API 34）：新版 libndk_translation 修复了对字节系 signal trampoline
+// 的误杀（老版本 API 30 镜像上抖音/红果启动即 DoBadTrampoline SIGABRT，实测 API 34 完整可跑）
+const PLAY_SYSIMG = { api: '34', tag: 'google_apis_playstore', abi: 'x86_64' };
 
 const MIN_SIZE = {
   adb: 5 * 1024 * 1024,
@@ -624,12 +626,12 @@ class Provisioner {
     return this._cache.playUrl;
   }
 
-  /** 下载并安装 ARM 兼容镜像（Google Play 版，约 1.3GB） */
+  /** 下载并安装 ARM 兼容镜像（Google Play 版，约 1.5GB） */
   async installPlayImage(onProgress = () => {}) {
     const p = this.ensureDirs();
     const url = await this.resolvePlayUrl();
     const zip = path.join(p.tmp, 'play-sysimg.zip');
-    onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（约 1.3GB）…', percent: 1 });
+    onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（Android 14，约 1.5GB）…', percent: 1 });
     await downloadAnyParallel([url], zip, {
       connections: 8,
       minChunk: 4 * 1024 * 1024,
@@ -657,6 +659,11 @@ class Provisioner {
 
     const info = this.playImageInfo();
     if (!info.ok) throw new Error('兼容镜像解压后校验失败');
+    // 旧版（API 30）兼容镜像不再使用，成功装好后清理腾空间
+    for (const old of ['android-30']) {
+      const legacy = path.join(p.sysImgRoot, old, 'google_apis_playstore');
+      if (fs.existsSync(legacy)) fs.rmSync(legacy, { recursive: true, force: true });
+    }
     onProgress({ stage: 'done', message: 'ARM 兼容镜像就绪，重新启动运行时即可生效', percent: 100 });
     return info;
   }

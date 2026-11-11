@@ -54,22 +54,28 @@ class EmulatorEngine {
     fs.mkdirSync(avdDir, { recursive: true });
 
     // ARM 兼容模式：使用 Google Play 版镜像（内置 native bridge，可安装仅含 ARM 原生库的应用）
-    const compat = !!(s.runtime && s.runtime.compatImage) && this.provisioner.playImageInfo().ok;
+    const playInfo = this.provisioner.playImageInfo();
+    const compat = !!(s.runtime && s.runtime.compatImage) && playInfo.ok;
     const tag = compat ? 'google_apis_playstore' : p.sysTag;
     const tagDisplay = compat ? 'Google Play (ARM 兼容)' : 'AOSP';
+    const api = compat ? playInfo.api : p.sysApi;
 
     fs.writeFileSync(
       path.join(home, `${AVD_NAME}.ini`),
-      `avd.ini.encoding=UTF-8\npath=${avdDir.replace(/\\/g, '/')}\ntarget=android-${p.sysApi}\n`,
+      `avd.ini.encoding=UTF-8\npath=${avdDir.replace(/\\/g, '/')}\ntarget=android-${api}\n`,
     );
 
-    // 切换镜像 tag（普通 ↔ ARM 兼容）时旧 userdata 不兼容（APEX 模块引导循环），
-    // 下次启动带上 -wipe-data 让模拟器重建干净的用户数据
+    // 切换镜像（普通 ↔ ARM 兼容，或镜像 API 版本变化）时旧 userdata 不兼容
+    // （APEX 模块引导循环），下次启动带上 -wipe-data 让模拟器重建干净的用户数据
     const cfgPath = path.join(avdDir, 'config.ini');
     this.wipePending = false;
     if (fs.existsSync(cfgPath)) {
-      const prevTag = /tag\.id=(.+)$/m.exec(fs.readFileSync(cfgPath, 'utf8'));
-      if (prevTag && prevTag[1].trim() !== tag) {
+      const prev = fs.readFileSync(cfgPath, 'utf8');
+      const prevTag = /tag\.id=(.+)$/m.exec(prev);
+      const prevImg = /image\.sysdir\.1=(.+)$/m.exec(prev);
+      const wantImg = `system-images/android-${api}/${tag}/${p.sysAbi}/`;
+      if ((prevTag && prevTag[1].trim() !== tag)
+        || (prevImg && prevImg[1].trim() !== wantImg)) {
         this.wipePending = true;
       }
     }
@@ -89,7 +95,7 @@ class EmulatorEngine {
       `hw.cpu.ncore=${cores}`,
       `hw.ramSize=${memoryMB}`,
       'vm.heapSize=512',
-      `image.sysdir.1=system-images/android-${p.sysApi}/${tag}/${p.sysAbi}/`,
+      `image.sysdir.1=system-images/android-${api}/${tag}/${p.sysAbi}/`,
       `tag.id=${tag}`,
       `tag.display=${tagDisplay}`,
       'disk.dataPartition.size=16G',

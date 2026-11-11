@@ -664,7 +664,7 @@ function bindSettings() {
     const env = ((state.status = await api.runtimeStatus()).env) || {};
     const ok = env.playImage && env.playImage.ok;
     $('compatInstallField').hidden = !on || !!ok;
-    if (on && !ok) toast({ title: 'ARM 兼容模式已开启', body: '还需要下载 Google Play 兼容镜像（约 1.3GB），点击下方按钮开始', type: 'info' });
+    if (on && !ok) toast({ title: 'ARM 兼容模式已开启', body: '还需要下载 Google Play 兼容镜像（Android 14，约 1.5GB），点击下方按钮开始', type: 'info' });
     else if (on) toast({ title: 'ARM 兼容模式已开启', body: '重启运行时后生效', type: 'info' });
   });
   $('setAutoShortcut').addEventListener('change', (e) => save({ createShortcutOnInstall: e.target.checked }));

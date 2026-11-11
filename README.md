@@ -131,7 +131,11 @@ Android 版本、freeform 支持、共享目录双向同步，加 `--apk 某应�
 
 - **不是从零实现的 hypervisor**：安卓内核、GPU 转译、ART 运行时是数年级别的工程，本项目选择站在 AOSP/QEMU/adb 的肩膀上，把工程量集中在「原生应用级体验」上——这正是应用宝电脑版、Google Play Games PC 版等产品共同的架构思路。
 - **共享目录是同步而非挂载**：Windows 无 root 时无法在安卓侧挂载 NTFS 目录，采用秒级双向同步达到同等体验。
-- **ARM-only 应用**：设置里开启「ARM 兼容模式」即可切换到 Google Play 镜像（内置 native bridge 翻译层），普通 ARM-only 应用可以安装运行；但**抖音/红果/番茄等字节系应用无法运行**——它们自带反调试 native hook，会触发 Google 官方翻译层（ndk_translation）的保护性断言（`DoBadTrampoline` SIGABRT），社区换 libhoudini 也存在同类崩溃。这是字节系与官方 x86_64 模拟器的根本冲突，MuMu 能跑是靠私有魔改翻译层。安装失败时 ApkStart 会给出中文说明。
+- **ARM-only 应用 / 字节系应用**：设置里开启「ARM 兼容模式」即可切换到 **Android 14（API 34）Google Play 镜像**（内置新版 ndk_translation 翻译层），仅含 ARM 原生库的应用可以安装运行。**实测红果免费短剧（com.phoenix.read，arm64-v8a-only）可正常安装、进入推荐流并播放视频**——旧版 API 30 镜像上会因字节系自带非标准 signal handler 触发翻译层保护性断言（`DoBadTrampoline` SIGABRT），Android 14 镜像的新版翻译层已修复。个别应用自带更深的反模拟检测（如强制校验真实传感器/基带），仍可能受限；安装失败或启动崩溃时 ApkStart 会给出中文说明。
+
+| 兼容模式下运行红果免费短剧（Android 14 · AEHD 硬件加速） |
+|:---:|
+| ![红果短剧在 ApkStart 兼容模式运行](docs/images/compat-hongguo-playing.png) |
 
 ## 关于作者
 
