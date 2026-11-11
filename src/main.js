@@ -34,6 +34,31 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 const APP_ROOT = path.join(__dirname, '..');
 const IS_DEV = process.argv.includes('--dev');
+
+/**
+ * 完整版（内置运行时）自动接管：
+ * 发行包里 ApkStart.exe 旁边带有 runtime/（emulator + platform-tools + AEHD + ARM 兼容镜像）。
+ * 首次启动（settings.json 尚不存在）时直接把 runtime.dir 指向它并开启兼容模式，
+ * 用户无需任何下载与设置，开箱即用。之后用户仍可在设置里改回在线版。
+ */
+function bootstrapBundledRuntime() {
+  try {
+    const settingsFile = path.join(store.DATA_DIR, 'settings.json');
+    if (fs.existsSync(settingsFile)) return; // 只在首次启动时接管
+    const exeDir = path.dirname(process.execPath);
+    const candidates = [path.join(exeDir, 'runtime'), path.join(path.dirname(exeDir), 'runtime')];
+    for (const dir of candidates) {
+      const hasEmulator = fs.existsSync(path.join(dir, 'emulator', 'emulator.exe'));
+      const hasCompatImg = fs.existsSync(path.join(dir, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64', 'system.img'));
+      if (hasEmulator && hasCompatImg) {
+        store.saveSettings({ runtime: { dir, compatImage: true } });
+        break;
+      }
+    }
+  } catch (_) { /* 接管失败不阻塞启动，走在线引导 */ }
+}
+bootstrapBundledRuntime();
+
 // 冒烟截图等自动化场景下跳过注册表探测（避免依赖 reg.exe）
 const NO_SHELL_PROBE = process.argv.includes('--smoke') || process.env.APKSTART_NO_SHELL_PROBE === '1';
 const ICON_PNG = loadBrandIcon().toPNG();

@@ -370,6 +370,29 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     assert(!r.ok && r.stage === 'kernel', `应停在 kernel 阶段：${JSON.stringify(r)}`);
   });
 
+  console.log('\n[provision.js 兼容镜像 / 完整版]');
+
+  await test('playImageInfo 校验 API 34 兼容镜像完整性', async () => {
+    const dir = path.join(TMP, 'apkstart', 'runtime', 'system-images', 'android-34', 'google_apis_playstore', 'x86_64');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'kernel-ranchu'), 'k');
+    const prov = new Provisioner(path.join(__dirname, '..'));
+    fs.writeFileSync(path.join(dir, 'system.img'), Buffer.alloc(64));
+    assert(!prov.playImageInfo().ok, '过小的镜像不应判定为就绪');
+    fs.writeFileSync(path.join(dir, 'system.img'), Buffer.alloc(301 * 1024 * 1024));
+    const info = prov.playImageInfo();
+    assert(info.ok && info.api === '34' && info.tag === 'google_apis_playstore', `应判定 API 34 兼容镜像就绪：${JSON.stringify(info)}`);
+  });
+
+  await test('完整版品牌资产与抖音联系入口就位', async () => {
+    const root = path.join(__dirname, '..');
+    assert(fs.existsSync(path.join(root, 'src', 'ui', 'assets', 'douyin-qr.jpg')), '缺少抖音二维码图片');
+    assert(fs.existsSync(path.join(root, 'build', 'fetch-runtime.js')), '缺少完整版运行时组装脚本');
+    const html = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+    assert(html.includes('douyin-qr.jpg'), '关于区未引用抖音二维码');
+    assert(html.includes('https://v.douyin.com/9TIIxVCANig/'), '缺少抖音主页链接');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }

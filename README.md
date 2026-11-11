@@ -34,8 +34,14 @@
 
 ## 下载即用（不想编译）
 
-到 [Releases](https://github.com/RoutineMiku/apkstart/releases) 下载 `ApkStart-v*-win64-portable.zip`，解压后双击 `ApkStart.exe` 即可。
-首次启动进入「运行时」页点**一键部署**，会自动装好 adb / QEMU / 安卓系统镜像，之后长期免装。
+到 [Releases](https://github.com/RoutineMiku/apkstart/releases) 下载，两个版本任选：
+
+| 版本 | 文件 | 适合 |
+|---|---|---|
+| **轻量版** | `ApkStart-v*-win64-portable.zip`（约 100 MB） | 首次启动进入「运行时」页点**一键部署**，自动装好 adb / 引擎 / 系统镜像（官方源 2 分钟内），之后长期免装 |
+| **完整版** | `ApkStart-v*-win64-full.7z.001` + `.002`（全部分卷下载后解压 `.001`） | **开箱即用**：已内置运行时引擎、AEHD 驱动与 Android 14 ARM 兼容镜像（翻译层），解压双击 `ApkStart.exe` 直接进主界面，零下载零设置 |
+
+> 完整版用 7-Zip / WinRAR / Bandizip 等解压分卷；两个版本都默认开启 ARM 兼容模式（完整版内置的就是兼容镜像）。
 
 ## 从源码构建
 
@@ -154,4 +160,4 @@ ApkStart 由 **RoutineMiku** 开发维护。
 
 ## 许可证
 
-[MIT](LICENSE)。本项目不分发安卓系统镜像、QEMU 二进制或 Google 组件，这些均由用户本机按需下载并遵循各自的许可协议。
+[MIT](LICENSE)。轻量版不分发安卓系统镜像、QEMU 二进制或 Google 组件，这些均由用户本机按需下载并遵循各自的许可协议；完整版为便利性将官方公开下载的运行时组件一并打包，相关组件遵循其各自许可协议。

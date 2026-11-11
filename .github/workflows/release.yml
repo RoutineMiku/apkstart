@@ -40,6 +40,28 @@ jobs:
           Compress-Archive -Path dist/ApkStart-win64-portable/* -DestinationPath "ApkStart-$tag-win64-portable.zip" -CompressionLevel Optimal
           Get-Item "ApkStart-$tag-win64-portable.zip" | Select-Object Name, Length
 
+      - name: 组装完整版（内置运行时 + ARM 兼容镜像）
+        shell: pwsh
+        run: |
+          node build/fetch-runtime.js "$PWD/_runtime"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # 完整版目录结构：ApkStart-win64-portable/ApkStart.exe + runtime/（启动时自动接管）
+          New-Item -ItemType Directory -Force -Path full | Out-Null
+          Copy-Item -Recurse dist/ApkStart-win64-portable full/ApkStart-win64-portable
+          Move-Item _runtime full/ApkStart-win64-portable/runtime
+          Get-ChildItem full/ApkStart-win64-portable/runtime | Select-Object Name
+
+      - name: 压缩完整版（分卷，单卷 < 2GB）
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          Push-Location full
+          7z a -t7z -mx=7 -v1900m "..\ApkStart-$tag-win64-full.7z" ApkStart-win64-portable
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
+          Get-ChildItem "ApkStart-$tag-win64-full.7z.*" | Select-Object Name, Length
+
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -48,4 +70,5 @@ jobs:
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           $zip = "ApkStart-$tag-win64-portable.zip"
-          gh release create $tag $zip --title "ApkStart $tag" --generate-notes
+          $full = Get-ChildItem "ApkStart-$tag-win64-full.7z.*" | ForEach-Object { $_.FullName }
+          gh release create $tag $zip @full --title "ApkStart $tag" --generate-notes

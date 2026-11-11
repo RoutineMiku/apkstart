@@ -247,19 +247,24 @@ class Provisioner {
     const sysimg = this.systemImageInfo();
 
     // 两条路径：emulator（推荐，Google 官方）或 QEMU+ISO（用户自备镜像时）
-    const emulatorReady = emulator.ok && sysimg.ok;
+    // 完整版（内置运行时）只带 ARM 兼容镜像（API 34 Google Play），
+    // 开启兼容模式时它就是主镜像，无需再下载 AOSP 默认镜像
+    const compatReady = !!(s.runtime && s.runtime.compatImage) && this.playImageInfo().ok;
+    const emulatorReady = emulator.ok && (sysimg.ok || compatReady);
     const qemuReady = qemu.ok && diskSize > MIN_SIZE.disk;
 
     return {
       adb: { ...adb, required: true },
       emulator: { ...emulator, required: true, note: emulator.ok ? emulator.version : '未安装' },
       sysimg: {
-        ok: sysimg.ok,
+        ok: sysimg.ok || compatReady,
         dir: sysimg.dir,
-        size: sysimg.size,
-        api: sysimg.api,
+        size: sysimg.ok ? sysimg.size : (compatReady ? this.playImageInfo().size : 0),
+        api: sysimg.ok ? sysimg.api : (compatReady ? PLAY_SYSIMG.api : sysimg.api),
         required: false,
-        note: sysimg.ok ? `Android ${sysimg.api}（${(sysimg.size / 1073741824).toFixed(2)} GB）` : (sysimg.note || '未下载'),
+        note: sysimg.ok
+          ? `Android ${sysimg.api}（${(sysimg.size / 1073741824).toFixed(2)} GB）`
+          : (compatReady ? `Android ${PLAY_SYSIMG.api}（ARM 兼容镜像）` : (sysimg.note || '未下载')),
       },
       playImage: this.playImageInfo(),
       accel,

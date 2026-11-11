@@ -618,6 +618,11 @@ kbd {
   box-shadow: 0 2px 10px rgba(15, 23, 32, .18);
   -webkit-user-drag: none;
 }
+.about-qrs {
+  display: flex;
+  gap: 14px;
+  flex: none;
+}
 .about-qr {
   display: flex;
   flex-direction: column;
