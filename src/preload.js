@@ -25,6 +25,15 @@ contextBridge.exposeInMainWorld('apkstart', {
   runtimeStart: () => invoke('runtime:start'),
   runtimeStop: () => invoke('runtime:stop'),
   runtimeLog: () => invoke('runtime:log'),
+  doctorProfile: () => invoke('doctor:profile'),
+  doctorReport: () => invoke('doctor:report'),
+  runtimeUsage: () => invoke('runtime:usage'),
+  runtimeCleanup: (opts) => invoke('runtime:cleanup', opts || {}),
+  displayState: () => invoke('display:state'),
+  displaySet: (patch) => invoke('display:set', patch || {}),
+  displayToggle: () => invoke('display:toggle'),
+  rebuildShortcuts: () => invoke('shortcut:rebuild'),
+  autoDeploy: () => invoke('runtime:autoDeploy'),
   startInstaller: () => invoke('runtime:startInstaller'),
   markInstalled: () => invoke('runtime:markInstalled'),
   resetInstall: () => invoke('runtime:resetInstall'),
@@ -55,6 +64,33 @@ contextBridge.exposeInMainWorld('apkstart', {
   winMaximize: () => invoke('window:maximize'),
   winClose: () => invoke('window:close'),
   winHide: () => invoke('window:hide'),
+  bringAppToFront: () => invoke('app:foreground'),
+
+  // 应用窗口（只有 旋转 / 最小化 / 最大化 / 关闭）用到的接口
+  shell: {
+    state: () => invoke('shell:state'),
+    minimize: () => invoke('shell:minimize'),
+    maximize: () => invoke('shell:maximize'),
+    close: () => invoke('shell:close'),
+    rotate: () => invoke('shell:rotate'),
+    back: () => invoke('shell:back'),
+    forward: () => invoke('shell:forward'),
+    onState: (cb) => {
+      const handler = (_e, payload) => cb(payload);
+      ipcRenderer.on('shell:state', handler);
+      return () => ipcRenderer.removeListener('shell:state', handler);
+    },
+  },
+
+  // 安卓系统设置（WiFi / 音量 / 显示 / 动画 / 权限 …）
+  android: {
+    status: () => invoke('android:status'),
+    set: (key, value) => invoke('android:set', { key, value }),
+    open: (action) => invoke('android:open', action),
+    tune: (pkg) => invoke('android:tune', pkg),
+    permissions: (pkg) => invoke('android:permissions', pkg),
+    grantAll: (pkg) => invoke('android:grantAll', pkg),
+  },
 
   pathForFile: (file) => webUtils.getPathForFile(file),
 

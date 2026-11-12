@@ -675,3 +675,28 @@ kbd {
   font-size: 11px;
 }
 .powered-link:hover { color: var(--text); text-decoration: underline; }
+
+/* 高级参数默认折叠：零配置体验，不把内部参数暴露给普通用户 */
+.advanced-group {
+  border-top: 1px solid var(--line, #e8ebf0);
+  margin: 4px 0 0;
+  padding: 0;
+}
+.advanced-group > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 14px 2px 10px;
+  font-size: 12px;
+  color: var(--muted, #7b828e);
+  font-weight: 600;
+}
+.advanced-group > summary::-webkit-details-marker { display: none; }
+.advanced-group > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 7px;
+  transition: transform .15s ease;
+}
+.advanced-group[open] > summary::before { transform: rotate(90deg); }
+.advanced-group[open] > summary { color: var(--text, #2b3138); }

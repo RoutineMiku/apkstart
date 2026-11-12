@@ -1,7 +1,7 @@
 {
   "name": "apkstart",
   "productName": "ApkStart",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "极致轻量的 Windows 安卓应用运行器：双击 APK 即装，应用以独立窗口与桌面图标运行",
   "main": "src/main.js",
   "author": "RoutineMiku",
@@ -34,14 +34,17 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node test/run-tests.js && node test/engine-test.js",
+    "test": "node test/run-tests.js && node test/engine-test.js && node test/auto-test.js",
     "pack": "node build/pack.js",
+    "runtime": "node build/prepare-runtime.js",
+    "build:exe": "node build/prepare-runtime.js && electron-builder --win nsis",
     "selftest": "node scripts/selftest.js",
     "assoc:on": "node scripts/assoc.js on",
     "assoc:off": "node scripts/assoc.js off",
     "test:boot": "node test/boot-test.js"
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^26.18.0"
   }
 }

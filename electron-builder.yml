@@ -1,0 +1,45 @@
+appId: com.apkstart.win
+productName: ApkStart
+copyright: Copyright © 2026 ApkStart
+
+directories:
+  output: dist/release
+  buildResources: build
+
+# 只带运行需要的文件，源码目录整块进包（无 asar：窗口代理要用真实的 .ps1 路径）
+asar: false
+files:
+  - src/**/*
+  - package.json
+  - LICENSE
+  - "!**/*.map"
+  - "!**/node_modules/**"
+
+# 完整运行时（emulator + platform-tools + 系统镜像），由 build/prepare-runtime.js 生成。
+# 打进包里之后首次启动不再需要任何下载。
+extraResources:
+  - from: build/runtime
+    to: runtime
+    filter:
+      - "**/*"
+      - "!.prepared"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: src/ui/assets/appicon.ico
+  # 安装到当前用户目录，不写系统盘、不要求管理员权限
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  artifactName: ApkStart-${version}-Setup.exe
+  # 安装包本身已含完整运行时（emulator + 系统镜像 .gz），装完首次启动
+  # 自动把镜像展开到用户目录，之后不再联网下载任何东西。
+
+# LZMA 最高压缩：镜像已经是 .gz，这里主要压 Electron 的 dll
+compression: maximum

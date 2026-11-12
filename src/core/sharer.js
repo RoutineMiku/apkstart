@@ -99,8 +99,10 @@ class Sharer {
 
       for (const r of remoteList) {
         const prev = state[r.rel];
-        const sizeSame = prev && prev.size === r.size;
-        const mtimeSame = r.mtime ? Math.abs((prev.mtime || 0) - r.mtime) <= 1500 : true;
+        const sizeSame = !!prev && prev.size === r.size;
+        // 新文件（prev 为空）必须拉回来；旧版在这里直接读 prev.mtime 会抛异常，
+        // 让整次同步中断，表现为「设备 → 本机永远不同步」
+        const mtimeSame = (prev && r.mtime) ? Math.abs((prev.mtime || 0) - r.mtime) <= 1500 : false;
         if (prev && sizeSame && mtimeSame) continue;
         const local = path.join(this.localDir, r.rel);
         try {
@@ -127,11 +129,25 @@ class Sharer {
 
   async listRemoteRecursive(client, base, prefix = '', depth = 0, out = []) {
     if (depth > 6) return out;
+    // 优先一次 find + stat 拿全量（比逐目录 ls -l 快，也不受日期格式差异影响）
+    if (depth === 0 && !prefix) {
+      try {
+        const text = await client.shell(
+          `cd "${base}" 2>/dev/null && find . -type f -exec stat -c '%s|%Y|%n' {} + 2>/dev/null`,
+        );
+        const rows = String(text).split('\n').map((l) => l.trim()).filter(Boolean)
+          .map((l) => /^(\d+)\|(\d+)\|(.+)$/.exec(l))
+          .filter(Boolean)
+          .map((m) => ({ rel: m[3].replace(/^\.\//, ''), size: Number(m[1]), mtime: Number(m[2]) * 1000 }));
+        if (rows.length) return rows;
+      } catch (_) { /* 落到 ls 解析 */ }
+    }
     const items = await client.listRemote(prefix ? `${base}/${prefix}` : base);
     for (const it of items) {
       if (it.name === '.' || it.name === '..') continue;
       const rel = prefix ? `${prefix}/${it.name}` : it.name;
       if (it.isDir) {
+        // eslint-disable-next-line no-await-in-loop
         await this.listRemoteRecursive(client, base, rel, depth + 1, out);
       } else {
         out.push({ rel, size: it.size, mtime: Date.now() });

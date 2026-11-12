@@ -38,6 +38,15 @@ const log = (p) => console.log(`[${p.stage}] ${p.message} ${p.percent != null ? 
     fs.existsSync(path.join(outRoot, 'platform-tools', 'adb.exe')) &&
     fs.existsSync(path.join(outRoot, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64', 'system.img'));
   if (!ok) throw new Error('运行时组装后校验失败');
+
+  // 容器式精简：只保留 x86_64 的 QEMU 与无头运行必需的组件。
+  // 非 x86_64 的 qemu-system-*.exe（约 400MB）、QtWebEngine、netsim 等对 -no-window 无用。
+  const layers = require('../src/core/layers');
+  const pruned = layers.prune(outRoot, { apply: true, aggressive: true });
+  const before = layers.analyze(outRoot).total + pruned.saved;
+  console.log(`slim: ${(pruned.saved / 1048576).toFixed(0)} MB removed, `
+    + `${(before / 1073741824).toFixed(2)} GB -> ${(pruned.after / 1073741824).toFixed(2)} GB`);
+
   fs.rmSync(path.join(outRoot, '_appdata'), { recursive: true, force: true });
   fs.rmSync(path.join(outRoot, '_tmp'), { recursive: true, force: true });
   console.log('runtime-ready:', outRoot);

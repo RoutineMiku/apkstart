@@ -15,11 +15,29 @@ const { AdbClient } = require('./adb');
 const store = require('./store');
 const { Provisioner } = require('./provision');
 const { EmulatorEngine } = require('./emulator');
+const doctor = require('./doctor');
 
 const LOG_DIR = path.join(store.DATA_DIR, 'logs');
 const MONITOR_PORT = 5556;
 const EMU_PORT = 5554;
 const EMU_SERIAL = `emulator-${EMU_PORT}`;
+
+/** TCP 端口是否有人监听（用来判断上次留下的模拟器还在不在） */
+function portAlive(port, timeout = 150) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: '127.0.0.1', port });
+    let done = false;
+    const fin = (v) => {
+      if (done) return;
+      done = true;
+      try { sock.destroy(); } catch (_) { /* ignore */ }
+      resolve(v);
+    };
+    sock.setTimeout(timeout, () => fin(false));
+    sock.once('connect', () => fin(true));
+    sock.once('error', () => fin(false));
+  });
+}
 
 const ATTACH_ENDPOINTS = [
   { name: 'Windows Subsystem for Android', serial: '127.0.0.1:58526' },
@@ -42,6 +60,7 @@ class Runtime {
     this._freeformReady = false;
     this._client = null;
     this._bootLog = [];
+    this.emuSerial = EMU_SERIAL;   // 端口是动态挑的，serial 跟着变
     store.ensureDirs();
     if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
   }
@@ -65,7 +84,7 @@ class Runtime {
 
   client(serial) {
     const useSerial = serial
-      || (this.settings.engine.mode === 'attach' ? this.settings.device : EMU_SERIAL);
+      || (this.settings.engine.mode === 'attach' ? this.settings.device : this.emuSerial);
     const adbPath = this.adbPath();
     if (!this._client || this._client.serial !== useSerial || this._client.adbPath !== adbPath) {
       this._client = new AdbClient({ adbPath, serial: useSerial });
@@ -110,6 +129,10 @@ class Runtime {
       ready: false,
       needsSetup: null,
       error: '',
+      serial: this.emuSerial,
+      autoProfile: this.emulator.profile ? doctor.describeProfile(this.emulator.profile) : '',
+      diagnosis: this.emulator.lastDiagnosis || null,
+      attempts: this.emulator.attempts || [],
     };
 
     if (!env.adb.ok) {
@@ -137,7 +160,8 @@ class Runtime {
     if (result.deviceOnline) result.ready = true;
     else if (!env.emulator.ok) result.needsSetup = 'emulator';
     else if (!env.sysimg.ok) result.needsSetup = 'sysimg';
-    else if (!env.accel.ok && !s.engine.forceTcg) result.needsSetup = 'accel';
+    // 不再把「没有硬件加速」当成阻塞步骤：doctor 会自动回退软件模拟，
+    // 并在开机失败时按 GPU/加速/内存组合依次重试。
     else result.needsSetup = 'boot';
 
     result.phase = result.deviceOnline
@@ -220,69 +244,56 @@ class Runtime {
    * 与 QEMU+ISO 不同，这里没有"安装系统"这一步：镜像本身就是系统，首次启动即开机。
    */
   async bootEmulator({ env, onLog = () => {} } = {}) {
-    if (this.emulator.running()) {
-      const client = this.client(EMU_SERIAL);
-      if (!(await client.isOnline())) {
-        // 进程还在但还没就绪，等它
-      } else {
-        await this.prepare(client);
-        return { ok: true, client, reused: true };
-      }
-    }
-
     if (this.vmStarting) {
       const started = Date.now();
       while (this.vmStarting && Date.now() - started < 300000) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 500));
       }
-      const client = this.client(EMU_SERIAL);
-      if (await client.isOnline()) {
-        await this.prepare(client);
-        return { ok: true, client, reused: true };
+      const c = this.client();
+      if (await c.isOnline()) {
+        await this.prepare(c);
+        return { ok: true, client: c, reused: true };
       }
     }
 
-    const s = this.settings;
-    const accel = env.accel || await this.provisioner.emulatorAccel();
-
-    // Windows 上纯软件模拟（TCG）不可用：qemu 会挂在 boot 阶段且不消耗 CPU。
-    // 与其让用户干等十几分钟，不如直接给出可执行的解决办法。
-    if (!accel.ok && !s.engine.forceTcg) {
-      throw new Error(
-        '需要启用硬件加速才能启动 Android。'
-        + '请点上方「启用硬件加速」按钮（一键安装 AEHD 驱动，需管理员确认），'
-        + '或在「启用或关闭 Windows 功能」里勾选「虚拟机平台」后重启电脑。',
-      );
+    const accel = env && env.accel ? env.accel : await this.provisioner.emulatorAccel();
+    if (!accel.ok) {
+      onLog('未检测到硬件加速：将自动回退软件模拟（首次开机会明显变慢，无需手动设置）');
     }
-    if (!accel.ok) onLog('已强制软件模拟：Windows 下 TCG 可能卡在内核引导阶段');
 
     this.vmStarting = true;
     try {
+      // probe 交给 EmulatorEngine 的开机循环：进程退出/致命日志时它会换一组参数重试
+      const probe = async ({ serial }) => {
+        if (!this.emulator.running()) return 'fatal';
+        const c = new AdbClient({ adbPath: this.adbPath(), serial });
+        try {
+          if (!(await c.isOnline())) return 'pending';
+          const boot = await c.shell('getprop sys.boot_completed', { timeout: 8000 }).catch(() => '');
+          if (String(boot).trim() !== '1') return 'booting';
+          const pm = await c.shell('pm path android', { timeout: 8000 }).catch(() => '');
+          return /package:/.test(pm) ? 'ok' : 'pending';
+        } catch (_) {
+          return 'pending';
+        }
+      };
+
       const st = await this.emulator.start({
-        headless: s.engine.headless !== false,
+        headless: this.settings.engine.headless !== false,
         onLog,
+        probe,
       });
       this.lastActivity = Date.now();
-
-      const client = this.client(EMU_SERIAL);
-      const timeout = accel.ok ? 240000 : 900000;
-      onLog(`等待 Android 开机…（${accel.ok ? '硬件加速' : '软件模拟，可能很慢'}）`);
-      const linked = await this.waitAdb(client, timeout, onLog);
-      if (!linked) {
-        return { ok: false, error: '运行时已启动，但 adb 未能连上。请查看运行时日志（%APPDATA%\\apkstart\\logs\\emulator.log）' };
-      }
-      const ready = await this.waitAndroidReady(client, timeout, onLog);
-      if (!ready.ok) {
-        return {
-          ok: false,
-          error: ready.stage === 'kernel'
-            ? 'Android 内核未完成引导：可能是硬件加速未真正生效，或镜像文件损坏'
-            : 'Android 已引导但系统服务未就绪（可能停在首次开机向导）',
-        };
-      }
+      this.emuSerial = st.serial || this.emulator.serial;
+      const client = this.client(this.emuSerial);
       await this.prepare(client);
-      return { ok: true, client, engine: 'emulator', serial: st.serial };
+      // 开机成功后存一份快照，下次打开走 quickboot
+      this.emulator.saveSnapshotSoon(this.adbPath());
+      return { ok: true, client, engine: 'emulator', serial: this.emuSerial, profile: st.profile };
+    } catch (e) {
+      // 把自动重试/诊断结论原样抛给 UI，避免再包一层含糊的「启动失败」
+      return { ok: false, error: e.message, diagnosis: e.diagnosis, report: e.report, attempts: e.attempts };
     } finally {
       this.vmStarting = false;
     }
@@ -521,11 +532,197 @@ class Runtime {
 
   // ---------------- ensure ----------------
 
+  /**
+   * 接管上一次运行留下的模拟器。
+   * 每台模拟器都有自己的控制台端口（5554/5556/…），adb 端口是 +1。
+   * 端口能连上并且 system 已经 boot_completed，就直接当成我们的运行时用，
+   * 这样「关掉 ApkStart 再点开应用」是秒进，而不是再冷启一台。
+   */
+  /**
+   * 找出所有还活着的模拟器控制台端口。
+   * 不能用「从 5554 顺序试」：端口会随着多次启动往上漂（5554→5556→5558…），
+   * 试固定范围总有试漏的时候，漏了就会再开一台新机器。这里直接按进程名
+   * 找出 qemu 监听的所有 TCP 端口，一个都不会漏。
+   */
+  async emulatorPorts() {
+    const run = (cmd, args) => new Promise((resolve) => {
+      const { execFile } = require('child_process');
+      execFile(cmd, args, { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, out) => {
+        resolve(err ? '' : String(out || ''));
+      });
+    });
+    const ports = new Set();
+    try {
+      const tl = await run('tasklist', ['/FO', 'CSV', '/NH']);
+      const pids = new Set();
+      for (const line of tl.split('\n')) {
+        const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
+        if (m && /qemu|emulator/i.test(m[1])) pids.add(m[2]);
+      }
+      if (!pids.size) return [];
+      const ns = await run('netstat', ['-ano', '-p', 'TCP']);
+      for (const line of ns.split('\n')) {
+        const m = /:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+        if (m && pids.has(m[2])) ports.add(Number(m[1]));
+      }
+    } catch (_) { /* 退回到端口探测 */ }
+
+    if (ports.size) {
+      // 控制台端口（偶数）和 adb 端口（+1）都会被监听，只保留控制台端口
+      const all = [...ports].sort((a, b) => a - b);
+      const consoles = all.filter((p) => ports.has(p + 1));
+      return consoles.length ? consoles : all;
+    }
+    // 兜底：没有 qemu 进程信息时，直接探测（连接被拒绝会立刻返回，代价很小）
+    const found = [];
+    for (let port = 5554; port <= 5620; port += 2) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await portAlive(port, 120)) found.push(port);
+    }
+    return found;
+  }
+
+  async adoptExisting({ onLog = () => {} } = {}) {
+    const alive = await this.emulatorPorts();
+    if (!alive.length) {
+      onLog('没有发现上一台运行时，准备冷启动');
+      return null;
+    }
+    onLog(`发现 ${alive.length} 台残留运行时（端口 ${alive.join(', ')}），尝试接管`);
+
+    // adb server 里可能还留着上个进程的 offline 记录（模拟器重启过 adbd 就会这样），
+    // 先清掉再连，否则 get-state 永远返回 offline，会误判成"没就绪"把好好的机器杀掉。
+    await this.client().exec(['kill-server'], { withSerial: false, timeout: 8000 }).catch(() => {});
+
+    for (const port of alive) {
+      const serial = `127.0.0.1:${port + 1}`;
+      const c = this.client(serial);
+      let booted = '';
+      for (let i = 0; i < 6 && booted !== '1'; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await c.connect().catch(() => false);
+        // eslint-disable-next-line no-await-in-loop
+        const state = (await c.exec(['get-state'], { timeout: 5000 }).then((r) => r.stdout).catch(() => '')).trim();
+        if (state === 'device') {
+          // eslint-disable-next-line no-await-in-loop
+          booted = (await c.shell('getprop sys.boot_completed', { timeout: 6000 }).catch(() => '')).trim();
+        }
+        if (booted !== '1') await new Promise((r) => setTimeout(r, 700));
+      }
+      if (booted !== '1') {
+        onLog(`发现上一台运行时（${serial}）但没就绪，先关掉它再重新开机`);
+        // AVD 目录有锁：留着这台会让新实例直接退出，表现成"怎么都开不了机"。
+        // adb 都连不上了，只能按控制台端口找到进程强杀。
+        const pid = await this.pidOnPort(port);
+        if (pid) {
+          await new Promise((resolve) => {
+            const { execFile } = require('child_process');
+            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+          });
+        }
+        await new Promise((r) => setTimeout(r, 1200));
+        continue;
+      }
+      this.emuSerial = serial;
+      this.emulator.port = port;
+      store.saveSettings({ device: serial });
+      onLog(`已接管正在运行的运行时（${serial}）`);
+      // eslint-disable-next-line no-await-in-loop
+      await this.prepare(c);
+      return { ok: true, client: c, engine: 'emulator', reused: true };
+    }
+    return null;
+  }
+
+  /** 某个 TCP 端口是哪个进程在监听（用于强杀卡死的模拟器） */
+  async pidOnPort(port) {
+    return new Promise((resolve) => {
+      const { execFile } = require('child_process');
+      execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true }, (err, stdout) => {
+        if (err || !stdout) return resolve(0);
+        const line = stdout.split('\n').find((l) => new RegExp(`:${port}\\s`).test(l) && /LISTENING/i.test(l));
+        const m = line && /(\d+)\s*$/.exec(line.trim());
+        return resolve(m ? Number(m[1]) : 0);
+      });
+    });
+  }
+
+  /**
+   * 清理上一次运行遗留、却没被接管的孤儿模拟器。
+   * 关掉 ApkStart 时 emulator 是 detached 的，qemu 会存活；下次启动时它仍占着 AVD 锁，
+   * 表现为冷启直接 FATAL "Running multiple emulators with the same AVD"。
+   * 优先用 AVD 锁文件里 emulator 自己写的 PID（最可靠），再兜底按命令行扫一遍本 AVD 的 qemu/emulator。
+   */
+  async killOrphanEmulators({ onLog = () => {} } = {}) {
+    const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+    const killPid = (pid) => new Promise((resolve) => {
+      if (!pid) return resolve();
+      const { execFile } = require('child_process');
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+    });
+    const pids = new Set();
+    // 1) 锁文件记录的 PID（emulator 启动时写入，指向 emulator.exe，/T 会连带杀掉 qemu）
+    try {
+      const f = path.join(avdDir, 'hardware-qemu.ini.lock', 'pid');
+      if (fs.existsSync(f) && fs.statSync(f).isFile()) {
+        const pid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+        if (pid) pids.add(pid);
+      }
+    } catch (_) { /* ignore */ }
+    // 2) 兜底：命令行里引用本 AVD 的 qemu / emulator 全部强杀（wmic 不可用时跳过）
+    try {
+      const { execFile } = require('child_process');
+      const out = await new Promise((res) => execFile(
+        'wmic',
+        ['process', 'where', "name='qemu-system-x86_64.exe' or name='emulator.exe'", 'get', 'processid,commandline', '/format:csv'],
+        { windowsHide: true, maxBuffer: 32 * 1024 * 1024 },
+        (e, o) => res(e ? '' : o || ''),
+      ));
+      for (const line of String(out).split('\n')) {
+        if (line.includes(AVD_NAME) && /qemu|emulator/i.test(line)) {
+          const m = /,(\d+)\s*$/.exec(line.trim());
+          if (m) pids.add(Number(m[1]));
+        }
+      }
+    } catch (_) { /* wmic 不可用就跳过，锁文件 PID 已覆盖绝大多数情况 */ }
+    if (pids.size) {
+      onLog(`清理 ${pids.size} 个残留模拟器进程`);
+      await Promise.all([...pids].map(killPid));
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
   async ensure({ onLog = () => {} } = {}) {
     const client = this.client();
     if (await client.isOnline()) {
       await this.prepare(client);
       return { ok: true, client, engine: 'builtin', reused: true };
+    }
+
+    // 上一次 ApkStart 退出时模拟器会留着（下次点开秒进），但新进程里没有它的
+    // 句柄，adb server 也可能被重启过——只靠 isOnline() 会判成"没有运行时"，
+    // 于是又开一台新的。这里先把还活着的模拟器接管过来，避免重复开机器吃内存。
+    const adopted = await this.adoptExisting({ onLog });
+    if (adopted) return adopted;
+
+    // 上次会话遗留 / 别的进程拉起的 emulator：换个端口也要复用，绝不重复开一台
+    try {
+      const devices = await client.devices();
+      const running = devices.find((d) => /^emulator-\d+$/.test(d.serial) && d.state === 'device');
+      if (running) {
+        this.emuSerial = running.serial;
+        const m = /(\d+)$/.exec(running.serial);
+        if (m) this.emulator.port = Number(m[1]);
+        const c2 = this.client(running.serial);
+        await this.prepare(c2);
+        return { ok: true, client: c2, engine: 'emulator', reused: true };
+      }
+    } catch (_) { /* 没找到就正常拉起 */ }
+
+    // 进程还在但设备离线（多半卡在引导）：先停掉再重新拉起，避免干等
+    if (this.emulator.running()) {
+      onLog('检测到卡住的运行时，正在重启…');
+      await this.emulator.stop({ adbPath: this.adbPath() });
     }
 
     const s = this.settings;
@@ -546,22 +743,23 @@ class Runtime {
     }
 
     // 默认：自带运行时
+    // 单文件发行版的镜像是压缩的，先展开（已展开过就秒过）
+    await this.provisioner.materializeImages(onLog).catch(() => {});
     const env = await this.provisioner.checkEnv();
 
     // emulator 路径：镜像即系统，没有"安装到磁盘"这一步
     if (env.emulator.ok && env.sysimg.ok) {
-      if (!env.accel.ok && !s.engine.forceTcg) {
-        return {
-          ok: false,
-          needsSetup: 'accel',
-          error: '需要启用硬件加速才能启动 Android（点「启用硬件加速」一键安装驱动）',
-          env,
-        };
-      }
+      // 关掉 ApkStart 后可能残留未接管的模拟器（detached 的 qemu 仍存活），
+      // 它一直占着 AVD 锁，会让冷启直接 FATAL "Running multiple emulators with the same AVD"。
+      // 接管失败时先把这些孤儿清掉，再冷启，保证「关掉再开」一定能起来。
+      await this.killOrphanEmulators({ onLog }).catch(() => {});
       try {
         const r = await this.boot({ onLog });
-        if (r.ok) return { ok: true, client: r.client, engine: 'emulator' };
-        return { ok: false, error: r.error, env };
+        if (r.ok) return { ok: true, client: r.client, engine: 'emulator', profile: r.profile };
+        return {
+          ok: false, error: r.error, env,
+          diagnosis: r.diagnosis, report: r.report, attempts: r.attempts,
+        };
       } catch (e) {
         return { ok: false, error: e.message, env };
       }
@@ -608,6 +806,40 @@ class Runtime {
   }
 
   get vmRunning() { return this.emulator.running() || !!(this.vmProc && !this.vmProc.killed); }
+
+  // ---------------- 诊断 / 瘦身（供 UI 调用） ----------------
+
+  async diagnostics() {
+    const env = this.provisioner.paths();
+    const checked = await this.provisioner.checkEnv();
+    const profile = this.emulator.profile || doctor.autoProfile({
+      settings: this.settings,
+      accel: checked.accel,
+      emulatorVersion: checked.emulator.version || '',
+      diskMB: doctor.freeDiskMB(store.DATA_DIR),
+    });
+    return doctor.writeReport({
+      dataDir: store.DATA_DIR,
+      profile,
+      logLines: this.emulator.recentLog(300),
+      extra: {
+        attempts: this.emulator.attempts,
+        diagnosis: this.emulator.lastDiagnosis,
+        runtimeDir: env.root,
+        serial: this.emuSerial,
+        bootLog: this.bootLog,
+      },
+    });
+  }
+
+  usage() { return require('./layers').summary(this.provisioner.paths().root); }
+
+  cleanup({ apply = false, aggressive = false } = {}) {
+    // 运行时正在跑时不能删它的快照，否则可能把当前会话写坏
+    return require('./layers').prune(this.provisioner.paths().root, {
+      apply, aggressive, keepSnapshots: this.vmRunning,
+    });
+  }
 
   dispose() {
     if (this._watchdog) clearInterval(this._watchdog);

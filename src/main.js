@@ -3,7 +3,7 @@
  * ApkStart 主进程
  * 职责：窗口 / 托盘 / 单实例 / 命令行分发（双击 apk、桌面快捷方式启动）/ IPC
  */
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage, screen, globalShortcut } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -28,12 +28,41 @@ function loadBrandIcon(size) {
   return nativeImage.createFromBuffer(drawAppIcon(size || 256));
 }
 const assoc = require('./core/assoc');
+const windowctl = require('./core/windowctl');
+const display = require('./core/display');
+const { WinAgent } = require('./core/agent');
+const { AppWindow, TITLEBAR_H } = require('./core/appwin');
+const { NotifyBridge } = require('./core/notify');
+const { AndroidSettings } = require('./core/android');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
+// 应用窗口把模拟器以 SetParent 方式嵌进来当子窗口。Chromium 默认用
+// DirectComposition 上半透明图层（Intermediate D3D Window /
+// WS_EX_NOREDIRECTIONBITMAP）绘制网页，这层由 DWM 在窗口级别合成，
+// 会直接盖住嵌入的子窗口——表现就是"画面全黑但安卓其实在跑"。
+// 外壳界面只有一条 38px 标题栏和启动遮罩，走软件合成完全不卡，
+// 关掉硬件加速后 Chromium 直接画进 HWND，子窗口层级才真正生效。
+// 想对比效果时可以设 APKSTART_HWACCEL=1 启动。
+if (process.env.APKSTART_HWACCEL !== '1') app.disableHardwareAcceleration();
+
 const APP_ROOT = path.join(__dirname, '..');
 const IS_DEV = process.argv.includes('--dev');
+
+/**
+ * 轻量文件日志：打包后没有控制台，出问题时用户可以把 app.log 发过来。
+ * 只记关键节点和异常，正常路径几千行也不会撑爆。
+ */
+function appLog(line) {
+  try {
+    const dir = path.join(store.DATA_DIR, 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'app.log'), `${new Date().toISOString()} ${line}\n`);
+  } catch (_) { /* 日志失败不能影响主流程 */ }
+}
+process.on('uncaughtException', (e) => appLog(`UNCAUGHT ${e && (e.stack || e.message)}`));
+process.on('unhandledRejection', (e) => appLog(`REJECT ${e && (e.stack || e.message || e)}`));
 
 /**
  * 完整版（内置运行时）自动接管：
@@ -43,18 +72,69 @@ const IS_DEV = process.argv.includes('--dev');
  */
 function bootstrapBundledRuntime() {
   try {
-    const settingsFile = path.join(store.DATA_DIR, 'settings.json');
-    if (fs.existsSync(settingsFile)) return; // 只在首次启动时接管
     const exeDir = path.dirname(process.execPath);
-    const candidates = [path.join(exeDir, 'runtime'), path.join(path.dirname(exeDir), 'runtime')];
-    for (const dir of candidates) {
-      const hasEmulator = fs.existsSync(path.join(dir, 'emulator', 'emulator.exe'));
-      const hasCompatImg = fs.existsSync(path.join(dir, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64', 'system.img'));
-      if (hasEmulator && hasCompatImg) {
-        store.saveSettings({ runtime: { dir, compatImage: true } });
-        break;
+    // 便携版把运行时放在 exe 旁边；electron-builder 的 portable 会把资源解到
+    // resources/ 下，进程 exe 和 resources 同级，所以几个候选位置都看一下。
+    const candidates = [
+      path.join(exeDir, 'runtime'),
+      path.join(path.dirname(exeDir), 'runtime'),
+      path.join(process.resourcesPath || '', 'runtime'),
+      path.join(process.resourcesPath || '', 'app', 'runtime'),
+    ];
+    // 内置运行时只要求「有 emulator + 任意一套完整系统镜像」，不写死 API 版本：
+    // 单文件发行版带的可能是更小的 AOSP 镜像，写死 API34 会让它误判成没有运行时。
+    const hasImage = (dir) => {
+      const root = path.join(dir, 'system-images');
+      let apis = [];
+      try { apis = fs.readdirSync(root); } catch (_) { return false; }
+      for (const api of apis) {
+        let tags = [];
+        try { tags = fs.readdirSync(path.join(root, api)); } catch (_) { continue; }
+        for (const tag of tags) {
+          let abis = [];
+          try { abis = fs.readdirSync(path.join(root, api, tag)); } catch (_) { continue; }
+          for (const abi of abis) {
+            const d = path.join(root, api, tag, abi);
+            // 单文件发行版里的镜像是压缩存放的（system.img.gz），解压在首次启动时做。
+            // 这里只认 system.img 会让「包里明明带了镜像」被判成没带，转而去联网下载。
+            const hasSys = fs.existsSync(path.join(d, 'system.img')) || fs.existsSync(path.join(d, 'system.img.gz'));
+            if (hasSys && fs.existsSync(path.join(d, 'kernel-ranchu'))) return true;
+          }
+        }
       }
+      return false;
+    };
+    const bundled = candidates.find((dir) =>
+      fs.existsSync(path.join(dir, 'emulator', 'emulator.exe')) && hasImage(dir));
+    if (!bundled) return;
+
+    const s = store.getSettings();
+    // 旧版只在 settings.json 不存在时接管：用户先装过在线版再解压完整版，
+    // 就会一直走「缺组件」的部署向导。现在只要当前运行时目录里没有 emulator 就接管。
+    const current = s.runtime.dir || path.join(store.DATA_DIR, 'runtime');
+    const currentOk = fs.existsSync(path.join(current, 'emulator', 'emulator.exe'));
+    // 已有可用运行时（含在线版）就尊重它：AVD 用户数据就在该目录下，不能悄悄搬走
+    if (currentOk) {
+      // 但仍把自动参数打开，旧配置里的硬编码 4G/4核/弃用 GPU 模式不能继续用
+      if (s.engine.gpuMode === 'swiftshader_indirect' || s.engine.memoryMB === 4096) {
+        store.saveSettings({ engine: { gpuMode: 'auto', autoMemory: true, memoryMB: 0, cores: 0 } });
+      }
+      return;
     }
+    // 包里带的是 Google Play 镜像才开兼容模式；AOSP 镜像带的是原生 x86_64 库
+    let playBundled = false;
+    try {
+      const root = path.join(bundled, 'system-images');
+      for (const api of fs.readdirSync(root)) {
+        for (const tag of fs.readdirSync(path.join(root, api))) {
+          if (/playstore|google_apis/i.test(tag)) playBundled = true;
+        }
+      }
+    } catch (_) { /* 忽略 */ }
+    store.saveSettings({
+      runtime: { dir: bundled, compatImage: playBundled },
+      engine: { gpuMode: 'auto', autoMemory: true },
+    });
   } catch (_) { /* 接管失败不阻塞启动，走在线引导 */ }
 }
 bootstrapBundledRuntime();
@@ -69,19 +149,137 @@ let runtime = null;
 let installer = null;
 let sharer = null;
 let quitting = false;
+let winAgent = null;
+let appWin = null;
+let notifier = null;
+let androidSet = null;
 
 // ---------------- 命令行解析 ----------------
 
 function parseArgs(argv) {
-  const args = argv.slice(IS_DEV ? 2 : 1);
+  const args = argv.slice(IS_DEV ? 2 : 1).filter((a) => !a.startsWith('--allow-file-access'));
   const out = { apk: null, launch: null, silent: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '--launch' && args[i + 1]) { out.launch = args[++i]; out.silent = true; }
-    else if (a === '--silent') out.silent = true;
-    else if (/\.(apk|xapk)$/i.test(a) && !a.startsWith('--')) out.apk = a;
+    if (a === '--launch') {
+      // Electron 会往 argv 里塞自己的开关和 app 路径，只认形如 com.foo.bar 的包名
+      const v = args.slice(i + 1).find((x) => x && /^[a-zA-Z][\w]*(\.[\w]+)+$/.test(x));
+      if (v) { out.launch = v; out.silent = true; }
+    } else if (a === '--silent' || a === '--autostart') out.silent = true;
+    else if (/\.(apk|xapk|apks)$/i.test(a) && !a.startsWith('--')) out.apk = a;
   }
   return out;
+}
+
+/** Chromium 能解 WebP，nativeImage 不能；用隐藏窗口把 APK 图标转成 PNG */
+let decodeWindow = null;
+async function decodeIcon(raw) {
+  if (!decodeWindow || decodeWindow.isDestroyed()) {
+    decodeWindow = new BrowserWindow({ show: false, width: 2, height: 2, skipTaskbar: true });
+    await decodeWindow.loadURL('about:blank');
+  }
+  const mime = /^RIFF/.test(raw.toString('ascii', 0, 4)) ? 'image/webp' : 'image/png';
+  const js = `(async () => {
+    const img = new Image();
+    img.src = 'data:${mime};base64,${raw.toString('base64')}';
+    await img.decode();
+    const s = Math.min(256, Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = s; c.height = s;
+    c.getContext('2d').drawImage(img, 0, 0, s, s);
+    return c.toDataURL('image/png');
+  })()`;
+  const url = await decodeWindow.webContents.executeJavaScript(js);
+  return Buffer.from(String(url).split(',')[1] || '', 'base64');
+}
+
+/** 开机自启：默认开启，不需要用户去设置里勾 */
+function applyAutoStart() {
+  if (!app.isPackaged) return; // 开发时不写注册表
+  const on = !!store.getSettings().autoStart;
+  try {
+    // 必须显式给 name，否则注册表里的启动项会叫 "electron.app.Electron"
+    app.setLoginItemSettings({
+      openAtLogin: on,
+      name: 'ApkStart',
+      path: process.execPath,
+      args: ['--autostart'],
+    });
+    // 清掉旧版本（没传 name）留下的那条，避免重复启动
+    app.setLoginItemSettings({ openAtLogin: false, name: 'electron.app.Electron' });
+  } catch (_) { /* 组策略禁止时忽略 */ }
+}
+
+// ---------------- 显示模式：全屏自适应 / 竖屏窗口可调 ----------------
+
+function displaySettings() { return store.getSettings().display || {}; }
+
+function screenRect() {
+  const d = screen.getPrimaryDisplay();
+  const a = d.workArea || d.bounds;
+  return { x: a.x || 0, y: a.y || 0, w: a.width || 1920, h: a.height || 1080 };
+}
+
+let currentAppPkg = null;
+
+function portraitSize() {
+  const d = displaySettings();
+  return display.portraitSize(d.portrait || '540x960');
+}
+
+/** 打开（或复用）那个「一个应用一个干净窗口」 */
+function openAppWindow(pkg, tip) {
+  const rec = store.getApp(pkg);
+  appWin.open({
+    pkg,
+    label: (rec && rec.label) || pkg,
+    iconPath: rec && rec.icoPath,
+    portrait: portraitSize(),
+    fullscreen: displaySettings().mode === 'fullscreen',
+  });
+  appWin.setIcon(rec && rec.icoPath);
+  appWin.setState({ tip: tip || '正在启动安卓运行时…', ready: false, landscape: false });
+  currentAppPkg = pkg;
+}
+
+async function toggleDisplayMode() {
+  const next = store.saveSettings({
+    display: { mode: displaySettings().mode === 'fullscreen' ? 'window' : 'fullscreen' },
+  });
+  if (appWin && appWin.isOpen) {
+    if (next.display.mode === 'fullscreen') appWin.win.maximize();
+    else appWin.win.unmaximize();
+    appWin.scheduleFit();
+  }
+  return next.display.mode;
+}
+
+/** 首次运行把 adb / emulator / 系统镜像一次装完，不再分 1~5 步 */
+let deploying = false;
+async function autoDeploy() {
+  if (deploying || !store.getSettings().autoDeploy) return { ok: false, error: 'skipped' };
+  deploying = true;
+  const progress = (p) => send('provision:progress', { ...p, component: p.component || 'all' });
+  try {
+    const env = await runtime.provisioner.checkEnv();
+    if (!env.adb.ok) {
+      progress({ message: '正在准备 adb…' });
+      await runtime.provisioner.installAdb(progress);
+    }
+    if (!env.emulator.ok) {
+      progress({ message: '正在准备 Android 运行时…' });
+      await runtime.provisioner.installEmulator(progress);
+    }
+    if (!env.sysimg.ok) {
+      progress({ message: '正在准备 Android 系统镜像…' });
+      await runtime.provisioner.installSystemImage(progress);
+    }
+    const after = await runtime.provisioner.checkEnv();
+    return { ok: !!(after.adb.ok && after.emulator.ok && after.sysimg.ok) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  } finally {
+    deploying = false;
+  }
 }
 
 function launcherInfo() {
@@ -176,10 +374,22 @@ function buildTray() {
         ? apps.map((a) => ({ label: a.label, click: () => runLaunch(a.package) }))
         : [{ label: '还没有安装应用', enabled: false }]),
       { type: 'separator' },
+      {
+        label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
+        click: () => { toggleDisplayMode(); },
+      },
+      { label: '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
       { label: '同步共享目录', click: () => sharer.sync() },
       { label: '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
       { type: 'separator' },
-      { label: '退出', click: () => { quitting = true; app.quit(); } },
+      {
+        label: '退出',
+        click: async () => {
+          try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
+          quitting = true;
+          app.quit();
+        },
+      },
     ]);
     tray.setContextMenu(menu);
   };
@@ -197,6 +407,8 @@ async function runInstall(filePath) {
   try {
     const result = await installer.install(filePath, (p) => send('install:progress', p));
     send('install:done', result);
+    // 新建的桌面图标要让资源管理器立刻刷新，否则用户会以为「没创建快捷方式」
+    windowctl.refreshShell().catch(() => {});
     notify('安装完成', `${result.app.label} 已安装${result.app.shortcutPath ? '，桌面快捷方式已创建' : ''}`);
     return result;
   } catch (e) {
@@ -208,19 +420,63 @@ async function runInstall(filePath) {
 }
 
 async function runLaunch(pkg) {
+  const t0 = Date.now();
+  const mark = (s) => appLog(`launch ${pkg} ${s} +${Date.now() - t0}ms`);
+  appLog(`launch start ${pkg}`);
   try {
-    const settings = store.getSettings();
-    const r = await installer.launch(pkg, { onLog: (m) => send('runtime:log', m) });
+    // 1) 先把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
+    openAppWindow(pkg, '正在启动安卓运行时…');
+    if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
+
+    const r = await installer.launch(pkg, {
+      onLog: (m) => { send('runtime:log', m); appLog(`  rt ${m}`); },
+      onMark: mark,
+      beforeStart: async (rt) => {
+        mark('engine ready');
+        appWin.setState({ tip: '正在打开应用…' });
+        // 沉浸式 + 关动画 + 收起锁屏：只做一次，之后每次启动都秒进
+        await rt.client.prepareForeground().catch(() => {});
+        mark('foreground ready');
+      },
+    });
+    mark('app started');
+
+    // 2) 应用真的活下来了，才把画面嵌进窗口（否则用户会看到闪一下的桌面/崩溃页）
+    const embedded = await appWin.embed();
+    mark('embedded');
+    appWin.setState({ ready: true, tip: '' });
+    winAgent.hook(true).catch(() => {});
+    startNotifier();
     send('app:launched', { package: pkg, engine: r.engine });
-    if (settings.hideAfterLaunch && !IS_DEV && !mainWindow?.isVisible()) {
-      // 静默启动：不打扰用户
-    }
-    return { ok: true };
+    appLog(`launch ok ${pkg} embedded=${embedded}`);
+    return { ok: true, embedded };
   } catch (e) {
+    appLog(`launch failed ${pkg}: ${e && (e.stack || e.message)}`);
+    try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
     showWindow();
     send('toast', { type: 'error', message: `启动失败：${e.message}` });
     return { ok: false, error: e.message };
   }
+}
+
+/** 通知桥：只在有应用窗口时轮询，关掉窗口就停，避免空转 */
+function startNotifier() {
+  if (!notifier) {
+    notifier = new NotifyBridge({
+      getClient: () => runtime.client(),
+      getAppLabel: (pkg) => (store.getApp(pkg) || {}).label || pkg,
+      getAppIcon: (pkg) => (store.getApp(pkg) || {}).icoPath || '',
+      onOpen: (pkg) => {
+        if (appWin && appWin.isOpen && appWin.pkg === pkg) {
+          appWin.win.show();
+          appWin.win.focus();
+        } else {
+          runLaunch(pkg).catch(() => {});
+        }
+      },
+    });
+  }
+  notifier.start();
 }
 
 // ---------------- IPC ----------------
@@ -257,7 +513,7 @@ function registerIpc() {
   ipcMain.handle('apk:pick', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: '选择要安装的 APK',
-      filters: [{ name: 'Android 应用', extensions: ['apk'] }],
+      filters: [{ name: 'Android 应用', extensions: ['apk', 'apks', 'xapk'] }],
       properties: ['openFile', 'multiSelections'],
     });
     if (r.canceled) return [];
@@ -309,7 +565,43 @@ function registerIpc() {
   });
 
   ipcMain.handle('settings:get', () => store.getSettings());
-  ipcMain.handle('settings:set', (_e, patch) => store.saveSettings(patch));
+  ipcMain.handle('settings:set', (_e, patch) => {
+    const next = store.saveSettings(patch);
+    if (patch && patch.autoStart !== undefined) applyAutoStart();
+    if (patch && patch.display && appWin && appWin.isOpen) {
+      // 竖屏基准尺寸变了：只影响后续打开的窗口大小，不打断正在跑的应用
+      appWin.portrait = portraitSize();
+    }
+    // 打开「开始菜单快捷方式」时立刻补齐，不用等下次安装
+    if (patch && (patch.createStartMenuShortcut === true || patch.createShortcutOnInstall === true)) {
+      installer.ensureShortcuts().catch(() => {});
+    }
+    return next;
+  });
+
+  // ---------------- 显示模式 / 快捷方式 / 一键部署 ----------------
+
+  ipcMain.handle('display:state', () => ({
+    ...displaySettings(),
+    screen: screenRect(),
+    current: currentAppPkg,
+  }));
+
+  ipcMain.handle('display:set', async (_e, patch) => {
+    const next = store.saveSettings({ display: patch || {} });
+    if (appWin && appWin.isOpen) {
+      appWin.portrait = portraitSize();
+      if (next.display.mode === 'fullscreen' && !appWin.win.isMaximized()) appWin.win.maximize();
+      if (next.display.mode !== 'fullscreen' && appWin.win.isMaximized()) appWin.win.unmaximize();
+      appWin.scheduleFit();
+    }
+    return next.display;
+  });
+
+  ipcMain.handle('display:toggle', () => toggleDisplayMode());
+
+  ipcMain.handle('shortcut:rebuild', async () => ({ ok: true, fixed: await installer.ensureShortcuts() }));
+  ipcMain.handle('runtime:autoDeploy', () => autoDeploy());
 
   ipcMain.handle('runtime:status', async () => runtime.status());
   ipcMain.handle('runtime:probe', async () => runtime.probe());
@@ -322,6 +614,51 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('runtime:log', () => runtime.bootLog);
+
+  // ---------------- 诊断 / 瘦身 ----------------
+
+  ipcMain.handle('doctor:profile', async () => {
+    const doctor = require('./core/doctor');
+    // 已经开机就用实跑参数；没开机也要按「真实引擎版本 + 真实加速状态」推导，
+    // 否则设置页会显示已弃用的 swiftshader_indirect / 软件模拟，和实跑不一致。
+    let p = runtime.emulator.profile;
+    if (!p) {
+      const env = await runtime.provisioner.checkEnv();
+      p = doctor.autoProfile({
+        settings: store.getSettings(),
+        accel: env.accel,
+        emulatorVersion: env.emulator.version || '',
+        diskMB: doctor.freeDiskMB(store.DATA_DIR),
+      });
+    }
+    return { profile: p, text: doctor.describeProfile(p) };
+  });
+
+  ipcMain.handle('doctor:report', async () => {
+    const r = await runtime.diagnostics();
+    shell.showItemInFolder(r.file);
+    return r;
+  });
+
+  ipcMain.handle('runtime:usage', () => runtime.usage());
+
+  ipcMain.handle('runtime:cleanup', async (_e, opts = {}) => {
+    // 明确两次确认：先给清单，用户确认后才真正删；且只清理 ApkStart 自己的运行时目录
+    if (!opts.apply) return runtime.cleanup({ apply: false, aggressive: !!opts.aggressive });
+    const preview = runtime.cleanup({ apply: false, aggressive: !!opts.aggressive });
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['取消', `清理 ${preview.candidates.length} 项`],
+      defaultId: 0,
+      cancelId: 0,
+      title: '确认清理运行时缓存',
+      message: `将释放约 ${(preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0)} MB`,
+      detail: '只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。'
+        + '此操作不可撤销，建议先导出诊断报告。',
+    });
+    if (response !== 1) return { ...preview, cancelled: true };
+    return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive });
+  });
 
   // ---------------- 运行时自举 ----------------
 
@@ -536,6 +873,65 @@ function registerIpc() {
   });
   ipcMain.handle('window:close', () => mainWindow?.close());
   ipcMain.handle('window:hide', () => mainWindow?.hide());
+
+  // ---------------- 应用窗口（只有 旋转 / 最小化 / 最大化 / 关闭） ----------------
+
+  const winOf = (e) => BrowserWindow.fromWebContents(e.sender);
+
+  ipcMain.handle('shell:state', () => ({ ...appWin.state, iconUrl: appWin.iconUrl || '' }));
+  ipcMain.handle('shell:minimize', (e) => winOf(e)?.minimize());
+  ipcMain.handle('shell:maximize', (e) => {
+    const w = winOf(e);
+    if (!w) return;
+    if (w.isMaximized()) w.unmaximize();
+    else w.maximize();
+    appWin.scheduleFit();
+  });
+  ipcMain.handle('shell:close', (e) => { winOf(e)?.close(); });
+  ipcMain.handle('shell:rotate', () => appWin.rotate());
+  ipcMain.handle('shell:back', async () => { await runtime.client().keyBack(); });
+  ipcMain.handle('shell:forward', async () => { await runtime.client().keyForward(); });
+
+  // ---------------- 安卓系统设置（不用进安卓桌面） ----------------
+
+  ipcMain.handle('android:status', async () => {
+    try { return { ok: true, ...(await androidSet.status()) }; } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('android:set', async (_e, { key, value }) => {
+    try {
+      switch (key) {
+        case 'wifi': return { ok: true, ...(await androidSet.setWifi(!!value)) };
+        case 'airplane': return { ok: true, ...(await androidSet.setAirplane(!!value)) };
+        case 'volume': return { ok: true, ...(await androidSet.setVolume(value)) };
+        case 'animations': return { ok: true, ...(await androidSet.setAnimations(!!value)) };
+        case 'fontScale': return { ok: true, ...(await androidSet.setFontScale(value)) };
+        case 'density': return { ok: true, ...(await androidSet.setDensity(value)) };
+        default: return { ok: false, error: `未知设置项 ${key}` };
+      }
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('android:open', async (_e, action) => {
+    try { return { ok: true, ...(await androidSet.open(action)) }; } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('android:tune', async (_e, pkg) => {
+    try { return { ok: true, ...(await androidSet.tune({ pkg })) }; } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('android:permissions', async (_e, pkg) => {
+    try { return { ok: true, rows: await androidSet.permissions(pkg) }; } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('android:grantAll', async (_e, pkg) => {
+    try { return { ok: true, ...(await androidSet.grantAll(pkg)) }; } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('app:foreground', () => {
+    if (appWin && appWin.isOpen) { appWin.win.show(); appWin.win.focus(); return true; }
+    return false;
+  });
 }
 
 // ---------------- 生命周期 ----------------
@@ -561,22 +957,55 @@ if (!gotLock) {
       cwd: l.cwd,
       isDev: IS_DEV,
       desktopDir: app.getPath('desktop'),
+      // Windows 搜索索引的是开始菜单里的 .lnk，只放桌面会「搜不到应用」
+      startMenuDir: path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+      decodeIcon,
     });
     sharer = new Sharer(runtime);
+    androidSet = new AndroidSettings(runtime);
+
+    // 窗口代理：内嵌模拟器窗口 + 鼠标侧键钩子（一次启动，常驻到进程退出）
+    winAgent = new WinAgent();
+    appWin = new AppWindow({
+      agent: winAgent,
+      // 旋转要改 Android 的逻辑分辨率，交给 adb 客户端做
+      setOrientation: (landscape) => runtime.client().setOrientation(landscape),
+    });
+    appWin.onCloseApp((pkg) => {
+      // 关窗口 = 关应用：先把应用停掉，内存立刻还回来；引擎留着，下次点开秒进
+      runtime.client().forceStop(pkg).catch(() => {});
+      if (notifier) notifier.stop();
+    });
+    winAgent.on('back', () => { runtime.client().keyBack().catch(() => {}); });
+    winAgent.on('forward', () => { runtime.client().keyForward().catch(() => {}); });
+    winAgent.on('exit', () => { winAgent = new WinAgent(); appWin.agent = winAgent; });
 
     registerIpc();
     createWindow({ show: !parseArgs(process.argv).silent });
     buildTray();
+    applyAutoStart();
+
+    // 老版本只建过桌面快捷方式 / 图标是 null：启动即自动补齐，不用用户操作
+    installer.ensureShortcuts().then((fixed) => {
+      if (fixed && fixed.length) {
+        windowctl.refreshShell().catch(() => {});
+        notify('快捷方式已补齐', fixed.join('、'));
+      }
+    }).catch(() => {});
+
+    // F11 全屏 / 窗口切换；全局快捷键只在 ApkStart 活着时有效
+    try {
+      globalShortcut.register('F11', () => { toggleDisplayMode(); });
+    } catch (_) { /* ignore */ }
 
     const args = parseArgs(process.argv);
     if (args.apk) runInstall(args.apk).catch(() => {});
-    else if (args.launch) {
-      const r = await runLaunch(args.launch);
-      if (r.ok) {
-        // 纯原生体验：从桌面图标启动时，不留下壳层界面
-        setTimeout(() => { if (store.getSettings().hideAfterLaunch) { quitting = true; app.quit(); } }, 800);
-      }
-    }
+    else if (args.launch) await runLaunch(args.launch);
+
+    // 首次运行自动完成全部部署（后台，不弹任何步骤）
+    autoDeploy().then((r) => {
+      if (r && r.ok) send('toast', { type: 'ok', message: '运行时已自动准备完成' });
+    }).catch(() => {});
 
     sharer.start(8000);
 
@@ -648,6 +1077,11 @@ if (!gotLock) {
   app.on('before-quit', () => {
     quitting = true;
     sharer?.stop();
+    notifier?.stop();
+    try { appWin?.close({ keepApp: false }); } catch (_) { /* ignore */ }
+    try { winAgent?.dispose(); } catch (_) { /* ignore */ }
     runtime?.dispose();
+    // 隐藏的图标解码窗口也算一个窗口，不关掉会让 window-all-closed 永远不触发
+    try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
   });
 }

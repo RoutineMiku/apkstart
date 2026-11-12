@@ -40,28 +40,8 @@ jobs:
           Compress-Archive -Path dist/ApkStart-win64-portable/* -DestinationPath "ApkStart-$tag-win64-portable.zip" -CompressionLevel Optimal
           Get-Item "ApkStart-$tag-win64-portable.zip" | Select-Object Name, Length
 
-      - name: 组装完整版（内置运行时 + ARM 兼容镜像）
-        shell: pwsh
-        run: |
-          node build/fetch-runtime.js "$PWD/_runtime"
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          # 完整版目录结构：ApkStart-win64-portable/ApkStart.exe + runtime/（启动时自动接管）
-          New-Item -ItemType Directory -Force -Path full | Out-Null
-          Copy-Item -Recurse dist/ApkStart-win64-portable full/ApkStart-win64-portable
-          Move-Item _runtime full/ApkStart-win64-portable/runtime
-          Get-ChildItem full/ApkStart-win64-portable/runtime | Select-Object Name
-
-      - name: 压缩完整版（分卷，单卷 < 2GB）
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
-          Push-Location full
-          7z a -t7z -mx=7 -v1900m "..\ApkStart-$tag-win64-full.7z" ApkStart-win64-portable
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          Pop-Location
-          Get-ChildItem "ApkStart-$tag-win64-full.7z.*" | Select-Object Name, Length
-
+      # 只有一个版本：壳层极小，运行时组件由软件首次启动时自动按需下载。
+      # 不再产出内置 GB 级镜像的「完整版」，避免多版本分叉和超大安装包。
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -70,22 +50,12 @@ jobs:
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           $zip = "ApkStart-$tag-win64-portable.zip"
-          $vols = @(Get-ChildItem "ApkStart-$tag-win64-full.7z.*" | ForEach-Object { $_.FullName })
-          if (-not $vols.Count) { Write-Error "未找到完整版分卷"; exit 1 }
-          foreach ($v in $vols) {
-            $gb = (Get-Item $v).Length / 1GB
-            Write-Host "asset: $v = $([Math]::Round($gb,2)) GB"
-            if ($gb -ge 2) { Write-Error "分卷超过 GitHub 2GiB 上限: $v"; exit 1 }
-          }
           gh release create $tag --title "ApkStart $tag" --generate-notes
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          $assets = @($zip) + $vols
-          foreach ($a in $assets) {
-            $ok = $false
-            for ($i = 1; $i -le 3 -and -not $ok; $i++) {
-              gh release upload $tag $a --clobber
-              if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 15 }
-            }
-            if (-not $ok) { Write-Error "上传失败: $a"; exit 1 }
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 15 }
           }
+          if (-not $ok) { Write-Error "上传失败: $zip"; exit 1 }
           gh release view $tag --json assets --jq '.assets[].name'

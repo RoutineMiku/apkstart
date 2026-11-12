@@ -64,8 +64,8 @@
     <div class="setup-card">
       <header class="setup-head">
         <div>
-          <h1>准备 ApkStart 运行时</h1>
-          <p>ApkStart 自带完整的安卓运行时（官方 Android 运行时 + AOSP 系统镜像），<b>不需要安装任何第三方模拟器</b>。全部走 Google 官方高速源，通常几分钟内完成。</p>
+          <h1>一次就好</h1>
+          <p><b>开机自启、自动部署、零参数</b>：首次启动会在后台自动准备运行时，按这台电脑的内存、CPU、显卡和加速状态自适应，失败自动换方案重试。这里只有一个步骤，通常不用点任何按钮，<b>也不需要安装任何第三方模拟器</b>。</p>
         </div>
         <div class="setup-hv" id="setupHv"></div>
       </header>
@@ -141,6 +141,59 @@
     </header>
     <div class="modal-body">
       <div class="group">
+        <div class="group-title">自动模式（默认，无需设置）</div>
+        <div class="field">
+          <label>本机自适应参数</label>
+          <div class="inline-note" id="autoProfileText">正在检测…</div>
+          <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。</span>
+        </div>
+        <div class="field">
+          <label>运行时占用（文件逻辑大小）</label>
+          <div class="row">
+            <span class="inline-note" id="usageText">正在统计…</span>
+            <button class="btn ghost sm" id="btnCleanup">清理可回收文件</button>
+          </div>
+          <span class="sub">只读系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照和锁文件可随时回收。</span>
+        </div>
+        <div class="runtime-actions">
+          <button class="btn ghost sm" id="btnDiagnostics">导出诊断报告</button>
+          <button class="btn ghost sm" id="btnRebuildShortcuts">重建快捷方式</button>
+          <span class="inline-note">诊断报告用于排障；重建会补齐桌面 + 开始菜单入口</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>开机自动启动（默认开启）</label>
+            <span class="sub">随 Windows 登录常驻托盘，双击桌面图标秒开应用，无需手动启动。</span>
+          </div>
+          <input type="checkbox" id="setAutoStart" class="switch" />
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">应用窗口</div>
+        <div class="field">
+          <label>显示模式</label>
+          <select id="setDisplayMode">
+            <option value="window">竖屏窗口（可自由拉伸，记住每个应用的大小）</option>
+            <option value="fullscreen">全屏（铺满屏幕，保持手机比例两侧留黑）</option>
+          </select>
+          <span class="sub">随时按 <b>F11</b> 或右键托盘切换；全屏只放大窗口，不改变画面比例，切换不重启应用。</span>
+        </div>
+        <div class="field" id="portraitField">
+          <label>竖屏画面大小</label>
+          <select id="setPortrait">
+            <option value="720x1280">小 · 720 × 1280</option>
+            <option value="900x1600">中 · 900 × 1600</option>
+            <option value="1080x1920">大 · 1080 × 1920</option>
+            <option value="1440x2560">超大 · 1440 × 2560</option>
+          </select>
+          <span class="sub">窗口模式下可拖动边框任意缩放；这里调的是 Android 内部渲染尺寸，越小越省性能。</span>
+        </div>
+      </div>
+
+      <details class="advanced-group">
+        <summary>高级参数（一般无需修改）</summary>
+      <div class="group">
         <div class="group-title">运行时</div>
         <div class="field">
           <label>引擎模式</label>
@@ -166,12 +219,12 @@
         </div>
         <div class="field two">
           <div>
-            <label>内存 (MB)</label>
-            <input id="setMemory" type="number" min="1024" step="512" />
+            <label>内存 (MB，0 = 自动)</label>
+            <input id="setMemory" type="number" min="0" step="512" />
           </div>
           <div>
-            <label>CPU 核心</label>
-            <input id="setCores" type="number" min="1" max="16" />
+            <label>CPU 核心（0 = 自动）</label>
+            <input id="setCores" type="number" min="0" max="16" />
           </div>
         </div>
         <div class="field">
@@ -180,8 +233,8 @@
         </div>
         <div class="field switch-field">
           <div>
-            <label>ARM 兼容模式（Google Play 镜像）</label>
-            <span class="sub">改用 Android 14（API 34）Google Play 镜像，内置新版 ARM 翻译层，仅含 ARM 原生库的应用可以安装运行（约 1.5GB）。实测红果免费短剧可正常浏览与播放；个别大厂应用自带深度反模拟检测，仍可能受限。</span>
+            <label>通用兼容镜像（自动管理）</label>
+            <span class="sub">现在只有一个 Android 14 通用镜像，x86 与 ARM 应用都能跑，首次遇到 ARM 应用时会自动下载，不需要手动切换。此开关仅用于旧配置兼容。</span>
           </div>
           <input type="checkbox" id="setCompat" class="switch" />
         </div>
@@ -198,6 +251,75 @@
           <span class="inline-note" id="probeResult"></span>
         </div>
       </div>
+      </details>
+
+      <div class="group">
+        <div class="group-title">安卓系统设置（不用进安卓桌面）</div>
+        <div class="field">
+          <label>运行状态</label>
+          <div class="row">
+            <span class="inline-note" id="androidStatus">运行时未启动</span>
+            <button class="btn ghost sm" id="btnAndroidRefresh">刷新</button>
+            <button class="btn ghost sm" id="btnAndroidTune">一键流畅优化</button>
+          </div>
+          <span class="sub">关闭系统动画、放开后台进程上限并把当前应用加入电池白名单，低配电脑体感最明显。</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>Wi-Fi</label>
+            <span class="sub">安卓虚拟机内部的无线网，关掉可省一点 CPU。</span>
+          </div>
+          <input type="checkbox" id="setAndroidWifi" class="switch" />
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>飞行模式</label>
+            <span class="sub">彻底断网（含移动数据），需要安静时打开。</span>
+          </div>
+          <input type="checkbox" id="setAndroidAirplane" class="switch" />
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>系统动画</label>
+            <span class="sub">关掉后界面切换明显更快，功能不受影响。</span>
+          </div>
+          <input type="checkbox" id="setAndroidAnim" class="switch" />
+        </div>
+        <div class="field">
+          <label>媒体音量</label>
+          <div class="row">
+            <input type="range" id="setAndroidVolume" min="0" max="100" step="1" style="flex:1" />
+            <span class="inline-note" id="androidVolumeText">—</span>
+          </div>
+        </div>
+        <div class="field two">
+          <div>
+            <label>字体大小</label>
+            <select id="setAndroidFont">
+              <option value="0.85">小</option>
+              <option value="1.00">标准</option>
+              <option value="1.15">大</option>
+              <option value="1.30">特大</option>
+            </select>
+          </div>
+          <div>
+            <label>显示大小</label>
+            <select id="setAndroidDensity">
+              <option value="240">紧凑（省性能）</option>
+              <option value="320">标准</option>
+              <option value="420">宽松</option>
+              <option value="480">特大</option>
+            </select>
+          </div>
+        </div>
+        <div class="runtime-actions">
+          <button class="btn ghost sm" id="btnAndroidSettings">安卓原生设置</button>
+          <button class="btn ghost sm" id="btnAndroidDisplay">显示设置</button>
+          <button class="btn ghost sm" id="btnAndroidSound">声音设置</button>
+          <button class="btn ghost sm" id="btnAndroidLocale">语言设置</button>
+          <button class="btn ghost sm" id="btnAndroidApps">应用管理</button>
+        </div>
+      </div>
 
       <div class="group">
         <div class="group-title">桌面与应用</div>
@@ -210,17 +332,10 @@
         </div>
         <div class="field switch-field">
           <div>
-            <label>以独立窗口运行（freeform）</label>
-            <span class="sub">关闭后应用会在运行时的整屏里显示</span>
+            <label>同时添加到开始菜单</label>
+            <span class="sub">Windows 搜索能搜到应用名，任务栏也按应用分组</span>
           </div>
-          <input type="checkbox" id="setFreeform" class="switch" />
-        </div>
-        <div class="field switch-field">
-          <div>
-            <label>从桌面图标启动后隐藏 ApkStart 窗口</label>
-            <span class="sub">获得最接近原生应用的启动体验</span>
-          </div>
-          <input type="checkbox" id="setHideAfterLaunch" class="switch" />
+          <input type="checkbox" id="setStartMenuShortcut" class="switch" />
         </div>
         <div class="field">
           <label>快捷方式目录</label>

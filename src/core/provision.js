@@ -7,10 +7,11 @@
  */
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const store = require('./store');
 const { download, downloadAny, downloadAnyParallel, head } = require('./download');
-const { ZipArchive } = require('./zip');
+const { ZipArchive, ZipFile } = require('./zip');
 
 const IS_WIN = process.platform === 'win32';
 
@@ -31,7 +32,7 @@ const SOURCES = {
   aehdFallback: 'https://dl.google.com/android/repository/aehd-windows_v2.2.zip',
   // 兜底：索引不可用时直接用的已知版本
   emulatorFallback: 'https://dl.google.com/android/repository/emulator-windows_x64-16847572.zip',
-  sysimgFallback: 'https://dl.google.com/android/repository/sys-img/android/x86_64-30_r11.zip',
+  sysimgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
   // ARM 兼容镜像（Google Play 版，内置 native bridge）
   playImgIndex: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-3.xml',
   playImgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
@@ -66,12 +67,17 @@ function absUrl(u, base = REPO_BASE) {
   return base + s.replace(/^\/+/, '');
 }
 
-/** 想默认使用的系统镜像（API 级别 + 渠道）。AOSP 版体积小、无 GMS 授权问题。 */
-const DEFAULT_SYSIMG = { api: '30', tag: 'default', abi: 'x86_64' };
-// ARM 兼容镜像：Google Play 版自带 native bridge（ARM 翻译层），可安装仅含 ARM 原生库的应用。
-// 必须 Android 14（API 34）：新版 libndk_translation 修复了对字节系 signal trampoline
-// 的误杀（老版本 API 30 镜像上抖音/红果启动即 DoBadTrampoline SIGABRT，实测 API 34 完整可跑）
+/**
+ * 只保留一份「通用基础镜像」。
+ * 旧版默认 AOSP API30 + 可选 API34 Play 兼容镜像，导致：
+ *   - 用户装国产 ARM 应用时必然失败，还要手动切镜像（实用门槛）；
+ *   - 两份镜像各 0.6~3GB，运行时目录动辄十几 GB；
+ *   - 切换镜像要 wipe-data，已装应用全丢。
+ * 现在统一为 Android 14 Google Play x86_64：x86 应用、ARM 应用、GMS 都能跑，
+ * 全机只存一份只读基础层（容器式共享），按需下载一次即可。
+ */
 const PLAY_SYSIMG = { api: '34', tag: 'google_apis_playstore', abi: 'x86_64' };
+const DEFAULT_SYSIMG = PLAY_SYSIMG;
 
 const MIN_SIZE = {
   adb: 5 * 1024 * 1024,
@@ -114,6 +120,14 @@ class Provisioner {
     const sysTag = DEFAULT_SYSIMG.tag;
     const sysApi = DEFAULT_SYSIMG.api;
     const sysAbi = DEFAULT_SYSIMG.abi;
+    // AVD（含用户数据、已装应用、quickboot 快照）必须落在可写且不会被清理的地方。
+    // 单文件发行版的运行时是随包解压到临时目录的，把 AVD 放进去等于每次退出都丢应用。
+    // 只要运行时目录不在 %APPDATA% 里，就把 AVD 固定指到用户数据目录。
+    const writable = path.join(store.DATA_DIR, 'avd');
+    const insideData = root.toLowerCase().startsWith(store.DATA_DIR.toLowerCase());
+    // 单文件发行版的镜像会展开到用户目录（见 materializeImages），那里有就用那里的
+    const dataImg = path.join(store.DATA_DIR, 'system-images');
+    const sysRoot = fs.existsSync(dataImg) ? dataImg : path.join(root, 'system-images');
     return {
       root,
       qemuDir: path.join(root, 'qemu'),
@@ -124,9 +138,9 @@ class Provisioner {
       // emulator 运行时（Google 官方）：root 同时充当 ANDROID_SDK_ROOT
       emulatorDir: path.join(root, 'emulator'),
       emulatorExe: path.join(root, 'emulator', 'emulator.exe'),
-      sysImgRoot: path.join(root, 'system-images'),
-      sysImgDir: path.join(root, 'system-images', `android-${sysApi}`, sysTag, sysAbi),
-      avdHome: path.join(root, 'avd'),
+      sysImgRoot: sysRoot,
+      sysImgDir: path.join(sysRoot, `android-${sysApi}`, sysTag, sysAbi),
+      avdHome: insideData ? path.join(root, 'avd') : writable,
       aehdDir: path.join(root, 'aehd'),
       imagesDir: path.join(root, 'images'),
       iso: path.join(root, 'images', 'android-x86.iso'),
@@ -246,10 +260,9 @@ class Provisioner {
     const diskSize = fileSize(diskPath);
     const sysimg = this.systemImageInfo();
 
-    // 两条路径：emulator（推荐，Google 官方）或 QEMU+ISO（用户自备镜像时）
-    // 完整版（内置运行时）只带 ARM 兼容镜像（API 34 Google Play），
-    // 开启兼容模式时它就是主镜像，无需再下载 AOSP 默认镜像
-    const compatReady = !!(s.runtime && s.runtime.compatImage) && this.playImageInfo().ok;
+    // 完整版（内置运行时）只带一份 API 34 Google Play 镜像，它同时是主镜像与兼容镜像；
+    // 不再依赖 compatImage 开关，避免「镜像明明在，却因为没勾开关而判定未部署」
+    const compatReady = this.playImageInfo().ok;
     const emulatorReady = emulator.ok && (sysimg.ok || compatReady);
     const qemuReady = qemu.ok && diskSize > MIN_SIZE.disk;
 
@@ -328,27 +341,34 @@ class Provisioner {
    * 大条目（GB 级 system.img）走流式，小条目整块读，避免撞 Node 的单 Buffer 上限。
    */
   async extractZip(zipPath, destDir, opts = {}) {
-    const buf = fs.readFileSync(zipPath);
-    const zip = new ZipArchive(buf);
+    // 大包（emulator / 系统镜像）走文件版：不把 1.5GB zip 整包读进内存，
+    // 低内存机器也能稳定解压；小包沿用内存版，速度更快。
+    const big = fileSize(zipPath) > 64 * 1024 * 1024;
+    const zip = big ? new ZipFile(zipPath) : new ZipArchive(fs.readFileSync(zipPath));
     const STREAM_THRESHOLD = 64 * 1024 * 1024;
     const total = zip.names().length;
     let done = 0;
 
-    for (const name of zip.names()) {
-      if (name.endsWith('/')) {
-        fs.mkdirSync(path.join(destDir, name), { recursive: true });
-        continue;
+    try {
+      for (const name of zip.names()) {
+        if (name.endsWith('/')) {
+          fs.mkdirSync(path.join(destDir, name), { recursive: true });
+          continue;
+        }
+        const target = path.join(destDir, name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        const e = zip.entries.get(name);
+        if (e.uncompSize > STREAM_THRESHOLD) {
+          // eslint-disable-next-line no-await-in-loop
+          await zip.pipeTo(name, fs.createWriteStream(target));
+        } else {
+          fs.writeFileSync(target, zip.read(name));
+        }
+        done += 1;
+        if (opts.onEntry) opts.onEntry(name, done, total);
       }
-      const target = path.join(destDir, name);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      const e = zip.entries.get(name);
-      if (e.uncompSize > STREAM_THRESHOLD) {
-        await zip.pipeTo(name, fs.createWriteStream(target));
-      } else {
-        fs.writeFileSync(target, zip.read(name));
-      }
-      done += 1;
-      if (opts.onEntry) opts.onEntry(name, done, total);
+    } finally {
+      if (zip.close) zip.close();
     }
     return destDir;
   }
@@ -395,7 +415,7 @@ class Provisioner {
     if (cached && cached.trim()) return absUrl(cached, baseOf(SOURCES.sysImgIndexes[0]));
     if (this._cache.sysimgUrl) return this._cache.sysimgUrl;
     const want = `system-images;android-${DEFAULT_SYSIMG.api};${DEFAULT_SYSIMG.tag};${DEFAULT_SYSIMG.abi}`;
-    for (const idx of SOURCES.sysImgIndexes) {
+    for (const idx of [SOURCES.playImgIndex, ...SOURCES.sysImgIndexes]) {
       try {
         // eslint-disable-next-line no-await-in-loop
         const xml = await this._fetchText(idx);
@@ -437,22 +457,91 @@ class Provisioner {
     return { ok: false, path: '', version: '' };
   }
 
+  /**
+   * 首次启动把随包带来的压缩镜像展开到用户目录（只做一次）。
+   * 单文件发行版里 system.img 是 .gz（3.1GB→580MB 左右），不展开模拟器没法用。
+   * 展开到 %APPDATA% 而不是包里：便携版的运行时目录每次启动都是新的临时目录，
+   * 放进去等于每次开机都重解压一遍。
+   */
+  async materializeImages(onLog = () => {}) {
+    const srcRoot = path.join(this.root, 'system-images');
+    const destRoot = path.join(store.DATA_DIR, 'system-images');
+    const jobs = [];
+    const walk = (dir, rel = '') => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p, path.join(rel, e.name));
+        else if (/\.img\.gz$/i.test(e.name)) jobs.push({ src: p, dest: path.join(destRoot, rel, e.name.replace(/\.gz$/i, '')) });
+      }
+    };
+    walk(srcRoot);
+    if (!jobs.length) return 0;
+
+    let done = 0;
+    for (const j of jobs) {
+      const have = fileSize(j.dest);
+      if (have > 32 * 1024 * 1024) continue; // 已经展开过
+      fs.mkdirSync(path.dirname(j.dest), { recursive: true });
+      onLog(`首次启动：正在展开系统镜像 ${path.basename(j.dest)}（约 1 分钟，只需一次）`);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve, reject) => {
+        const { pipeline } = require('stream');
+        pipeline(
+          fs.createReadStream(j.src),
+          zlib.createGunzip(),
+          fs.createWriteStream(j.dest),
+          (err) => (err ? reject(err) : resolve()),
+        );
+      }).catch((e) => onLog(`展开镜像失败：${e.message}`));
+      done += 1;
+    }
+    return done;
+  }
+
   /** 系统镜像是否完整（system.img 是硬指标，缺失或过小都视为没下完） */
   systemImageInfo() {
     const p = this.paths();
-    const dirs = [p.sysImgDir, path.join(this.appRoot, 'engine', 'system-images',
-      `android-${DEFAULT_SYSIMG.api}`, DEFAULT_SYSIMG.tag, DEFAULT_SYSIMG.abi)];
-    for (const dir of dirs) {
+    const roots = [p.sysImgRoot, path.join(this.root, 'system-images'), path.join(this.appRoot, 'engine', 'system-images')];
+    // 先在默认位置（API34 Play）找，再退到「随便哪套镜像」。
+    // 单文件发行版可能只带一套更小的 AOSP 镜像，写死 API34 会导致
+    // 镜像明明在包里却报"未下载"，用户被迫联网下载一套新的。
+    const preferred = [p.sysImgDir,
+      path.join(this.appRoot, 'engine', 'system-images',
+        `android-${DEFAULT_SYSIMG.api}`, DEFAULT_SYSIMG.tag, DEFAULT_SYSIMG.abi)];
+    const candidates = [...preferred];
+    for (const root of roots) {
+      let apis = [];
+      try { apis = fs.readdirSync(root).filter((d) => /^android-\d+$/.test(d)); } catch (_) { continue; }
+      apis.sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
+      for (const api of apis) {
+        let tags = [];
+        try { tags = fs.readdirSync(path.join(root, api)); } catch (_) { continue; }
+        for (const tag of tags) {
+          let abis = [];
+          try { abis = fs.readdirSync(path.join(root, api, tag)); } catch (_) { continue; }
+          for (const abi of abis) candidates.push(path.join(root, api, tag, abi));
+        }
+      }
+    }
+    let missing = null;
+    for (const dir of candidates) {
       const system = path.join(dir, 'system.img');
       const kernel = path.join(dir, 'kernel-ranchu');
       const size = fileSize(system);
+      const m = /system-images[\\/]android-(\d+)[\\/]([^\\/]+)[\\/]([^\\/]+)$/.exec(dir);
+      const api = m ? Number(m[1]) : DEFAULT_SYSIMG.api;
+      const tag = m ? m[2] : DEFAULT_SYSIMG.tag;
+      const abi = m ? m[3] : DEFAULT_SYSIMG.abi;
       if (size > MIN_SIZE.sysimg && fs.existsSync(kernel)) {
-        return { ok: true, dir, size, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag };
+        return { ok: true, dir, size, api, tag, abi };
       }
-      if (fs.existsSync(dir)) {
-        return { ok: false, dir, size, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag, note: size ? '镜像不完整' : '缺少 system.img' };
+      if (!missing && fs.existsSync(dir)) {
+        missing = { ok: false, dir, size, api, tag, abi, note: size ? '镜像不完整' : '缺少 system.img' };
       }
     }
+    if (missing) return missing;
     return { ok: false, dir: p.sysImgDir, size: 0, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag, note: '未下载' };
   }
 
@@ -561,42 +650,10 @@ class Provisioner {
     return '';
   }
 
-  /** 下载并安装系统镜像（zip 顶层是 x86_64/，解到 android-30/<tag>/ 下） */
+  /** 只下载一份通用基础镜像（Android 14 Play x86_64），不再有「普通/兼容」两套 */
   async installSystemImage(onProgress = () => {}) {
-    const p = this.ensureDirs();
-    const url = await this.resolveSysimgUrl();
-    const zip = path.join(p.tmp, 'sysimg.zip');
-    onProgress({ stage: 'download', message: '下载 Android 系统镜像（约 645MB）…', percent: 1 });
-
-    await downloadAnyParallel([url], zip, {
-      connections: 8,
-      minChunk: 4 * 1024 * 1024,
-      onProgress: (pr) => onProgress({
-        stage: 'download',
-        message: `下载系统镜像 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
-          + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
-        percent: Math.round(pr.percent * 0.8),
-        canResume: true,
-      }),
-    });
-    if (fileSize(zip) < MIN_SIZE.sysimg) throw new Error('系统镜像下载不完整，可重试续传');
-
-    const dest = path.join(p.sysImgRoot, `android-${DEFAULT_SYSIMG.api}`, DEFAULT_SYSIMG.tag);
-    fs.mkdirSync(dest, { recursive: true });
-    onProgress({ stage: 'extract', message: '解压系统镜像（3GB，需十余秒）…', percent: 82 });
-    await this.extractZip(zip, dest, {
-      onEntry: (_n, i, total) => onProgress({
-        stage: 'extract',
-        message: `解压系统镜像 ${i}/${total}`,
-        percent: 82 + Math.round((i / Math.max(1, total)) * 15),
-      }),
-    });
-    fs.rmSync(zip, { force: true });
-
-    const info = this.systemImageInfo();
-    if (!info.ok) throw new Error('系统镜像解压后校验失败（system.img 缺失或不完整）');
-    onProgress({ stage: 'done', message: `Android ${DEFAULT_SYSIMG.api} 系统镜像就绪`, percent: 100 });
-    return info;
+    if (this.playImageInfo().ok) return this.playImageInfo();
+    return this.installPlayImage(onProgress);
   }
 
   /** ARM 兼容镜像（Google Play 版）是否已就位 */

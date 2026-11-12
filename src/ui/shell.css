@@ -1,0 +1,101 @@
+/* 应用窗口：只保留顶部一条极简标题栏，其余全是安卓画面 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bar-h: 38px;
+  --bar-bg: #16181c;
+  --fg: #e6e8ec;
+  --fg-dim: #9aa1ab;
+  --hover: rgba(255, 255, 255, .09);
+  --close: #c4423b;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: #0b0c0e;
+  color: var(--fg);
+  font: 13px/1.4 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  user-select: none;
+  cursor: default;
+}
+
+.bar {
+  height: var(--bar-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  background: var(--bar-bg);
+  border-bottom: 1px solid #000;
+  -webkit-app-region: drag;
+}
+
+.ico { width: 18px; height: 18px; border-radius: 4px; object-fit: contain; }
+.name {
+  font-size: 12.5px;
+  letter-spacing: .2px;
+  color: var(--fg);
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grow { flex: 1; }
+
+.ctl {
+  -webkit-app-region: no-drag;
+  width: 44px;
+  height: var(--bar-h);
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: default;
+  transition: background .12s, color .12s;
+}
+.ctl:hover { background: var(--hover); color: #fff; }
+.ctl.close:hover { background: var(--close); color: #fff; }
+.ctl:active { background: rgba(255, 255, 255, .16); }
+
+.stage {
+  position: absolute;
+  top: var(--bar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #0b0c0e;
+}
+
+/* 启动遮罩：安卓桌面/开机动画永远不给用户看到 */
+.boot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: radial-gradient(120% 90% at 50% 12%, #1d2027 0%, #0b0c0e 62%);
+  transition: opacity .35s ease;
+}
+.boot.out { opacity: 0; pointer-events: none; }
+
+.boot-ico { width: 64px; height: 64px; border-radius: 15px; object-fit: contain; }
+.boot-name { font-size: 15px; color: var(--fg); }
+.boot-bar {
+  width: 148px; height: 3px; border-radius: 3px;
+  background: rgba(255, 255, 255, .1); overflow: hidden;
+}
+.boot-bar i {
+  display: block; height: 100%; width: 40%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #4f8cff, #7ad0ff);
+  animation: slide 1.15s ease-in-out infinite;
+}
+@keyframes slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(360%); }
+}
+.boot-tip { font-size: 12px; color: var(--fg-dim); }

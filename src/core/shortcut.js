@@ -77,6 +77,62 @@ function safeFileName(name) {
 }
 
 /**
+ * PNG-in-ICO：Vista 起 ICO 条目允许直接内嵌 PNG，不用重编码、不丢 alpha。
+ * APK 图标常是 WebP/大尺寸 PNG，老的 DIB 路线在这里会整包失败。
+ */
+function pngBytesToIco(png) {
+  if (!Buffer.isBuffer(png) || png.length < 24 || png.toString('ascii', 1, 4) !== 'PNG') return null;
+  const w = png.readUInt32BE(16);
+  const h = png.readUInt32BE(20);
+  if (!w || !h || w > 1024 || h > 1024) return null;
+  const dir = Buffer.alloc(22);
+  dir.writeUInt16LE(0, 0);
+  dir.writeUInt16LE(1, 2);
+  dir.writeUInt16LE(1, 4);
+  dir.writeUInt8(w >= 256 ? 0 : w, 6);
+  dir.writeUInt8(h >= 256 ? 0 : h, 7);
+  dir.writeUInt8(0, 8);
+  dir.writeUInt8(0, 9);
+  dir.writeUInt16LE(1, 10);
+  dir.writeUInt16LE(32, 12);
+  dir.writeUInt32LE(png.length, 14);
+  dir.writeUInt32LE(22, 18);
+  return Buffer.concat([dir, png]);
+}
+
+/**
+ * 任意 APK 图标 → ICO。三级兜底，保证快捷方式永远带图标：
+ *  1) Electron 能直接解（真 PNG/JPEG）→ 多尺寸 DIB ICO；
+ *  2) decode 回调（渲染进程用 Chromium 解 WebP）→ PNG-in-ICO；
+ *  3) 品牌占位图标 → PNG-in-ICO。
+ */
+async function iconToIco(raw, { decode } = {}) {
+  if (!Buffer.isBuffer(raw) || !raw.length) return null;
+  try {
+    const { nativeImage } = require('electron');
+    const img = nativeImage.createFromBuffer(raw);
+    if (img && !img.isEmpty()) {
+      const ico = pngToIco(img.toPNG());
+      if (ico) return ico;
+    }
+  } catch (_) { /* 非 PNG/JPEG，走下一级 */ }
+
+  if (typeof decode === 'function') {
+    try {
+      const png = await decode(raw);
+      const ico = pngBytesToIco(png);
+      if (ico) return ico;
+    } catch (_) { /* 解码失败走占位图 */ }
+  }
+  try {
+    const { drawAppIcon } = require('./png');
+    return pngBytesToIco(drawAppIcon(256));
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * 生成桌面快捷方式
  * @param {object} opt { shortcutPath, target, args, iconIcoPath, description, cwd }
  */
@@ -109,4 +165,7 @@ function removeShortcut(p) {
   }
 }
 
-module.exports = { pngToIco, writeShortcut, removeShortcut, safeFileName, ICO_SIZES };
+module.exports = {
+  pngToIco, pngBytesToIco, iconToIco,
+  writeShortcut, removeShortcut, safeFileName, ICO_SIZES,
+};

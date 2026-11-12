@@ -1,7 +1,10 @@
 node_modules/
 dist/
+build/runtime/
+.workbuddy/
 test/out/
 test/fixtures/
+test/*.png
 test/shot*.png
 *.log
 *.zip

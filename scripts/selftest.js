@@ -23,7 +23,8 @@ const argOf = (name) => {
   return i >= 0 ? argv[i + 1] : '';
 };
 const APK = argOf('--apk');
-const SERIAL = argOf('--serial') || store.getSettings().device || '127.0.0.1:5555';
+// 留空 = 走产品路径自动拉起内置运行时并用动态 serial；指定时才连接外部设备
+const SERIAL = argOf('--serial') || '';
 
 const results = [];
 function record(name, ok, detail = '') {
@@ -60,23 +61,29 @@ async function step(name, fn) {
     if (!env.adb.ok) throw new Error('未安装 adb，请先运行「一键部署」');
     return `v${env.adb.version}`;
   });
-  await step('QEMU 可用', async () => {
-    if (!env || !env.qemu.ok) throw new Error('未安装 QEMU');
-    return `v${env.qemu.version}`;
+  await step('Android Emulator 就绪', async () => {
+    if (!env.emulator.ok) throw new Error('未安装运行时引擎，请先运行「一键部署」');
+    return `v${env.emulator.version}`;
   });
   await step('系统镜像完整', async () => {
-    if (!env.iso.ok) throw new Error(env.iso.reason || '镜像缺失');
-    return `${(env.iso.size / 1073741824).toFixed(2)}GB${env.iso.iso9660 ? ' · ISO9660' : ''}`;
+    if (!env.sysimg.ok) throw new Error(env.sysimg.note || '镜像缺失');
+    return `Android ${env.sysimg.api} · ${(env.sysimg.size / 1073741824).toFixed(2)}GB`;
   });
-  record('硬件加速', env.hypervisor.whpx ? true : null,
-    env.hypervisor.whpx ? 'WHPX 已启用' : '纯软件模拟（能跑，但明显慢）');
+  record('硬件加速', env.accel.ok ? true : null,
+    env.accel.ok ? env.accel.note : '自动回退软件模拟（能跑，但明显慢）');
 
   console.log('\n[设备]');
-  const client = runtime.client(SERIAL);
-  const online = await step('adb 已连接', async () => {
-    await client.connect().catch(() => false);
-    if (!await client.isOnline()) throw new Error('设备不在线：先启动运行时');
-    return SERIAL;
+  let client = runtime.client(SERIAL || undefined);
+  const online = await step('运行时已就绪', async () => {
+    if (SERIAL) {
+      await client.connect().catch(() => false);
+      if (!await client.isOnline()) throw new Error(`外部设备不在线：${SERIAL}`);
+      return SERIAL;
+    }
+    const r = await runtime.ensure({ onLog: () => {} });
+    if (!r.ok) throw new Error(r.error || '运行时不可用');
+    client = r.client;
+    return client.serial;
   });
 
   if (!online) {
@@ -164,6 +171,12 @@ async function step(name, fn) {
     }
   }
 
+  // 自检自己拉起的运行时要主动停掉：否则 emulator 子进程的 stdio 管道
+  // 会让 Node 事件循环一直不退出，命令看起来「卡住」
+  if (!SERIAL && runtime.emulator.running()) {
+    await runtime.stop({}).catch(() => {});
+  }
+
   const failed = results.filter((r) => r.ok === false);
   console.log('\n' + '─'.repeat(64));
   console.log(`结果：${results.filter((r) => r.ok === true).length} 通过，${failed.length} 失败，`
@@ -174,6 +187,7 @@ async function step(name, fn) {
     process.exit(1);
   }
   console.log('全部检查通过 ✅\n');
+  process.exit(0);
 })().catch((e) => {
   console.error('\n自检异常终止：', e.message);
   process.exit(1);

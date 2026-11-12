@@ -20,13 +20,16 @@ const DEFAULT_SETTINGS = {
     mode: 'builtin',         // builtin（自带运行时，默认） | attach（连接已有运行时，高级）
     qemuPath: '',
     systemImage: '',
-    memoryMB: 4096,
-    cores: 4,
+    memoryMB: 0,             // 0 = 由 doctor 按机器内存自动决定
+    cores: 0,                // 0 = 自动
+    autoMemory: true,        // 零配置：自动推导内存/核心/磁盘/渲染参数
     idleShutdownMinutes: 15,
     startVisible: true,
-    headless: true,          // 无头运行：画面由 ApkStart 自己的窗口承载
-    gpuMode: 'swiftshader_indirect', // swiftshader_indirect（兼容） | host（用独显） | off
-    forceTcg: false,         // 允许无硬件加速的纯软件模拟（Windows 上极慢，仅排障用）
+    // 必须带窗口：无头模式 SurfaceFlinger 不出 VSYNC，应用进程活着但屏幕上什么都没有。
+    // 带窗口的模拟器是原生 60fps + 原生鼠标键盘，ApkStart 只负责把它打扮成应用窗口。
+    headless: false,
+    gpuMode: 'auto',         // auto = 按 emulator 版本自动挑后端并逐级降级
+    forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
   },
   runtime: {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime
@@ -45,10 +48,20 @@ const DEFAULT_SETTINGS = {
   deviceSharedDir: '/sdcard/ApkStartShared',
   autoConnect: true,
   createShortcutOnInstall: true,
+  createStartMenuShortcut: true, // 开始菜单快捷方式 = 让 Windows 搜索能搜到应用
   shortcutDir: '',           // 空 = 桌面
-  freeform: true,            // 独立窗口（Android 7+ freeform）
-  hideAfterLaunch: true,
+  freeform: false,           // 共享一个运行时窗口，不再用 Android freeform 小窗
+  hideAfterLaunch: false,    // 主进程必须常驻，否则一退出就把 Android 运行时杀掉了
   notifyOnInstall: true,
+  autoStart: true,           // 开机自启，默认开启，用户无需设置
+  autoDeploy: true,          // 首次运行自动完成全部部署，不再分 1~5 步
+  display: {
+    mode: 'window',          // window（竖屏窗口，可自由拉伸） | fullscreen（自动适配屏幕）
+    portrait: '900x1600',    // 窗口模式的竖屏分辨率，可在设置里调大小
+    density: 0,              // 0 = 按分辨率自动推导
+    rememberBounds: true,    // 记住每个应用的窗口位置/大小
+    autoFullscreenOnLaunch: false,
+  },
 };
 
 function ensureDirs() {
@@ -88,7 +101,16 @@ const store = {
   DATA_DIR, ICON_DIR, APK_DIR,
 
   getSettings() {
-    return deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    // 旧版本默认无头运行：应用进程能起来但屏幕上没有窗口，等效于「打不开」。
+    // 无条件迁移到带窗口模式，且不再允许通过旧配置把它关掉。
+    s.engine.headless = false;
+    // 旧版本退出壳层时会杀掉整个 Android 运行时，导致桌面图标点开闪一下就没了。
+    s.hideAfterLaunch = false;
+    // 旧版本用 Android freeform 小窗，现在整个模拟器窗口就是应用窗口，
+    // 应用必须铺满这块屏幕，否则会出现「窗口里再套一个小窗」。
+    s.freeform = false;
+    return s;
   },
 
   saveSettings(patch) {
