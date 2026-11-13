@@ -106,6 +106,15 @@ function deepMerge(base, patch) {
   return out;
 }
 
+function bundledRuntimeSettingsMigration(engine = {}) {
+  const patch = {};
+  if (engine.gpuMode === 'swiftshader_indirect') patch.gpuMode = 'auto';
+  if (engine.memoryMB === 4096 && engine.autoMemory !== false) {
+    Object.assign(patch, { autoMemory: true, memoryMB: 0, cores: 0 });
+  }
+  return patch;
+}
+
 const store = {
   DATA_DIR, ICON_DIR, APK_DIR,
 
@@ -164,6 +173,7 @@ const store = {
   },
 
   ensureDirs,
+  bundledRuntimeSettingsMigration,
   DEFAULT_SETTINGS,
 };
 

@@ -22,6 +22,7 @@ function test(name, fn) {
 function assert(c, m) { if (!c) throw new Error(m || '断言失败'); }
 
 const doctor = require('../src/core/doctor');
+const store = require('../src/core/store');
 const layers = require('../src/core/layers');
 const pointer = require('../src/core/pointer');
 const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src/core/adb');
@@ -111,8 +112,21 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(old.gpu === 'host' && doctor.gpuCandidates('35.1.4.0').includes('swiftshader_indirect'));
     const manual = doctor.autoProfile({ ...common, settings: { engine: { autoMemory: false, memoryMB: 6144, cores: 6, gpuMode: 'swiftshader' } } });
     assert(manual.memoryMB === 6144 && manual.cores === 6 && manual.gpu === 'swiftshader', JSON.stringify(manual));
+    assert(manual.manualResources && doctor.describeProfile(manual).startsWith('自定义：'), '手动资源 profile 应标记为自定义');
+    assert(!p.manualResources && doctor.describeProfile(p).startsWith('自动：'), '默认资源 profile 应标记为自动');
+    const manual4g = doctor.autoProfile({ ...common, settings: { engine: { autoMemory: false, memoryMB: 4096, cores: 4 } } });
+    assert(manual4g.memoryMB === 4096 && manual4g.cores === 4, JSON.stringify(manual4g));
     const zero = doctor.overridesFromSettings({ autoMemory: false, memoryMB: 0, cores: 0, gpuMode: 'auto' });
     assert(zero.memoryMB === 0 && zero.cores === 0 && zero.gpuMode === '', JSON.stringify(zero));
+  });
+
+  await test('bundled runtime migration preserves explicit 4GB manual memory and custom CPU', () => {
+    const manual = store.bundledRuntimeSettingsMigration({ autoMemory: false, memoryMB: 4096, cores: 6 });
+    assert(Object.keys(manual).length === 0, JSON.stringify(manual));
+    const legacy = store.bundledRuntimeSettingsMigration({ memoryMB: 4096, cores: 4, gpuMode: 'swiftshader_indirect' });
+    assert(legacy.autoMemory === true && legacy.memoryMB === 0 && legacy.cores === 0 && legacy.gpuMode === 'auto', JSON.stringify(legacy));
+    const gpuOnly = store.bundledRuntimeSettingsMigration({ autoMemory: false, memoryMB: 6144, cores: 6, gpuMode: 'swiftshader_indirect' });
+    assert(gpuOnly.gpuMode === 'auto' && gpuOnly.memoryMB === undefined && gpuOnly.cores === undefined, JSON.stringify(gpuOnly));
   });
 
   console.log('\n[layers.js 容器式瘦身]');
