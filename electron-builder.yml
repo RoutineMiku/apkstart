@@ -53,5 +53,8 @@ nsis:
   # 安装包本身已含完整运行时（emulator + 系统镜像 .gz），装完首次启动
   # 自动把镜像展开到用户目录，之后不再联网下载任何东西。
 
-# LZMA 最高压缩：镜像已经是 .gz，这里主要压 Electron 的 dll
-compression: maximum
+# 压缩级别：normal（zlib）。镜像本身已是 xz/gz，NSIS 这层只压 Electron 的 dll，
+# normal 与 maximum 体积差别很小，但 maximum(LZMA) 会让打安装包慢十几分钟。
+# 注：CI 用 PowerShell 跑 npx 时，行内 -c.compression=xxx 会被拆参、被当成配置文件路径，
+# 因此压缩级别统一在这里设置，不在 workflow 里用 -c 行内覆盖。
+compression: normal

@@ -49,8 +49,12 @@ jobs:
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           $zip = "ApkStart-$tag-win64-portable.zip"
-          gh release create $tag --title "ApkStart $tag" --generate-notes
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # 幂等：release 已存在（如重跑 / 重推 tag）就跳过 create，只上传资产
+          $existing = gh release view $tag --json tagName -q .tagName 2>$null
+          if (-not $existing) {
+            gh release create $tag --title "ApkStart $tag" --generate-notes
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
           $ok = $false
           for ($i = 1; $i -le 3 -and -not $ok; $i++) {
             gh release upload $tag $zip --clobber
@@ -92,7 +96,7 @@ jobs:
           XZ_TIMEOUT_MS: '3600000'
 
       - name: 构建完整版安装包
-        run: npx electron-builder --win nsis -c.compression=normal
+        run: npx electron-builder --win nsis
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
