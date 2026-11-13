@@ -430,6 +430,7 @@ body {
 }
 .field input:focus, .field select:focus { border-color: #b9c6d4; box-shadow: 0 0 0 3px rgba(22,163,74,.08); }
 .field input[readonly] { color: var(--muted); }
+.field input:disabled { opacity: .55; cursor: not-allowed; }
 .field .row { display: flex; gap: 8px; }
 .field .row input { flex: 1; }
 .field.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

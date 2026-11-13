@@ -123,10 +123,8 @@ function bootstrapBundledRuntime() {
     const currentOk = fs.existsSync(currentExe) && sameTree;
     // 已有可用运行时（含在线版）就尊重它：AVD 用户数据就在该目录下，不能悄悄搬走
     if (currentOk) {
-      // 但仍把自动参数打开，旧配置里的硬编码 4G/4核/弃用 GPU 模式不能继续用
-      if (s.engine.gpuMode === 'swiftshader_indirect' || s.engine.memoryMB === 4096) {
-        store.saveSettings({ engine: { gpuMode: 'auto', autoMemory: true, memoryMB: 0, cores: 0 } });
-      }
+      const engineMigration = store.bundledRuntimeSettingsMigration(s.engine);
+      if (Object.keys(engineMigration).length) store.saveSettings({ engine: engineMigration });
       return;
     }
     // 包里带的是 Google Play 镜像才开兼容模式；AOSP 镜像带的是原生 x86_64 库

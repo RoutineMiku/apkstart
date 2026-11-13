@@ -145,7 +145,7 @@
         <div class="field">
           <label>本机自适应参数</label>
           <div class="inline-note" id="autoProfileText">正在检测…</div>
-          <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。</span>
+          <span class="sub">默认按本机配置选择内存、核心数、渲染后端和加速方式；启动失败会自动降级重试。高级参数可覆盖内存和核心数。</span>
         </div>
         <div class="field">
           <label>运行时占用（文件逻辑大小）</label>
@@ -280,15 +280,25 @@
           <label>系统镜像（ISO）</label>
           <input id="setSystemImage" type="text" placeholder="Android-x86 / Bliss OS 的 ISO 或 IMG 路径，留空使用默认位置" />
         </div>
+        <div class="field switch-field">
+          <div>
+            <label>自动分配内存与 CPU 核心</label>
+            <span class="sub">开启时按本机配置自动选择；关闭后可指定资源。修改后需重启运行时生效。</span>
+          </div>
+          <input type="checkbox" id="setAutoMemory" class="switch" />
+        </div>
         <div class="field two">
           <div>
             <label>内存 (MB，0 = 自动)</label>
-            <input id="setMemory" type="number" min="0" step="512" />
+            <input id="setMemory" type="number" min="0" max="8192" step="256" />
           </div>
           <div>
             <label>CPU 核心（0 = 自动）</label>
-            <input id="setCores" type="number" min="0" max="16" />
+            <input id="setCores" type="number" min="0" max="8" step="1" />
           </div>
+        </div>
+        <div class="field">
+          <span class="sub">手动内存范围 1536–8192 MB，核心数范围 1–8；任一项设为 0 时该项仍使用自动值。</span>
         </div>
         <div class="field">
           <label>空闲回收（分钟，0 = 不回收）</label>

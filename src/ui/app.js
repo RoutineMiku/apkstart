@@ -628,6 +628,8 @@ function fillSettings(s) {
   $('setSystemImage').value = s.runtime.isoPath || '';
   $('setMemory').value = s.engine.memoryMB;
   $('setCores').value = s.engine.cores;
+  $('setAutoMemory').checked = s.engine.autoMemory !== false;
+  syncResourceInputs();
   $('setIdle').value = s.engine.idleShutdownMinutes;
   $('setLiteMode').checked = s.engine.liteMode !== false;
   $('setPriorityMode').value = s.engine.priorityMode === 'performance' ? 'performance' : 'balanced';
@@ -647,6 +649,12 @@ function fillSettings(s) {
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
   $('setPortrait').value = d.portrait || '900x1600';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
+}
+
+function syncResourceInputs() {
+  const automatic = $('setAutoMemory').checked;
+  $('setMemory').disabled = automatic;
+  $('setCores').disabled = automatic;
 }
 
 async function openSettings() {
@@ -692,6 +700,10 @@ function bindSettings() {
   $('setSystemImage').addEventListener('change', (e) => save({ runtime: { isoPath: e.target.value.trim() } }));
   $('setMemory').addEventListener('change', (e) => save({ engine: { memoryMB: Number(e.target.value) || 0 } }));
   $('setCores').addEventListener('change', (e) => save({ engine: { cores: Number(e.target.value) || 0 } }));
+  $('setAutoMemory').addEventListener('change', async (e) => {
+    await save({ engine: { autoMemory: e.target.checked } });
+    syncResourceInputs();
+  });
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
   $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
   $('setPriorityMode').addEventListener('change', (e) => save({ engine: { priorityMode: e.target.value } }));
