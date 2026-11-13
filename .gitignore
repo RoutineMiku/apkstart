@@ -21,6 +21,7 @@ engine/platform-tools/
 engine/avd/
 engine/aehd/
 engine/_dl/
+engine/_tools/
 engine/*.iso
 engine/*.img
 engine/*.qcow2

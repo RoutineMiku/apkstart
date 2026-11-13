@@ -18,6 +18,8 @@ const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'engine');
 const OUT = path.join(ROOT, 'build', 'runtime');
 const MARK = path.join(OUT, '.prepared');
+// 预置的 /data 初始模板（已格式化的 ext4，xz 压缩）。见下方 userdata.img 处注释。
+const SEED_USERDATA = path.join(__dirname, 'seed', 'userdata.img.gz');
 
 function sizeOf(p) {
   try { return fs.statSync(p).size; } catch (_) { return 0; }
@@ -127,14 +129,25 @@ async function main() {
             if (!fs.statSync(src).isFile()) continue;
             // NOTICE.txt 是 GMS 许可文本（~20MB），运行不需要
             if (/^NOTICE\.txt$/i.test(f)) continue;
-            if (/^(system|vendor|cache)\.img$/i.test(f) && sizeOf(src) > 32 * 1024 * 1024) {
+            // userdata.img 用仓库里的预置 ext4 模板（seed）：
+            // 官方 sys-img 里那份是 1MB 全零，emulator 扩容时 e2fsck 必然 code=8，
+            // 分区停在 1MB → guest invalid magic → /data 只读 → 全新安装永远开不了机。
+            // 模板只在构建期生成一次（mke2fs），之后随代码走，CI 不需要额外工具链。
+            if (/^userdata\.img$/i.test(f) && fs.existsSync(SEED_USERDATA)) {
+              fs.copyFileSync(SEED_USERDATA, path.join(to, 'userdata.img.gz'));
+              console.log('userdata.img 使用预置 ext4 模板（build/seed）');
+              compressed += 1;
+              continue;
+            }
+            if (/^(system|vendor|cache|userdata)\.img$/i.test(f) && sizeOf(src) > 32 * 1024 * 1024) {
               // 大镜像压一份，原图不进包；已有 .xz（且大小合理）则跳过重复压缩
               const xz = path.join(to, `${f}.xz`);
               const xzSize = sizeOf(xz);
-              // 已有 .xz 且大小合理（>4MB 且不小于源文件的 5%）则跳过重复压缩。
-              // 注意不能用固定 32MB 阈值：vendor.img.gz 只有 ~21MB，会被误判为"无效"重压。
-              if (xzSize > 4 * 1024 * 1024 && xzSize > sizeOf(src) * 0.05) {
-                console.log(`跳过 ${f}（已有 .xz ${(xzSize / 1048576).toFixed(0)} MB）`);
+              // 已有 .xz 且大小合理（>1MB）则跳过重复压缩。
+              // 不能用固定大阈值或固定的「压缩比」判定：vendor.img.gz 只有 ~21MB、
+              // userdata.img 几乎是全零（压完可能只有几 MB），都会被误判成"无效"重压。
+              if (xzSize > 1024 * 1024) {
+                console.log(`跳过 ${f}（已有 .xz ${(xzSize / 1048576).toFixed(1)} MB）`);
                 compressed += 1;
                 continue;
               }
