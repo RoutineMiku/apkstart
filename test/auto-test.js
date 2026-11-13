@@ -372,6 +372,59 @@ const { friendlyInstallError, friendlyLaunchError } = require('../src/core/adb')
     assert(typeof w.present === 'function' && typeof w.getBounds === 'function');
   });
 
+  await test('xzFile 把源文件喂进 stdin 并产出可被运行时解压的镜像（CI 挂死回归）', async () => {
+    const { xzFile } = require('../build/prepare-runtime');
+    const zlib = require('zlib');
+    const crypto = require('crypto');
+    const dir = path.join(TMP, 'xz-regression');
+    fs.mkdirSync(dir, { recursive: true });
+    const src = path.join(dir, 'sample.img');
+    const payload = Buffer.concat([
+      Buffer.from('APKSTART-XZ-REGRESSION'),
+      crypto.randomBytes(256 * 1024),
+      Buffer.alloc(1024 * 1024),
+    ]);
+    fs.writeFileSync(src, payload);
+    const dest = path.join(dir, 'sample.img.xz');
+
+    const saved = { XZ_PRESET: process.env.XZ_PRESET, XZ_TIMEOUT_MS: process.env.XZ_TIMEOUT_MS };
+    process.env.XZ_PRESET = '1';           // 小样本走最快档，别拖慢整套测试
+    process.env.XZ_TIMEOUT_MS = '15000';  // 真挂死时 15s 内 kill，别把 CI 卡住
+    let timer;
+    try {
+      await Promise.race([
+        xzFile(src, dest),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('xzFile 25s 内未返回（stdin 没接 EOF？）')), 25000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+
+    const have = (p) => (fs.existsSync(p) ? fs.statSync(p).size : 0);
+    const out = have(dest) > 0 ? dest : dest.replace(/\.xz$/, '.gz');
+    assert(have(out) > 0, '压缩产物不能是 0 字节');
+    let back;
+    if (/\.xz$/i.test(out)) {
+      // 用与 src/core/provision.js 相同的解压器读回，保证构建产物与运行时兼容
+      const lzmaDir = path.dirname(require.resolve('@napi-rs/lzma'));
+      const { xz } = require(path.join(lzmaDir, 'index.js'));
+      const { Readable } = require('stream');
+      const webOut = xz.decompressStream(Readable.toWeb(fs.createReadStream(out)));
+      const chunks = [];
+      // eslint-disable-next-line no-restricted-syntax
+      for await (const c of Readable.fromWeb(webOut)) chunks.push(Buffer.from(c));
+      back = Buffer.concat(chunks);
+    } else {
+      back = zlib.gunzipSync(fs.readFileSync(out));
+    }
+    assert(back.equals(payload), '解压内容必须与源镜像逐字节一致');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }

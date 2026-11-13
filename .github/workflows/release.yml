@@ -83,10 +83,13 @@ jobs:
 
       # prepare-runtime 会把 system.img/vendor.img 压成 xz(LZMA2)。
       # CI runner 只有 2 核：XZ_PRESET=6 把压缩时间从 ~2h 降到 ~40min（体积 +3%）。
+      # XZ_TIMEOUT_MS 是看门狗：超时自动 kill 并落 gzip 兜底，
+      # 绝不重演「stdin 没接 EOF → 0 字节输出 → 挂死 3 小时」。
       - name: 准备运行时（xz 压缩，CI 降档加速）
         run: node build/prepare-runtime.js --force
         env:
           XZ_PRESET: '6'
+          XZ_TIMEOUT_MS: '3600000'
 
       - name: 构建完整版安装包
         run: npx electron-builder --win nsis -c.compression=normal

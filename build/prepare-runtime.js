@@ -39,7 +39,13 @@ async function gzipFile(src, dest) {
  *  实现说明（踩过的坑）：
  *   - 用 python 的 lzma（单线程、稳定）。@napi-rs/lzma 的 createCompressStream 在某些
  *     环境下会 0 字节挂死（实测挂 18 分钟无输出），只能当最后兜底且要带超时。
- *   - 找不到 python 时退回 gzip -9：体积大 ~30% 但绝不会挂，保证 CI 能出包。
+ *   - 【CI 曾挂死 3 小时的真因】源文件必须 pipe 到子进程的 stdin，并在读完后关闭。
+ *     python 侧是 `shutil.copyfileobj(sys.stdin.buffer, z)`，拿不到 EOF 就永远等输入，
+ *     stdout 一个字节都不写、进程永不退出。当时只接了 p.stdout，本地因为已有 .xz
+ *     被「跳过重复压缩」蒙过去，CI 全新目录必然中招。
+ *   - 再加看门狗：压缩器再出意外也会 kill 后落到 gzip 兜底，绝不让打包链路无限挂起。
+ *   - 找不到 python / 压缩失败 → gzip -9（体积略大但绝不会挂），
+ *     运行时 materializeImages 按扩展名选解压器，两种产物都认。
  */
 function findPython() {
   const { spawnSync } = require('child_process');
@@ -59,22 +65,49 @@ async function xzFile(src, dest) {
   const extreme = preset >= 9 && process.env.XZ_NO_EXTREME !== '1';
   const pyPreset = extreme ? '9|lzma.PRESET_EXTREME' : String(preset);
   const dictSize = preset >= 9 ? (1 << 27) : preset >= 6 ? (1 << 26) : (1 << 23);
+  // 默认 2 小时（3GB / 2 核 / preset 6 实测 ~40min）；超时即 kill 并落 gzip 兜底。
+  const timeoutMs = Math.max(5000, Number(process.env.XZ_TIMEOUT_MS || 2 * 60 * 60 * 1000));
   const py = findPython();
   if (py) {
     const { spawn } = require('child_process');
-    const ok = await new Promise((resolve) => {
-      const p = spawn(py, ['-c', [
-        'import lzma,sys,shutil',
-        `flt=[{"id":lzma.FILTER_LZMA2,"preset":${pyPreset},"dict_size":${dictSize}}]`,
-        'z=lzma.LZMAFile(sys.stdout.buffer,mode="wb",format=lzma.FORMAT_XZ,filters=flt)',
-        'shutil.copyfileobj(sys.stdin.buffer,z); z.close()',
-      ].join(';')], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
-      const out = fs.createWriteStream(dest);
-      p.stdout.pipe(out);
-      p.on('exit', (c) => resolve(c === 0));
-      p.on('error', () => resolve(false));
+    const p = spawn(py, ['-c', [
+      'import lzma,sys,shutil',
+      `flt=[{"id":lzma.FILTER_LZMA2,"preset":${pyPreset},"dict_size":${dictSize}}]`,
+      'z=lzma.LZMAFile(sys.stdout.buffer,mode="wb",format=lzma.FORMAT_XZ,filters=flt)',
+      'shutil.copyfileobj(sys.stdin.buffer,z); z.close()',
+    ].join(';')], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+
+    // 先挂监听，避免子进程在我们 await 之前就已经退出而丢掉 close 事件。
+    const exited = new Promise((resolve) => {
+      p.on('close', resolve);
+      p.on('error', () => resolve(-1));
     });
+    const watchdog = setTimeout(() => {
+      console.log(`  （xz 压缩超过 ${Math.round(timeoutMs / 60000)} 分钟，终止并改用 gzip -9）`);
+      try { p.kill(); } catch (_) { /* 已退出 */ }
+    }, timeoutMs);
+
+    let ok = false;
+    try {
+      // 关键：stdin 才是压缩器的输入。pipeline 读完 src 会 end(p.stdin)，
+      // python 收到 EOF 才 flush XZ 尾块并正常退出。
+      const streams = [
+        pipeline(fs.createReadStream(src), p.stdin),
+        pipeline(p.stdout, fs.createWriteStream(dest)),
+      ];
+      // 任一路异常（EPIPE / 写盘失败）立刻终止子进程，别等看门狗。
+      streams.forEach((s) => s.catch(() => { try { p.kill(); } catch (_) { /* noop */ } }));
+      const settled = await Promise.allSettled(streams);
+      const code = await exited;
+      ok = code === 0 && settled.every((r) => r.status === 'fulfilled') && sizeOf(dest) > 0;
+    } catch (_) {
+      ok = false;
+    } finally {
+      clearTimeout(watchdog);
+    }
     if (ok) return;
+    // 半个 .xz 留着会污染产物，必须删掉再走兜底。
+    try { fs.rmSync(dest, { force: true }); } catch (_) { /* ignore */ }
     console.log(`  （${py} 压缩失败，改用 gzip -9）`);
   } else {
     console.log('  （未找到 python，改用 gzip -9（体积略大但可靠））');
@@ -140,14 +173,15 @@ async function main() {
               continue;
             }
             if (/^(system|vendor|cache|userdata)\.img$/i.test(f) && sizeOf(src) > 32 * 1024 * 1024) {
-              // 大镜像压一份，原图不进包；已有 .xz（且大小合理）则跳过重复压缩
+              // 大镜像压一份，原图不进包；已有压缩产物（且大小合理）则跳过重复压缩
               const xz = path.join(to, `${f}.xz`);
-              const xzSize = sizeOf(xz);
-              // 已有 .xz 且大小合理（>1MB）则跳过重复压缩。
-              // 不能用固定大阈值或固定的「压缩比」判定：vendor.img.gz 只有 ~21MB、
-              // userdata.img 几乎是全零（压完可能只有几 MB），都会被误判成"无效"重压。
-              if (xzSize > 1024 * 1024) {
-                console.log(`跳过 ${f}（已有 .xz ${(xzSize / 1048576).toFixed(1)} MB）`);
+              const gz = path.join(to, `${f}.gz`);
+              // gzip 兜底路径产出的是 .gz，也必须认，否则每次重建都会把 3GB 重压一遍。
+              // 阈值用 >1MB 而非压缩比：vendor.img.gz 只有 ~21MB、userdata.img 几乎全零，
+              // 用固定大阈值或「压缩比」判定都会把这些合法产物误判成无效而重压。
+              const existing = [xz, gz].find((p) => sizeOf(p) > 1024 * 1024);
+              if (existing) {
+                console.log(`跳过 ${f}（已有 ${path.extname(existing)} ${(sizeOf(existing) / 1048576).toFixed(1)} MB）`);
                 compressed += 1;
                 continue;
               }
@@ -177,4 +211,8 @@ async function main() {
   console.log(`完成：build/runtime（${(total / 1073741824).toFixed(2)} GB，压缩了 ${gzCount} 个大镜像）`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
+// 供回归测试直接调用（不触发 main 的整包准备流程）
+module.exports = { xzFile, gzipFile };
