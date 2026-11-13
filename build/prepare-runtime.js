@@ -215,4 +215,4 @@ if (require.main === module) {
   main().catch((e) => { console.error(e); process.exit(1); });
 }
 // 供回归测试直接调用（不触发 main 的整包准备流程）
-module.exports = { xzFile, gzipFile };
+module.exports = { xzFile, gzipFile, findPython };

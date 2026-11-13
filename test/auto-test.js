@@ -410,15 +410,21 @@ const { friendlyInstallError, friendlyLaunchError } = require('../src/core/adb')
     assert(have(out) > 0, '压缩产物不能是 0 字节');
     let back;
     if (/\.xz$/i.test(out)) {
-      // 用与 src/core/provision.js 相同的解压器读回，保证构建产物与运行时兼容
-      const lzmaDir = path.dirname(require.resolve('@napi-rs/lzma'));
-      const { xz } = require(path.join(lzmaDir, 'index.js'));
-      const { Readable } = require('stream');
-      const webOut = xz.decompressStream(Readable.toWeb(fs.createReadStream(out)));
-      const chunks = [];
-      // eslint-disable-next-line no-restricted-syntax
-      for await (const c of Readable.fromWeb(webOut)) chunks.push(Buffer.from(c));
-      back = Buffer.concat(chunks);
+      // 不依赖 @napi-rs/lzma 原生 binding：CI 的 Node 20 job 会因
+      // npm optional dependencies 的已知 bug 加载不到它（Node 22 正常）。
+      // 这里用与压缩端同一个 python 的 lzma 读回，并校验 XZ 魔数，
+      // 运行时的解压兼容性由真实安装包端到端验证覆盖。
+      assert(fs.readFileSync(out).subarray(0, 6).equals(
+        Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]),
+      ), '必须是合法的 XZ 容器');
+      const { findPython } = require('../build/prepare-runtime');
+      const py = findPython();
+      assert(py, '产出 XZ 却找不到 python，无法校验');
+      const backPath = path.join(dir, 'sample.img.back');
+      require('child_process').execFileSync(py, ['-c',
+        'import lzma,sys;open(sys.argv[1],"wb").write(lzma.open(sys.argv[2],"rb").read())',
+        backPath, out], { stdio: 'ignore' });
+      back = fs.readFileSync(backPath);
     } else {
       back = zlib.gunzipSync(fs.readFileSync(out));
     }
