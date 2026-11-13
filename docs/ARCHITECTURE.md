@@ -109,21 +109,44 @@ Windows 的每一次鼠标事件都要同步等这个线程回来，最长 4 秒
 前台几乎抢不到资源。
 
 修复：
-- 全局钩子**默认关闭**（`engine.mouseSideButtons`），开启时改装在**专用消息线程**
-  （`GetMessage` 循环）上，窗口失焦/关闭立即卸载；
+- 钩子不再无条件常驻：只装到**专用消息线程**（`GetMessage` 循环）上，且只在
+  应用窗口处于前台、至少一项鼠标映射开启时安装；失焦/关闭立即卸载；回调只处理
+  7 个目标消息，其余（含所有左键事件）一次 `CallNextHookEx` 直接放行；
 - 服务主循环 `Poll(4000)` → `Poll(50)`；
 - `EnumWindows` + `SetWindowPos(SWP_FRAMECHANGED)` 从「每 2 秒永久」改为
   「embed 后 8 秒内，且不再强制重算非客户区」；
 - 首次部署延后 20 秒，避免与冷启动抢 I/O。
 
-### 可配置项（设置 → 性能与轻量容器）
+### 鼠标键位（左键确认 / 右键返回 / 滚轮滑动）
+
+应用窗口里嵌的是模拟器的 Qt 子窗口，原生映射如下：
+
+| 输入 | Qt 原生行为 | ApkStart 的处理 |
+| --- | --- | --- |
+| 左键 | 手指点击 / 按住拖动 = 滑动 | **完全不拦截**，直接放行；这就是「确认」 |
+| 右键 | 也被当成一次点击，容易误触 | 拦下 `WM_RBUTTONDOWN/UP/DBLCLK`，发 `input keyevent 4`（返回） |
+| 滚轮 | 每格单独发一次触摸事件，画面抽搐 | 拦下 `WM_MOUSEWHEEL/MOUSEHWHEEL`，按 60~90ms 窗口合并成一条 `input swipe` |
+| 侧键 | 无 | 可选：映射为返回 / 前进（默认关） |
+
+滚轮的合并发生在 `win/agent.ps1`（`PushWheel` / `FlushWheel`），翻译发生在
+`core/pointer.js`（`WheelRouter` → `wheelToSwipe`）。注入走 `AdbClient.input()`
+的**常驻 `adb shell`**，用 `echo __APKSTART_<id>__` 做回包与背压，
+不会每格滚动都 `execFile` 一个 adb 进程，也不会让滑动命令在 shell 里排长队。
+坐标按光标在 LCD 内的归一化位置映射，横滚生成水平滑动，转屏后自动刷新分辨率。
+
+钩子只在应用窗口前台时安装，切回桌面或关窗口即卸载；把右键返回、平滑滚轮、
+侧键三项全关掉，就一个全局钩子都不装。
+
+### 可配置项（设置 → 鼠标键位 / 性能与轻量容器）
 
 | 项 | 默认 | 说明 |
 | --- | --- | --- |
+| `engine.mouseRightBack` | `true` | 右键 = 安卓返回；关掉则恢复 Qt 的「右键也当点击」 |
+| `engine.mouseWheelMode` | `smooth` | `smooth` 合并注入 / `native` 交给 Qt 逐格处理 / `off` 不拦截 |
+| `engine.mouseSideButtons` | `false` | 侧键返回 / 前进；三项全关时不安装全局钩子 |
 | `engine.liteMode` | `true` | 收敛 vCPU 配额；关掉后按机器配置自动分配更多核心 |
 | `engine.priorityMode` | `balanced` | `performance` 时 qemu 用 Normal 优先级 |
 | `engine.deepTrim` | `false` | 额外 `pm disable-user` 一批系统后台包；关闭时自动 `pm enable` 恢复 |
-| `engine.mouseSideButtons` | `false` | 是否安装全局鼠标钩子（有系统级输入延迟风险） |
 
 深度裁剪刻意不动 `gms` / `systemui` / webview / 输入法等必需组件
 （见 `container.NEVER_TRIM`），避免依赖推送与登录的 App 反复弹错。

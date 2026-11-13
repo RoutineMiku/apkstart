@@ -31,3 +31,12 @@ jobs:
 
       - name: 运行测试
         run: npm test
+
+      # 直接驱动 agent.ps1 内嵌 C# 的钩子回调，防止键位映射被改坏
+      - name: 鼠标钩子逻辑冒烟测试
+        shell: powershell
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          $out = & .\test\pointer-hook-logic.ps1
+          $out | ForEach-Object { Write-Host $_ }
+          if (-not ($out -contains 'POINTER_HOOK_LOGIC_OK')) { exit 1 }

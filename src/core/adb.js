@@ -3,7 +3,7 @@
  * adb 客户端封装
  * 只做 apkstart 需要的那部分：安装 / 启动 / 停止 / 卸载 / 文件同步 / 截图
  */
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -131,6 +131,9 @@ class AdbClient {
   constructor({ adbPath, serial }) {
     this.adbPath = adbPath || 'adb';
     this.serial = serial || '';
+    this._input = null;        // 常驻 `adb shell` 进程
+    this._inputSeq = 0;
+    this._waiters = new Map(); // id -> { resolve, reject, timer, token }
   }
 
   static resolveAdb(explicit, appRoot) {
@@ -151,6 +154,10 @@ class AdbClient {
     return a.concat(args);
   }
 
+  _adbEnv() {
+    return { ...process.env, ANDROID_ADB_SERVER_PORT: process.env.ANDROID_ADB_SERVER_PORT || '5044' };
+  }
+
   exec(args, { timeout = 30000, withSerial = true, binary = false } = {}) {
     return new Promise((resolve, reject) => {
       const finalArgs = this._args(args, withSerial);
@@ -161,7 +168,7 @@ class AdbClient {
         windowsHide: true,
         // 与运行时模拟器共用专用 adb server 端口（默认 5044），与 5037 上的
         // WSA / 第三方模拟器 adb 隔离，避免注册被反复踢掉导致设备 offline
-        env: { ...process.env, ANDROID_ADB_SERVER_PORT: process.env.ANDROID_ADB_SERVER_PORT || '5044' },
+        env: this._adbEnv(),
       }, (err, stdout, stderr) => {
         if (err) {
           // adb install 的失败原因写在 stdout 且退出码非 0；
@@ -180,6 +187,98 @@ class AdbClient {
   async shell(cmd, opts = {}) {
     const { stdout } = await this.exec(['shell', cmd], opts);
     return typeof stdout === 'string' ? stdout.trim() : stdout;
+  }
+
+  /**
+   * 常驻输入通道。
+   * 滚轮/返回是高频输入：每格滚轮都 execFile 一个 adb 会起一堆进程，
+   * 桌面会明显发顿。这里复用一条 `adb shell`，每行一条命令，并在末尾
+   * echo 一个结束标记 —— 既知道命令何时真正跑完，也天然形成背压，
+   * 不会让滑动命令在 shell 里排成一长队。
+   */
+  _inputSession() {
+    const old = this._input;
+    if (old && old.exitCode === null && !old.killed && old.stdin && old.stdin.writable) return old;
+    if (old) this.disposeInput();
+
+    const p = spawn(this.adbPath, this._args(['shell'], true), {
+      stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: this._adbEnv(),
+    });
+    this._input = p;
+    let buf = '';
+    p.stdout.setEncoding('utf8');
+    p.stdout.on('data', (chunk) => {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        for (const [id, w] of this._waiters) {
+          // 必须整行等于标记：某些 shell 会把整条命令行回显出来，
+          // 用 contains 会把「刚写进去」误判成「已执行完」，滑动就会堆积。
+          if (line === w.token) {
+            this._waiters.delete(id);
+            clearTimeout(w.timer);
+            w.resolve(true);
+            break;
+          }
+        }
+      }
+    });
+    p.stderr.on('data', () => { /* 忽略：设备离线等信息由调用方兜底 */ });
+    p.stdin.on('error', () => { /* 断开时由 exit 统一清理 */ });
+    p.on('error', () => { this._failWaiters(new Error('adb shell 启动失败')); });
+    p.on('exit', () => {
+      if (this._input === p) this._input = null;
+      this._failWaiters(new Error('adb shell 已退出'));
+    });
+    return p;
+  }
+
+  _failWaiters(err) {
+    for (const [, w] of this._waiters) {
+      clearTimeout(w.timer);
+      w.reject(err);
+    }
+    this._waiters.clear();
+  }
+
+  /** 执行一条白名单内的 input 命令；失败会回收会话，调用方可回退到一次性 adb */
+  async input(cmd, { timeout = 4000 } = {}) {
+    const { isInputCommand } = require('./pointer');
+    if (!isInputCommand(cmd)) throw new Error('非法的输入命令');
+    const p = this._inputSession();
+    const id = ++this._inputSeq;
+    const token = `__APKSTART_${id}__`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._waiters.delete(id);
+        this.disposeInput();
+        reject(new Error('input 命令超时'));
+      }, timeout);
+      this._waiters.set(id, { resolve, reject, timer, token });
+      try {
+        p.stdin.write(`${cmd}; echo ${token}\n`);
+      } catch (e) {
+        this._waiters.delete(id);
+        clearTimeout(timer);
+        reject(e);
+      }
+    });
+  }
+
+  disposeInput() {
+    const p = this._input;
+    this._input = null;
+    for (const [, w] of this._waiters) {
+      clearTimeout(w.timer);
+      w.reject(new Error('输入通道已关闭'));
+    }
+    this._waiters.clear();
+    if (p) {
+      try { p.stdin.end(); } catch (_) { /* ignore */ }
+      try { p.kill(); } catch (_) { /* ignore */ }
+    }
   }
 
   async version() {
@@ -636,14 +735,18 @@ class AdbClient {
     return true;
   }
 
-  /** 鼠标侧键 / 快捷键映射 */
-  async keyBack() {
-    await this.shell('input keyevent 4', { timeout: 6000 }).catch(() => {});
+  /** 鼠标右键 / 侧键 / 快捷键映射：走常驻输入通道，右键返回不再有 100ms 级延迟 */
+  async _key(code) {
+    try {
+      await this.input(`input keyevent ${code}`);
+    } catch (_) {
+      // 运行时刚重启、常驻 shell 还没连上时，退回一次性 adb，不能把这次点击丢掉
+      await this.shell(`input keyevent ${code}`, { timeout: 6000 }).catch(() => {});
+    }
   }
 
-  async keyForward() {
-    await this.shell('input keyevent 125', { timeout: 6000 }).catch(() => {});
-  }
+  async keyBack() { return this._key(4); }
+  async keyForward() { return this._key(125); }
 
   /**
    * 横竖屏切换。

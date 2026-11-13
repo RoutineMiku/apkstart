@@ -89,6 +89,8 @@ class Runtime {
       || (this.settings.engine.mode === 'attach' ? this.settings.device : this.emuSerial);
     const adbPath = this.adbPath();
     if (!this._client || this._client.serial !== useSerial || this._client.adbPath !== adbPath) {
+      // 换端口/换 adb 时别把旧的常驻 adb shell 留在后台占着连接
+      if (this._client && this._client.disposeInput) this._client.disposeInput();
       this._client = new AdbClient({ adbPath, serial: useSerial });
     }
     return this._client;
@@ -915,6 +917,7 @@ class Runtime {
 
   dispose() {
     if (this._watchdog) clearInterval(this._watchdog);
+    if (this._client && this._client.disposeInput) this._client.disposeInput();
     if (this.emulator.running()) {
       try { this.emulator.proc.kill(); } catch (_) { /* ignore */ }
     }

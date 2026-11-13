@@ -4,7 +4,9 @@
 #     no emulator sidebar, no emulator title bar);
 #   * hides the floating emulator toolbar window that shows the volume/camera/back rail;
 #   * rotates the device with Ctrl+Left / Ctrl+Right and reports the new window size;
-#   * runs a WH_MOUSE_LL hook so mouse side buttons become Android BACK / FORWARD.
+#   * runs an opt-in WH_MOUSE_LL hook so right click becomes Android BACK, wheel
+#     becomes a coalesced swipe, and (optionally) side buttons become BACK / FORWARD.
+#     Left click is deliberately left alone: Qt already maps it to a finger tap.
 # Everything is P/Invoke from the .NET Framework that ships with Windows 10/11,
 # so there is no native binary to compile, sign or ship.
 # Protocol: TCP on 127.0.0.1, one JSON object per line. First stdout line is "PORT=<n>".
@@ -14,6 +16,8 @@ $ErrorActionPreference = 'Stop'
 $src = @'
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -60,6 +64,7 @@ public class ApkAgent
     [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr h, ref POINT p);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
 
     const int GWL_STYLE = -16;
     const int GWL_EXSTYLE = -20;
@@ -95,6 +100,20 @@ public class ApkAgent
     static readonly ConcurrentQueue<string> _events = new ConcurrentQueue<string>();
     static long _lastToolSweep = 0;
     static long _embedAt = 0;
+
+    // Hook options. All three default to OFF: an "hook on" without options must
+    // never swallow anybody's clicks. JS sends the real config on every enable.
+    static volatile int _optRight = 0;
+    static volatile int _optWheel = 0;
+    static volatile int _optSide = 0;
+
+    // Wheel coalescing: Qt would turn every single notch into a separate touch
+    // gesture (visible stutter). We accumulate deltas for a short window and
+    // hand one normalized position to the JS side, which injects a single swipe.
+    static readonly object _wheelLock = new object();
+    static int _wheelDx = 0, _wheelDy = 0;
+    static double _wheelNx = 0.5, _wheelNy = 0.5;
+    static long _wheelFirst = 0, _wheelLast = 0;
 
     // ------------------------------------------------------------------ window discovery
     static string ClassOf(IntPtr h)
@@ -240,24 +259,120 @@ public class ApkAgent
         }
     }
 
-    // ------------------------------------------------------------------ mouse hook
+    // ------------------------------------------------------------------ mouse mapping
+    const int WM_RBUTTONDOWN = 0x0204;
+    const int WM_RBUTTONUP = 0x0205;
+    const int WM_RBUTTONDBLCLK = 0x0206;
+    const int WM_MOUSEWHEEL = 0x020A;
+    const int WM_XBUTTONDOWN = 0x020B;
+    const int WM_XBUTTONUP = 0x020C;
+    const int WM_MOUSEHWHEEL = 0x020E;
+
+    static readonly Stopwatch _clock = Stopwatch.StartNew();
+    static long NowMs() { return _clock.ElapsedMilliseconds; }
+
+    // Only react inside the embedded LCD while OUR window is the foreground root.
+    // GetAncestor(GA_ROOT) covers Chromium child windows and the Qt framebuffer.
+    static bool InOurLcd(POINT pt, out RECT r)
+    {
+        r = new RECT();
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || _host == IntPtr.Zero) return false;
+        if (GetAncestor(fg, 2) != _host) return false;   // 2 = GA_ROOT
+        IntPtr e = _emu;
+        if (e != IntPtr.Zero && GetWindowRect(e, out r))
+        {
+            // Qt keeps an 8px grey pad around the real LCD; embed() pushes it out.
+            return pt.X >= r.L + 8 && pt.X <= r.R - 8 && pt.Y >= r.T + 8 && pt.Y <= r.B - 8;
+        }
+        // Before embed (or if FindEmulator failed) fall back to the host window
+        // minus its 38px title bar. Approximate on HiDPI, but only a fallback.
+        if (!GetWindowRect(_host, out r)) return false;
+        return pt.X >= r.L + 4 && pt.X <= r.R - 4 && pt.Y >= r.T + 40 && pt.Y <= r.B - 4;
+    }
+
+    static string Num(double v) { return v.ToString("0.####", CultureInfo.InvariantCulture); }
+
+    static void PushWheel(int dx, int dy, POINT pt, RECT r)
+    {
+        int w = r.R - r.L - 16, h = r.B - r.T - 16;
+        double nx = w > 0 ? (pt.X - r.L - 8.0) / w : 0.5;
+        double ny = h > 0 ? (pt.Y - r.T - 8.0) / h : 0.5;
+        if (nx < 0) nx = 0; if (nx > 1) nx = 1;
+        if (ny < 0) ny = 0; if (ny > 1) ny = 1;
+        long now = NowMs();
+        lock (_wheelLock)
+        {
+            if (_wheelDx == 0 && _wheelDy == 0) _wheelFirst = now;
+            _wheelDx += dx;
+            _wheelDy += dy;
+            _wheelNx = nx;
+            _wheelNy = ny;
+            _wheelLast = now;
+        }
+    }
+
+    // Drained from the socket loop. Emit after 60ms of quiet, but never let a
+    // continuous spin starve the queue (hard cap 90ms from the first notch).
+    static void FlushWheel(bool force)
+    {
+        int dx = 0, dy = 0;
+        double nx = 0.5, ny = 0.5;
+        long now = NowMs();
+        lock (_wheelLock)
+        {
+            if (_wheelDx == 0 && _wheelDy == 0) return;
+            if (!force && now - _wheelLast < 60 && now - _wheelFirst < 90) return;
+            dx = _wheelDx; dy = _wheelDy; nx = _wheelNx; ny = _wheelNy;
+            _wheelDx = 0; _wheelDy = 0;
+        }
+        _events.Enqueue("{\"ev\":\"wheel\",\"dx\":" + dx + ",\"dy\":" + dy
+            + ",\"nx\":" + Num(nx) + ",\"ny\":" + Num(ny) + "}");
+    }
+
+    static void ResetWheel()
+    {
+        lock (_wheelLock) { _wheelDx = 0; _wheelDy = 0; }
+    }
+
+    // The callback must stay microscopic: Windows synchronously waits for it on
+    // EVERY mouse event of EVERY process. Anything not one of our 7 messages
+    // (including all left-button events) is a single CallNextHookEx.
     static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0)
         {
-            int msg = (int)wParam;   // 0x020B = WM_XBUTTONDOWN
-            if (msg == 0x020B)
+            int msg = (int)wParam;
+            bool right = msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK;
+            bool wheel = msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL;
+            bool xbut = msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP;
+            if (!right && !wheel && !xbut) return CallNextHookEx(_hook, nCode, wParam, lParam);
+            if ((right && _optRight == 0) || (wheel && _optWheel == 0) || (xbut && _optSide == 0))
+                return CallNextHookEx(_hook, nCode, wParam, lParam);
+
+            MSLLHOOKSTRUCT d = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+            RECT r;
+            if (!InOurLcd(d.Pt, out r)) return CallNextHookEx(_hook, nCode, wParam, lParam);
+
+            if (right)
             {
-                MSLLHOOKSTRUCT d = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
-                int button = (d.MouseData >> 16) & 0xFFFF;
-                IntPtr fg = GetForegroundWindow();
-                bool ours = (fg != IntPtr.Zero) && (_host != IntPtr.Zero) && (fg == _host || GetParent(fg) == _host || fg == _emu);
-                if (ours)
-                {
-                    _events.Enqueue(button == 1 ? "back" : "forward");
-                    return (IntPtr)1;   // swallow so the app never sees a raw side click
-                }
+                // Qt maps a right click to a plain finger tap: swallow it, emit BACK.
+                if (msg == WM_RBUTTONDOWN) _events.Enqueue("{\"ev\":\"back\"}");
+                return (IntPtr)1;
             }
+            if (wheel)
+            {
+                int delta = (short)((d.MouseData >> 16) & 0xFFFF);
+                if (msg == WM_MOUSEWHEEL) PushWheel(0, delta, d.Pt, r);
+                else PushWheel(delta, 0, d.Pt, r);
+                return (IntPtr)1;
+            }
+            if (msg == WM_XBUTTONDOWN)
+            {
+                int button = (d.MouseData >> 16) & 0xFFFF;
+                _events.Enqueue(button == 1 ? "{\"ev\":\"back\"}" : "{\"ev\":\"forward\"}");
+            }
+            return (IntPtr)1;
         }
         return CallNextHookEx(_hook, nCode, wParam, lParam);
     }
@@ -266,8 +381,8 @@ public class ApkAgent
     // EVERY mouse event of EVERY application. It must therefore live on a thread whose
     // only job is pumping messages. Installing it on the socket-serving thread (which
     // used to block up to 4s in Poll) made the whole desktop pointer lag and drift.
-    // It is opt-in now: the JS side only calls "hook on" when the user explicitly
-    // enables mouse side buttons in settings. Default = no global hook at all.
+    // It is scoped now: JS installs it only while an app window is foreground, and
+    // the callback ignores events outside the embedded LCD.
     static void HookThreadProc()
     {
         _hookTid = GetCurrentThreadId();
@@ -299,6 +414,8 @@ public class ApkAgent
     static void HookOff()
     {
         _hookRun = false;
+        _optRight = 0; _optWheel = 0; _optSide = 0;
+        ResetWheel();
         if (_hook != IntPtr.Zero) { UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
         if (_hookTid != 0) PostThreadMessage(_hookTid, 0x0012, IntPtr.Zero, IntPtr.Zero); // WM_QUIT
         _hookThread = null;
@@ -370,6 +487,7 @@ public class ApkAgent
         while (run)
         {
             Pump();
+            FlushWheel(false);
 
             string ev;
             while (_events.TryDequeue(out ev))
@@ -444,6 +562,11 @@ public class ApkAgent
                     }
                     else if (cmd == "hook")
                     {
+                        // Options are re-sent on every enable, so changing settings
+                        // while the hook is live needs no reinstall / no thread churn.
+                        _optRight = L(line, "right") == 1 ? 1 : 0;
+                        _optWheel = L(line, "wheel") == 1 ? 1 : 0;
+                        _optSide = L(line, "side") == 1 ? 1 : 0;
                         if (L(line, "on") == 1) HookOn(); else HookOff();
                         Reply(sock, "{\"ok\":true,\"hooked\":" + (_hook != IntPtr.Zero ? "true" : "false") + "}");
                     }

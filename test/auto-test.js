@@ -23,7 +23,8 @@ function assert(c, m) { if (!c) throw new Error(m || '断言失败'); }
 
 const doctor = require('../src/core/doctor');
 const layers = require('../src/core/layers');
-const { friendlyInstallError, friendlyLaunchError } = require('../src/core/adb');
+const pointer = require('../src/core/pointer');
+const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src/core/adb');
 
 (async () => {
   console.log('\n[doctor.js 自动参数]');
@@ -544,6 +545,128 @@ const { friendlyInstallError, friendlyLaunchError } = require('../src/core/adb')
     const r = await a.setHook(false);
     assert(r && r.hooked === false, '关闭应返回 hooked=false');
     assert(a.ready === null, '默认关闭时不能为此启动常驻代理进程');
+  });
+
+  console.log('\n[鼠标键位映射]');
+
+  await test('默认与旧配置迁移：右键返回 + 平滑滚轮开启，侧键关闭', () => {
+    const store = require('../src/core/store');
+    const d = pointer.pointerOptions(store.getSettings());
+    assert(d.rightBack === true, '右键返回默认开');
+    assert(d.wheel === 'smooth', '滚轮默认平滑');
+    assert(d.side === false, '侧键默认关');
+    assert(d.enabled === true, '至少右键映射需要钩子');
+    // 老 settings.json 里没有新键时也要得到同样的结果
+    assert(pointer.pointerOptions({ engine: { liteMode: true } }).rightBack === true);
+    const off = pointer.pointerOptions({ engine: { mouseRightBack: false, mouseWheelMode: 'off', mouseSideButtons: false } });
+    assert(off.enabled === false, '全部关掉后不应再装钩子');
+    const native = pointer.pointerOptions({ engine: { mouseRightBack: false, mouseWheelMode: 'native', mouseSideButtons: false } });
+    assert(native.enabled === false, '原生滚轮不需要钩子');
+  });
+
+  await test('hookOptions 收敛配置，关闭时所有子开关一起归零', () => {
+    const on = pointer.hookOptions({ enabled: true, rightBack: true, wheel: true, side: false });
+    assert(on.rightBack && on.wheel && !on.side);
+    const off = pointer.hookOptions({ enabled: false, rightBack: true, wheel: true, side: true });
+    assert(!off.rightBack && !off.wheel && !off.side, 'enabled=false 必须彻底不拦事件');
+    assert(pointer.hookOptions(true).side === true, '兼容旧布尔写法（侧键）');
+    assert(pointer.hookOptions(false).enabled === false);
+  });
+
+  await test('滚轮方向：向下滚=手指上滑，向上滚=手指下滑，坐标不越界', () => {
+    const down = pointer.wheelToSwipe({ dy: -120, nx: 0.5, ny: 0.5, width: 900, height: 1600 });
+    assert(down && down.y1 > down.y2, '滚轮向下应让内容上移（手指上滑）');
+    const up = pointer.wheelToSwipe({ dy: 120, nx: 0.5, ny: 0.5, width: 900, height: 1600 });
+    assert(up && up.y1 < up.y2, '滚轮向上应让内容下移（手指下滑）');
+    assert(pointer.wheelToSwipe({ dx: 0, dy: 0 }) === null, '零位移不产生命令');
+    for (const s of [down, up]) {
+      assert([s.x1, s.x2].every((v) => v >= 1 && v <= 899), 'x 不能越界');
+      assert([s.y1, s.y2].every((v) => v >= 1 && v <= 1599), 'y 不能越界');
+      assert(s.duration >= 100 && s.duration <= 240, '滑动时长应有上限');
+    }
+    const big = pointer.wheelToSwipe({ dy: -12000, nx: 0, ny: 0, width: 900, height: 1600 });
+    assert(big.y1 - big.y2 <= Math.round(1600 * 0.78), '快滚不能无限拉长手势');
+    const horiz = pointer.wheelToSwipe({ dx: 120, dy: 0, width: 900, height: 1600 });
+    assert(horiz && horiz.x1 > horiz.x2 && horiz.y1 === horiz.y2, '横向滚轮应产生水平滑动');
+  });
+
+  await test('input 命令白名单：只放行内部拼出的命令，挡住注入', async () => {
+    assert(pointer.isInputCommand('input keyevent 4'));
+    assert(pointer.isInputCommand(pointer.swipeToCommand(pointer.wheelToSwipe({ dy: -120 }))));
+    assert(!pointer.isInputCommand('input keyevent 4; rm -rf /sdcard'));
+    assert(!pointer.isInputCommand('input swipe 1 2 3 4 100 && reboot'));
+    assert(!pointer.isInputCommand('sh -c anything'));
+    const c = new AdbClient({ adbPath: 'adb', serial: 'test' });
+    let blocked = false;
+    try { await c.input('input keyevent 4; rm -rf /'); } catch (e) { blocked = /非法/.test(e.message); }
+    assert(blocked, '非法命令必须在拉起 adb 之前被挡下');
+    assert(c._input === null, '被挡下的命令不能创建常驻会话');
+  });
+
+  await test('返回键优先走常驻输入通道，失败才回退一次性 adb', async () => {
+    const c = new AdbClient({ adbPath: 'adb', serial: 'test' });
+    const used = [];
+    c.input = async (cmd) => { used.push(cmd); };
+    c.shell = async () => { used.push('shell'); };
+    await c.keyBack();
+    assert(used[0] === 'input keyevent 4' && !used.includes('shell'), '正常路径不应 spawn adb');
+    const c2 = new AdbClient({ adbPath: 'adb', serial: 'test' });
+    const used2 = [];
+    c2.input = async () => { throw new Error('offline'); };
+    c2.shell = async (cmd) => { used2.push(cmd); return ''; };
+    await c2.keyForward();
+    assert(used2[0] === 'input keyevent 125', '常驻通道失败必须兜底，别丢掉这次点击');
+  });
+
+  await test('WheelRouter 把连续滚动合并成一条滑动命令', async () => {
+    const cmds = [];
+    const r = new pointer.WheelRouter({
+      inject: async (cmd) => { cmds.push(cmd); },
+      getSize: () => ({ width: 900, height: 1600 }),
+      flushMs: 10,
+    });
+    r.push({ dx: 0, dy: -120, nx: 0.5, ny: 0.5 });
+    r.push({ dx: 0, dy: -120, nx: 0.5, ny: 0.5 });
+    r.push({ dx: 0, dy: -120, nx: 0.5, ny: 0.4 });
+    await r.flush();
+    assert(cmds.length === 1, `3 格滚动应合并成 1 条命令，实际 ${cmds.length}`);
+    assert(pointer.isInputCommand(cmds[0]), '必须产出合法的 input swipe');
+    const m = /^input swipe (\d+) (\d+) (\d+) (\d+)/.exec(cmds[0]);
+    assert(m && Number(m[2]) > Number(m[4]), '合并后仍是向下滚的方向');
+    r.dispose();
+    r.push({ dy: -120 });
+    await r.flush();
+    assert(cmds.length === 1, 'dispose 后不能再注入');
+  });
+
+  await test('代理脚本：右键/滚轮拦截、滚轮合并、前台限定与专用线程', () => {
+    const ps1 = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'win', 'agent.ps1'), 'utf8');
+    assert(/WM_RBUTTONDOWN/.test(ps1) && /WM_MOUSEWHEEL/.test(ps1), '必须处理右键与滚轮');
+    assert(/WM_MOUSEHWHEEL/.test(ps1), '横向滚轮也要支持');
+    assert(/PushWheel\(/.test(ps1) && /FlushWheel\(false\)/.test(ps1), '滚轮必须合并后上报');
+    assert(/GetAncestor\(fg, 2\)/.test(ps1), '必须按前台根窗口限定作用域');
+    assert(/new Thread\(HookThreadProc\)/.test(ps1) && /GetMessage\(out MSG/.test(ps1), '钩子必须在专用消息线程');
+    assert(!/Poll\(4000,\s*SelectMode\.SelectRead\)/.test(ps1), '主循环不能长阻塞');
+    assert(/_optRight == 0/.test(ps1) && /_optWheel == 0/.test(ps1), '未配置的映射不能拦事件');
+    const appwinJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'appwin.js'), 'utf8');
+    assert(/pointerConfig/.test(appwinJs) && /refreshPointer/.test(appwinJs), '设置变化要能即时同步钩子');
+    const uiHtml = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui', 'index.html'), 'utf8');
+    assert(/setMouseRightBack/.test(uiHtml) && /setMouseWheelMode/.test(uiHtml), '设置页需暴露键位开关');
+  });
+
+  await test('WinAgent.setHook 把键位配置一起下发，且关闭时不拉起代理', async () => {
+    const { WinAgent } = require('../src/core/agent');
+    const a = new WinAgent();
+    const sent = [];
+    a.call = async (obj) => { sent.push(obj); return { ok: true, hooked: true }; };
+    const on = await a.setHook(true, { rightBack: true, wheel: true, side: false });
+    assert(on.hooked === true && sent.length === 1, '开启应只发一次命令');
+    assert(sent[0].right === 1 && sent[0].wheel === 1 && sent[0].side === 0, '配置必须随 hook 命令下发');
+    await a.setHook(false);
+    assert(sent[1].on === 0 && a.hooked === false, '关闭要卸载钩子');
+    const b = new WinAgent();
+    const r = await b.setHook(false);
+    assert(r.hooked === false && b.ready === null, '默认关闭时不能启动 PowerShell');
   });
 
   console.log(results.join('\n'));

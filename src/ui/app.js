@@ -632,6 +632,9 @@ function fillSettings(s) {
   $('setLiteMode').checked = s.engine.liteMode !== false;
   $('setPriorityMode').value = s.engine.priorityMode === 'performance' ? 'performance' : 'balanced';
   $('setDeepTrim').checked = !!s.engine.deepTrim;
+  $('setMouseRightBack').checked = s.engine.mouseRightBack !== false;
+  $('setMouseWheelMode').value = ['smooth', 'native', 'off'].includes(s.engine.mouseWheelMode)
+    ? s.engine.mouseWheelMode : 'smooth';
   $('setMouseSideButtons').checked = !!s.engine.mouseSideButtons;
   $('setCompat').checked = !!(s.runtime && s.runtime.compatImage);
   $('setAutoShortcut').checked = !!s.createShortcutOnInstall;
@@ -692,10 +695,14 @@ function bindSettings() {
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
   $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
   $('setPriorityMode').addEventListener('change', (e) => save({ engine: { priorityMode: e.target.value } }));
-  $('setMouseSideButtons').addEventListener('change', (e) => {
-    save({ engine: { mouseSideButtons: e.target.checked } });
-    if (!e.target.checked) api.restoreMouseHook().catch(() => {});
-  });
+  const savePointer = async (patch) => {
+    await save({ engine: patch });
+    // 立刻按当前窗口焦点重装/卸载钩子，不用等下次切窗口
+    api.refreshPointerMapping().catch(() => {});
+  };
+  $('setMouseRightBack').addEventListener('change', (e) => savePointer({ mouseRightBack: e.target.checked }));
+  $('setMouseWheelMode').addEventListener('change', (e) => savePointer({ mouseWheelMode: e.target.value }));
+  $('setMouseSideButtons').addEventListener('change', (e) => savePointer({ mouseSideButtons: e.target.checked }));
   $('setDeepTrim').addEventListener('change', async (e) => {
     await save({ engine: { deepTrim: e.target.checked } });
     // 关掉深度裁剪必须把之前 pm disable-user 的包恢复回来，否则影响是持久的

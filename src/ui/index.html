@@ -192,6 +192,40 @@
       </div>
 
       <div class="group">
+        <div class="group-title">鼠标键位</div>
+        <div class="field">
+          <label>左键 · 确认 / 点击</label>
+          <span class="sub">模拟器原生把左键当成手指点击，按住拖动就是滑动，无需额外设置。</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>右键 · 安卓返回</label>
+            <span class="sub">模拟器默认把右键也当成一次点击（容易误触）。开启后右键只执行返回，不再触发点击。</span>
+          </div>
+          <input type="checkbox" id="setMouseRightBack" class="switch" />
+        </div>
+        <div class="field">
+          <label>滚轮 · 滑动</label>
+          <select id="setMouseWheelMode">
+            <option value="smooth">平滑（推荐）· 合并多次滚动为一次流畅滑动</option>
+            <option value="native">原生 · 交给模拟器逐格处理</option>
+            <option value="off">关闭 · 不拦截滚轮</option>
+          </select>
+          <span class="sub">平滑模式把一小段时间内的滚动合并成一次滑动手势，避免逐格抽搐，也不会每格都拉起一个 adb 进程。</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>鼠标侧键 · 返回 / 前进（默认关闭）</label>
+            <span class="sub">侧键映射需要全局鼠标钩子。钩子只在 ApkStart 应用窗口处于前台时安装，失焦或关闭立即卸载，不会拖慢桌面。</span>
+          </div>
+          <input type="checkbox" id="setMouseSideButtons" class="switch" />
+        </div>
+        <div class="field">
+          <span class="sub">以上映射只在应用窗口前台生效；切回桌面或关闭窗口后，鼠标行为完全恢复 Windows 原生。</span>
+        </div>
+      </div>
+
+      <div class="group">
         <div class="group-title">性能与轻量容器</div>
         <div class="field switch-field">
           <div>
@@ -214,13 +248,6 @@
             <span class="sub">额外禁用 Play 商店、设置向导、打印服务等后台包，只留打开应用必需的环境。若遇到应用提示缺少 Google Play 服务，关掉此开关会自动恢复。</span>
           </div>
           <input type="checkbox" id="setDeepTrim" class="switch" />
-        </div>
-        <div class="field switch-field">
-          <div>
-            <label>鼠标侧键返回（默认关闭）</label>
-            <span class="sub">需要安装全局鼠标钩子，会介入整个 Windows 的每一次鼠标事件。仅在你确实要用侧键返回时开启；窗口失焦会自动卸载。默认关闭可避免鼠标漂移。</span>
-          </div>
-          <input type="checkbox" id="setMouseSideButtons" class="switch" />
         </div>
         <div class="field">
           <span class="sub">安卓环境只开机一次并常驻；之后打开应用不再重跑整个系统，只启动该应用并停掉其他应用进程。关掉最后一个窗口会清后台、停放容器，下次点开仍是秒进。</span>

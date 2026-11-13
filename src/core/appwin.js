@@ -9,6 +9,7 @@
 const { BrowserWindow, screen, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { hookOptions } = require('./pointer');
 
 const TITLEBAR_H = 38;
 /**
@@ -25,11 +26,13 @@ function iconUrl(p) {
 }
 
 class AppWindow {
-  constructor({ agent, setOrientation, mouseHook = false }) {
+  constructor({ agent, setOrientation, mouseHook = false, pointerConfig = null }) {
     this.agent = agent;
     this.setOrientation = setOrientation || null;
-    // 全局鼠标钩子是可选功能，默认关闭。传函数可在设置变化时实时生效。
+    // 全局鼠标钩子只在「应用窗口前台 + 至少一项映射开启」时安装。
+    // pointerConfig 传函数：设置页改了开关，下一次 focus 就生效，不用重启。
     this.mouseHook = mouseHook;
+    this.pointerConfig = pointerConfig;
     this.win = null;
     this.pkg = null;
     this.state = { label: '', tip: '', ready: false, landscape: false };
@@ -147,7 +150,7 @@ class AppWindow {
       this._closing = false;
       if (this._closedCb) this._closedCb(pkg);
     });
-    // 只在「应用窗口真正处于前台」且用户显式开启侧键映射时装全局钩子；
+    // 只在「应用窗口真正处于前台」且至少一项鼠标映射开启时装全局钩子；
     // 失焦/关闭立即卸载，绝不让 ApkStart 在后台拖慢整个系统的鼠标。
     this.win.on('focus', () => this._syncHook(true));
     this.win.on('blur', () => this._syncHook(false));
@@ -156,16 +159,31 @@ class AppWindow {
     return this.win;
   }
 
-  _wantHook() {
-    const v = typeof this.mouseHook === 'function' ? this.mouseHook() : this.mouseHook;
-    return !!v;
+  _pointerOptions() {
+    const getter = this.pointerConfig || this.mouseHook;
+    const raw = typeof getter === 'function' ? getter() : getter;
+    return hookOptions(raw);
   }
 
   _syncHook(active) {
-    const on = !!active && this._wantHook();
+    const opts = this._pointerOptions();
+    const on = !!active && opts.enabled;
     if (this.agent && typeof this.agent.setHook === 'function') {
-      this.agent.setHook(on).catch(() => {});
+      this.agent.setHook(on, opts).catch(() => {});
     }
+  }
+
+  /** 设置页改了鼠标映射：按当前焦点重新同步一次（不重装钩子线程） */
+  refreshPointer() {
+    const focused = this.isOpen && !!this.win.isFocused();
+    if (!focused) {
+      // 窗口没在前台：只卸载，别让钩子在后台空转
+      if (this.agent && typeof this.agent.setHook === 'function') {
+        this.agent.setHook(false).catch(() => {});
+      }
+      return;
+    }
+    this._syncHook(true);
   }
 
   setState(patch) {

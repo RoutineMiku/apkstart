@@ -6,9 +6,10 @@
  * 每次起一个 powershell.exe 要 150~300ms，拖动就会一顿一顿的。
  * 这里只启动一次，之后走本机回环 TCP（一行一个 JSON），单次往返 <2ms。
  *
- * 代理可选负责 WH_MOUSE_LL 鼠标钩子：鼠标侧键 → 安卓返回 / 前进。
- * 该钩子是全局的，会介入系统里每一次鼠标事件，因此默认【不安装】，
- * 只有用户在设置里显式打开侧键映射时才启用；见 setHook()。
+ * 代理可选负责 WH_MOUSE_LL 鼠标钩子：右键返回 / 滚轮滑动 / 侧键前进后退。
+ * 该钩子是全局的，会介入系统里每一次鼠标事件，因此只在「应用窗口处于前台」
+ * 且至少启用一项映射时安装，失焦立即卸载；回调只处理我们关心的 7 个消息。
+ * 见 setHook(on, opts)。
  */
 const { spawn } = require('child_process');
 const net = require('net');
@@ -30,6 +31,7 @@ class WinAgent extends EventEmitter {
     this.pending = [];
     this.dead = false;
     this.hooked = false;
+    this.hookConf = null;
   }
 
   get available() { return process.platform === 'win32' && fs.existsSync(SCRIPT); }
@@ -70,6 +72,7 @@ class WinAgent extends EventEmitter {
         this.sock = null;
         this.ready = null;
         this.hooked = false;
+        this.hookConf = null;
         this._failAll('窗口代理已退出');
         if (wasReady) this.emit('exit');
         fail(new Error('窗口代理启动失败'));
@@ -105,7 +108,8 @@ class WinAgent extends EventEmitter {
       if (!line) continue;
       let msg = null;
       try { msg = JSON.parse(line); } catch (_) { continue; }
-      if (msg.ev) { this.emit(msg.ev); continue; }
+      // 事件带负载（滚轮的 dx/dy/nx/ny），老监听器忽略多余参数即可
+      if (msg.ev) { this.emit(msg.ev, msg); continue; }
       const p = this.pending.shift();
       if (p) { clearTimeout(p.timer); p.resolve(msg); }
     }
@@ -158,19 +162,34 @@ class WinAgent extends EventEmitter {
 
   /**
    * 全局鼠标钩子开关（幂等）。
-   * 默认关闭：这个钩子会影响整个 Windows 的输入响应，收益只是侧键返回，
-   * 不该让每个用户都为它付出代价。开启/关闭都只发一次命令，避免窗口反复
-   * focus 时重复安装。
+   * 只在应用窗口前台、且至少一项映射开启时才安装；opts 变化时不重装线程，
+   * 只把新开关发给常驻代理，避免窗口反复 focus / 改设置时反复装卸钩子。
+   * @param {boolean} on
+   * @param {{rightBack?:boolean, wheel?:boolean, side?:boolean}} opts
    */
-  async setHook(on) {
+  async setHook(on, opts = {}) {
     const want = !!on;
-    if (want === this.hooked) return { ok: true, hooked: this.hooked };
+    const conf = {
+      right: !!(opts && opts.rightBack),
+      wheel: !!(opts && opts.wheel),
+      side: !!(opts && opts.side),
+    };
+    // 默认关闭状态下不为了「关」而拉起 PowerShell 进程（冷启动零开销）
+    if (!want && !this.hooked) return { ok: true, hooked: false };
+    const sameConf = this.hookConf
+      && this.hookConf.right === conf.right
+      && this.hookConf.wheel === conf.wheel
+      && this.hookConf.side === conf.side;
+    if (want === this.hooked && sameConf) return { ok: true, hooked: this.hooked };
+    const req = { cmd: 'hook', on: want ? 1 : 0, right: conf.right ? 1 : 0, wheel: conf.wheel ? 1 : 0, side: conf.side ? 1 : 0 };
     if (!want) {
       this.hooked = false;
-      return this.call({ cmd: 'hook', on: 0 }, 3000).catch(() => ({ ok: false, hooked: false }));
+      this.hookConf = null;
+      return this.call(req, 3000).catch(() => ({ ok: false, hooked: false }));
     }
-    const r = await this.call({ cmd: 'hook', on: 1 }, 3000).catch(() => null);
+    const r = await this.call(req, 3000).catch(() => null);
     this.hooked = !!(r && r.hooked !== false);
+    this.hookConf = this.hooked ? conf : null;
     return { ok: this.hooked, hooked: this.hooked };
   }
 
@@ -180,6 +199,7 @@ class WinAgent extends EventEmitter {
       try { this.sock.write('{"cmd":"hook","on":0}\n'); } catch (_) { /* ignore */ }
     }
     this.hooked = false;
+    this.hookConf = null;
     try { this.sock?.end(); } catch (_) { /* ignore */ }
     try { this.sock?.destroy(); } catch (_) { /* ignore */ }
     try { this.proc?.kill(); } catch (_) { /* ignore */ }

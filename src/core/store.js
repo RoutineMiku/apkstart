@@ -32,7 +32,11 @@ const DEFAULT_SETTINGS = {
     forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
     // ---- 轻量容器（默认全开省资源，用户可逐项关掉）----
     liteMode: true,          // 收敛 vCPU 配额，避免 qemu 占满物理核拖慢 Windows
-    mouseSideButtons: false, // 全局 WH_MOUSE_LL 钩子：默认关闭，开启才有侧键返回
+    // 鼠标键位：左键由模拟器原生映射为「确认/点击」，无需开关。
+    // 右键返回与平滑滚轮需要低级钩子，但只在应用窗口前台时装，失焦即卸载。
+    mouseRightBack: true,    // 右键 = 安卓返回（拦下 Qt 默认的「右键也当点击」误触）
+    mouseWheelMode: 'smooth', // smooth = 合并后注入一次滑动 | native = 交给 Qt | off = 不处理
+    mouseSideButtons: false, // 侧键返回/前进：默认关闭，开启才多装一项映射
     deepTrim: false,         // 深度裁剪系统后台包（Play 商店/向导等），默认不动系统
     priorityMode: 'balanced', // balanced=让出前台 | performance=qemu 用 Normal 优先级
   },

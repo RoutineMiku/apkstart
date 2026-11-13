@@ -31,6 +31,7 @@ const assoc = require('./core/assoc');
 const windowctl = require('./core/windowctl');
 const display = require('./core/display');
 const { WinAgent } = require('./core/agent');
+const pointer = require('./core/pointer');
 const { AppWindow, TITLEBAR_H } = require('./core/appwin');
 const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
@@ -227,10 +228,29 @@ function screenRect() {
 }
 
 let currentAppPkg = null;
+let wheelRouter = null;
+const deviceSize = { value: null };
+
+/** 滚轮注入需要知道 Android 侧分辨率；缓存一次，转屏/重启运行时后失效 */
+async function getDeviceSize() {
+  if (deviceSize.value) return deviceSize.value;
+  try { deviceSize.value = await runtime.client().wmSize(); } catch (_) { /* 运行时还没起来 */ }
+  if (!deviceSize.value || !deviceSize.value.width || !deviceSize.value.height) {
+    const p = portraitSize();
+    deviceSize.value = { width: p.w, height: p.h };
+  }
+  return deviceSize.value;
+}
 
 function portraitSize() {
   const d = displaySettings();
   return display.portraitSize(d.portrait || '540x960');
+}
+
+/** 设置页改动鼠标键位后，立刻按当前窗口焦点同步一次钩子配置 */
+function refreshPointerMapping() {
+  if (appWin && appWin.isOpen) appWin.refreshPointer();
+  else if (winAgent && winAgent.hooked) winAgent.setHook(false).catch(() => {});
 }
 
 /** 打开（或复用）那个「一个应用一个干净窗口」 */
@@ -453,8 +473,10 @@ async function runLaunch(pkg) {
     mark('embedded');
     appWin.setState({ ready: true, tip: '' });
     // 容器会话：环境已经就绪，这里只做「按应用裁剪 + 打开后台轮询」，
-    // 不再为这个 App 重新引导一遍 Android。全局鼠标钩子由窗口 focus 事件
-    // 按设置决定，默认不安装。
+    // 不再为这个 App 重新引导一遍 Android。鼠标键位钩子由窗口 focus 事件
+    // 按设置决定，失焦即卸载。
+    deviceSize.value = null;
+    appWin.refreshPointer();
     await runtime.beginApp(pkg, { onActive: onContainerActive }).catch(() => {});
     send('app:launched', { package: pkg, engine: r.engine });
     appLog(`launch ok ${pkg} embedded=${embedded}`);
@@ -601,6 +623,12 @@ function registerIpc() {
     if (patch && (patch.createStartMenuShortcut === true || patch.createShortcutOnInstall === true)) {
       installer.ensureShortcuts().catch(() => {});
     }
+    // 鼠标键位变了：立刻按当前焦点重装/卸载钩子，不用等下次切窗口
+    if (patch && patch.engine && (
+      'mouseRightBack' in patch.engine || 'mouseWheelMode' in patch.engine || 'mouseSideButtons' in patch.engine
+    )) {
+      refreshPointerMapping();
+    }
     return next;
   });
 
@@ -629,11 +657,10 @@ function registerIpc() {
   ipcMain.handle('runtime:autoDeploy', () => autoDeploy());
   // 关闭「深度裁剪」时把被 pm disable-user 的系统包恢复回来
   ipcMain.handle('settings:restoreSystem', async () => runtime.restoreSystemApps());
-  // 关闭「鼠标侧键」时立刻卸载全局钩子，不用等窗口失焦
-  ipcMain.handle('settings:unhook', async () => {
-    if (winAgent && winAgent.hooked) await winAgent.setHook(false).catch(() => {});
-    return true;
-  });
+  // 鼠标键位改变：只同步配置，不再无条件卸载（右键返回/滚轮可能仍需要钩子）
+  ipcMain.handle('settings:refreshPointer', async () => { refreshPointerMapping(); return true; });
+  // 兼容旧界面：语义已改为「按设置重新同步」
+  ipcMain.handle('settings:unhook', async () => { refreshPointerMapping(); return true; });
 
   ipcMain.handle('runtime:status', async () => runtime.status());
   ipcMain.handle('runtime:probe', async () => runtime.probe());
@@ -996,23 +1023,46 @@ if (!gotLock) {
     sharer = new Sharer(runtime);
     androidSet = new AndroidSettings(runtime);
 
-    // 窗口代理：只负责内嵌模拟器窗口。全局鼠标钩子默认不装（见 setHook）。
+    // 滚轮合并器：一个时间窗内的滚动只注入一条 input swipe，走常驻 adb shell。
+    wheelRouter = new pointer.WheelRouter({
+      getSize: getDeviceSize,
+      inject: (cmd) => runtime.client().input(cmd),
+    });
+
+    // 窗口代理：只负责内嵌模拟器窗口。全局鼠标钩子只在应用窗口前台时按配置安装。
     winAgent = new WinAgent();
     appWin = new AppWindow({
       agent: winAgent,
       // 旋转要改 Android 的逻辑分辨率，交给 adb 客户端做
-      setOrientation: (landscape) => runtime.client().setOrientation(landscape),
-      // 传 getter：设置页改了开关，下一次窗口 focus 就生效，不用重启
-      mouseHook: () => !!store.getSettings().engine.mouseSideButtons,
+      setOrientation: async (landscape) => {
+        deviceSize.value = null;
+        return runtime.client().setOrientation(landscape);
+      },
+      // 传 getter：设置页改了键位，下一次窗口 focus / 刷新就生效，不用重启
+      pointerConfig: () => pointer.pointerOptions(store.getSettings()),
     });
     appWin.onCloseApp((pkg) => {
       // 关窗口 = 停这个应用；最后一个窗口关掉时容器停放（降优先级、停轮询），
       // 但 Android 环境留着，下次点开是秒进而非重新冷启动。
       runtime?.endApp(pkg, { onIdle: onContainerActive }).catch(() => {});
     });
-    winAgent.on('back', () => { runtime.client().keyBack().catch(() => {}); });
-    winAgent.on('forward', () => { runtime.client().keyForward().catch(() => {}); });
-    winAgent.on('exit', () => { winAgent = new WinAgent(); appWin.agent = winAgent; });
+
+    // 代理进程意外退出后会重建，事件监听必须一起重新挂上（旧版会在这里丢掉
+    // 右键返回与滚轮，表现是「用一会儿就没反应了」）。
+    const attachAgentEvents = (agent) => {
+      agent.on('back', () => { runtime.client().keyBack().catch(() => {}); });
+      agent.on('forward', () => { runtime.client().keyForward().catch(() => {}); });
+      agent.on('wheel', (m) => {
+        if (pointer.pointerOptions(store.getSettings()).wheel === 'smooth') wheelRouter.push(m);
+      });
+      agent.on('exit', () => {
+        const next = new WinAgent();
+        winAgent = next;
+        appWin.agent = next;
+        attachAgentEvents(next);
+      });
+    };
+    attachAgentEvents(winAgent);
 
     registerIpc();
     createWindow({ show: !parseArgs(process.argv).silent });
@@ -1118,6 +1168,7 @@ if (!gotLock) {
     notifier?.stop();
     try { appWin?.close({ keepApp: false }); } catch (_) { /* ignore */ }
     try { winAgent?.dispose(); } catch (_) { /* ignore */ }
+    try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
     runtime?.dispose();
     // 隐藏的图标解码窗口也算一个窗口，不关掉会让 window-all-closed 永远不触发
     try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
