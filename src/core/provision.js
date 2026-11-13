@@ -508,17 +508,26 @@ class Provisioner {
       onLog(`首次启动：正在展开系统镜像 ${path.basename(j.dest)}（约 1 分钟，只需一次）`);
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve, reject) => {
-        const { pipeline } = require('stream');
-        const parts = [fs.createReadStream(j.src)];
+        const { pipeline, Readable } = require('stream');
         if (j.xz) {
-          // LZMA2 流式解压；@napi-rs/lzma 是 NAPI 预编译，无 Electron ABI 问题
-          const { createDecompressStream } = require('@napi-rs/lzma/xz');
-          parts.push(createDecompressStream());
+          // LZMA2 解压：必须直接引原生绑定 index.js。
+          // 包默认入口 main.js / xz.js 内部会 require('stream-polyfill.mjs')，
+          // Electron 的 Node 20 不支持 require(ESM) 会抛错；而 exports 又不允许
+          // 直接写 '@napi-rs/lzma/index.js'，所以用 require.resolve 定位目录后按文件路径引。
+          const path0 = require('path');
+          const lzmaDir = path0.dirname(require.resolve('@napi-rs/lzma'));
+          const { xz } = require(path0.join(lzmaDir, 'index.js'));
+          const webIn = Readable.toWeb(fs.createReadStream(j.src));
+          const webOut = xz.decompressStream(webIn);
+          pipeline(Readable.fromWeb(webOut), fs.createWriteStream(j.dest), (err) => (err ? reject(err) : resolve()));
         } else {
-          parts.push(zlib.createGunzip());
+          pipeline(
+            fs.createReadStream(j.src),
+            zlib.createGunzip(),
+            fs.createWriteStream(j.dest),
+            (err) => (err ? reject(err) : resolve()),
+          );
         }
-        parts.push(fs.createWriteStream(j.dest));
-        pipeline(...parts, (err) => (err ? reject(err) : resolve()));
       }).catch((e) => onLog(`展开镜像失败：${e.message}`));
       done += 1;
     }

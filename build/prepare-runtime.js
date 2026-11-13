@@ -31,29 +31,57 @@ async function gzipFile(src, dest) {
   );
 }
 
-/** 大镜像用 XZ（LZMA2 9e）：比 gzip -6 再省 ~25%（system.img 1.5GB→~1.1GB）。
- *  优先 python（支持 EXTREME 极限档）；没有 python 时回退 napi-rs（preset 9）。 */
+/** 大镜像用 XZ（LZMA2）：比 gzip -6 再省 ~25%（system.img 1.5GB→~1.1GB）。
+ *  默认 9e 极限档；CI 双核可用 XZ_PRESET=6 把时间压到 1/3（体积 +3%）。
+ *
+ *  实现说明（踩过的坑）：
+ *   - 用 python 的 lzma（单线程、稳定）。@napi-rs/lzma 的 createCompressStream 在某些
+ *     环境下会 0 字节挂死（实测挂 18 分钟无输出），只能当最后兜底且要带超时。
+ *   - 找不到 python 时退回 gzip -9：体积大 ~30% 但绝不会挂，保证 CI 能出包。
+ */
+function findPython() {
+  const { spawnSync } = require('child_process');
+  for (const cmd of ['python', 'python3', 'py']) {
+    try {
+      const r = spawnSync(cmd, ['-c', 'import lzma;print("ok")'], {
+        encoding: 'utf8', windowsHide: true, timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      if (r.status === 0 && /ok/.test(String(r.stdout))) return cmd;
+    } catch (_) { /* 试下一个 */ }
+  }
+  return null;
+}
+
 async function xzFile(src, dest) {
-  const { spawn } = require('child_process');
-  const ok = await new Promise((resolve) => {
-    const py = spawn('python', ['-c', [
-      'import lzma,sys,shutil',
-      'flt=[{"id":lzma.FILTER_LZMA2,"preset":9|lzma.PRESET_EXTREME,"dict_size":1<<27}]',
-      'z=lzma.LZMAFile(sys.stdout.buffer,mode="wb",format=lzma.FORMAT_XZ,filters=flt)',
-      'shutil.copyfileobj(sys.stdin.buffer,z); z.close()',
-    ].join(';')], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
-    const out = fs.createWriteStream(dest);
-    py.stdout.pipe(out);
-    py.on('exit', (c) => resolve(c === 0));
-    py.on('error', () => resolve(false));
-  });
-  if (ok) return;
-  console.log('  （未找到 python，回退 napi-rs preset 9）');
-  const { createCompressStream } = require('@napi-rs/lzma/xz');
+  const preset = Math.max(0, Math.min(9, Number(process.env.XZ_PRESET || 9)));
+  const extreme = preset >= 9 && process.env.XZ_NO_EXTREME !== '1';
+  const pyPreset = extreme ? '9|lzma.PRESET_EXTREME' : String(preset);
+  const dictSize = preset >= 9 ? (1 << 27) : preset >= 6 ? (1 << 26) : (1 << 23);
+  const py = findPython();
+  if (py) {
+    const { spawn } = require('child_process');
+    const ok = await new Promise((resolve) => {
+      const p = spawn(py, ['-c', [
+        'import lzma,sys,shutil',
+        `flt=[{"id":lzma.FILTER_LZMA2,"preset":${pyPreset},"dict_size":${dictSize}}]`,
+        'z=lzma.LZMAFile(sys.stdout.buffer,mode="wb",format=lzma.FORMAT_XZ,filters=flt)',
+        'shutil.copyfileobj(sys.stdin.buffer,z); z.close()',
+      ].join(';')], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+      const out = fs.createWriteStream(dest);
+      p.stdout.pipe(out);
+      p.on('exit', (c) => resolve(c === 0));
+      p.on('error', () => resolve(false));
+    });
+    if (ok) return;
+    console.log(`  （${py} 压缩失败，改用 gzip -9）`);
+  } else {
+    console.log('  （未找到 python，改用 gzip -9（体积略大但可靠））');
+  }
+  // 兜底：gzip -9（不是 xz，运行时 materializeImages 按扩展名选择解压器）
   await pipeline(
     fs.createReadStream(src),
-    createCompressStream({ preset: 9 }),
-    fs.createWriteStream(dest),
+    zlib.createGzip({ level: 9 }),
+    fs.createWriteStream(dest.replace(/\.xz$/i, '.gz')),
   );
 }
 
@@ -102,8 +130,11 @@ async function main() {
             if (/^(system|vendor|cache)\.img$/i.test(f) && sizeOf(src) > 32 * 1024 * 1024) {
               // 大镜像压一份，原图不进包；已有 .xz（且大小合理）则跳过重复压缩
               const xz = path.join(to, `${f}.xz`);
-              if (fs.existsSync(xz) && sizeOf(xz) > 32 * 1024 * 1024) {
-                console.log(`跳过 ${f}（已有 .xz ${(sizeOf(xz) / 1048576).toFixed(0)} MB）`);
+              const xzSize = sizeOf(xz);
+              // 已有 .xz 且大小合理（>4MB 且不小于源文件的 5%）则跳过重复压缩。
+              // 注意不能用固定 32MB 阈值：vendor.img.gz 只有 ~21MB，会被误判为"无效"重压。
+              if (xzSize > 4 * 1024 * 1024 && xzSize > sizeOf(src) * 0.05) {
+                console.log(`跳过 ${f}（已有 .xz ${(xzSize / 1048576).toFixed(0)} MB）`);
                 compressed += 1;
                 continue;
               }

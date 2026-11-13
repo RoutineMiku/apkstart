@@ -27,9 +27,16 @@ const path = require('path');
  */
 const SAFE = [
   ['emulator/qemu/windows-x86_64/qemu-system-aarch64.exe', 'arm64 的 QEMU 二进制（只发 x86_64 镜像）'],
-  ['emulator/lib64/vulkan', 'Vulkan 后端（固定 -gpu software，删掉退回 swiftshader）'],
+  // 注意：不能整目录删 emulator/lib64/vulkan —— vulkan-1.dll 是 -gpu host 的加载器，
+  // 删了 host 会直接失败、只剩软件渲染（实测 AMD 780M 上必须保留）。只删大件：
+  ['emulator/lib64/vulkan/layers', 'Vulkan 校验层（host 渲染用不到，-20MB）'],
+  ['emulator/lib64/vulkan/glslangValidator.exe', '着色器校验工具（运行时用不到，-7MB）'],
+  ['emulator/lib64/vulkan/libvulkan_lvp.dll', 'lavapipe 软件 Vulkan 后备（有系统显卡驱动时用不到，-53MB）'],
+  ['emulator/lib64/vulkan/lvp_icd.json', 'lavapipe 的 ICD 描述（-1KB）'],
+  ['emulator/lib64/vulkan/vk_swiftshader.dll', 'SwiftShader Vulkan（gles_angle 目录里有同款副本，-23MB）'],
   ['emulator/lib64/qt/translations', '模拟器界面的多语言包（只剩 38px 标题栏）'],
-  ['emulator/emulator-check.exe', 'CI 自检工具（运行时用不到，-16MB）'],
+  // 注意：不能删 emulator-check.exe —— emulator -accel-check 靠它检测 AEHD/WHPX，
+  // 缺了会判定"无硬件加速"退回 TCG 软件模拟（实测开机从 42s 变成 10 分钟+）。
   ['emulator/qsn.exe', 'QEMU 快照通知助手（emulator.exe 无任何引用，已 strings 实证，-34MB）'],
   ['emulator/resources/Toren1BD_Main.png', 'VR 全景环境贴图（红果用不到，-3.7MB）'],
   ['emulator/resources/Toren1BD_Decor.png', 'VR 全景装饰贴图（-3.5MB）'],

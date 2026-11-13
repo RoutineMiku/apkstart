@@ -95,9 +95,10 @@ function bootstrapBundledRuntime() {
           try { abis = fs.readdirSync(path.join(root, api, tag)); } catch (_) { continue; }
           for (const abi of abis) {
             const d = path.join(root, api, tag, abi);
-            // 单文件发行版里的镜像是压缩存放的（system.img.gz），解压在首次启动时做。
+            // 单文件发行版里的镜像是压缩存放的（system.img.xz / .gz），解压在首次启动时做。
             // 这里只认 system.img 会让「包里明明带了镜像」被判成没带，转而去联网下载。
-            const hasSys = fs.existsSync(path.join(d, 'system.img')) || fs.existsSync(path.join(d, 'system.img.gz'));
+            const hasSys = ['system.img', 'system.img.xz', 'system.img.gz']
+              .some((f) => fs.existsSync(path.join(d, f)));
             if (hasSys && fs.existsSync(path.join(d, 'kernel-ranchu'))) return true;
           }
         }
@@ -112,7 +113,13 @@ function bootstrapBundledRuntime() {
     // 旧版只在 settings.json 不存在时接管：用户先装过在线版再解压完整版，
     // 就会一直走「缺组件」的部署向导。现在只要当前运行时目录里没有 emulator 就接管。
     const current = s.runtime.dir || path.join(store.DATA_DIR, 'runtime');
-    const currentOk = fs.existsSync(path.join(current, 'emulator', 'emulator.exe'));
+    const currentExe = path.join(current, 'emulator', 'emulator.exe');
+    // 便携版被移动/升级（解压到新目录）后，settings 里记的还是旧路径：
+    // 必须只认「本次 EXE 所在目录下的 runtime」，否则会一直用旧包里的组件
+    // （实测踩过：旧包的 emulator 缺 emulator-check → 加速探测失败 → 退回 TCG 软件模拟）。
+    const sameTree = path.resolve(current).toLowerCase()
+      .startsWith(path.resolve(exeDir).toLowerCase());
+    const currentOk = fs.existsSync(currentExe) && sameTree;
     // 已有可用运行时（含在线版）就尊重它：AVD 用户数据就在该目录下，不能悄悄搬走
     if (currentOk) {
       // 但仍把自动参数打开，旧配置里的硬编码 4G/4核/弃用 GPU 模式不能继续用

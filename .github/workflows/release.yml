@@ -81,10 +81,15 @@ jobs:
       - name: 组装运行时
         run: node build/fetch-runtime.js engine
 
-      # prepare-runtime 会把 system.img/vendor.img 压成 xz(LZMA2 9e，
-      # 有 python 时走极限档，没有则回退 @napi-rs/lzma)，再用 NSIS LZMA-max 打包。
+      # prepare-runtime 会把 system.img/vendor.img 压成 xz(LZMA2)。
+      # CI runner 只有 2 核：XZ_PRESET=6 把压缩时间从 ~2h 降到 ~40min（体积 +3%）。
+      - name: 准备运行时（xz 压缩，CI 降档加速）
+        run: node build/prepare-runtime.js --force
+        env:
+          XZ_PRESET: '6'
+
       - name: 构建完整版安装包
-        run: npm run build:exe
+        run: npx electron-builder --win nsis -c.compression=normal
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
