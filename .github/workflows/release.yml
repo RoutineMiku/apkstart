@@ -40,8 +40,7 @@ jobs:
           Compress-Archive -Path dist/ApkStart-win64-portable/* -DestinationPath "ApkStart-$tag-win64-portable.zip" -CompressionLevel Optimal
           Get-Item "ApkStart-$tag-win64-portable.zip" | Select-Object Name, Length
 
-      # 只有一个版本：壳层极小，运行时组件由软件首次启动时自动按需下载。
-      # 不再产出内置 GB 级镜像的「完整版」，避免多版本分叉和超大安装包。
+      # 创建 Release 并上传轻量便携版（壳层极小，运行时首次启动按需下载）
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -59,3 +58,50 @@ jobs:
           }
           if (-not $ok) { Write-Error "上传失败: $zip"; exit 1 }
           gh release view $tag --json assets --jq '.assets[].name'
+
+  full:
+    name: 构建完整版（内置运行时，离线开箱即用）
+    runs-on: windows-latest
+    needs: portable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      # 从 Google 官方源组装运行时（emulator + platform-tools + aehd + Play x86_64 镜像）。
+      # 输出到 engine/，与本地开发时的目录结构一致。
+      - name: 组装运行时
+        run: node build/fetch-runtime.js engine
+
+      # prepare-runtime 会把 system.img/vendor.img 压成 xz(LZMA2 9e，
+      # 有 python 时走极限档，没有则回退 @napi-rs/lzma)，再用 NSIS LZMA-max 打包。
+      - name: 构建完整版安装包
+        run: npm run build:exe
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: 上传完整版到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          $setup = Get-ChildItem dist/release/*Setup.exe | Select-Object -First 1
+          if (-not $setup) { Write-Error "未找到 Setup.exe"; exit 1 }
+          Write-Output ("上传 {0} ({1:N0} MB)" -f $setup.Name, ($setup.Length / 1MB))
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            gh release upload $tag $setup.FullName --clobber
+            if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 20 }
+          }
+          if (-not $ok) { Write-Error "上传失败: $($setup.Name)"; exit 1 }
+          gh release view $tag --json assets --jq '.assets[] | "\(.name) \(.size)"'
