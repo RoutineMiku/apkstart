@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('apkstart', {
 
   getSettings: () => invoke('settings:get'),
   setSettings: (patch) => invoke('settings:set', patch),
+  restoreSystemApps: () => invoke('settings:restoreSystem'),
+  restoreMouseHook: () => invoke('settings:unhook'),
 
   runtimeStatus: () => invoke('runtime:status'),
   runtimeProbe: () => invoke('runtime:probe'),

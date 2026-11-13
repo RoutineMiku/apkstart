@@ -49,6 +49,8 @@ public class ApkAgent
     [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] static extern bool PeekMessage(out MSG m, IntPtr h, uint min, uint max, uint remove);
+    [DllImport("user32.dll")] static extern int GetMessage(out MSG m, IntPtr h, uint min, uint max);
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint tid, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG m);
     [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG m);
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
@@ -86,8 +88,13 @@ public class ApkAgent
     static IntPtr _emu = IntPtr.Zero;
     static IntPtr _hook = IntPtr.Zero;
     static HookProc _hookProc = null;
+    static Thread _hookThread = null;
+    static volatile bool _hookRun = false;
+    static uint _hookTid = 0;
+    static readonly ManualResetEvent _hookReady = new ManualResetEvent(false);
     static readonly ConcurrentQueue<string> _events = new ConcurrentQueue<string>();
     static long _lastToolSweep = 0;
+    static long _embedAt = 0;
 
     // ------------------------------------------------------------------ window discovery
     static string ClassOf(IntPtr h)
@@ -159,12 +166,16 @@ public class ApkAgent
     // HWND_TOP: Chromium 的渲染子窗口和模拟器是同级的子窗口，
     // 不主动抬到最前就会被 Chromium 那块黑底盖住（用户看到的就是黑屏）。
     static readonly IntPtr HWND_TOP = new IntPtr(1);
-    static void Fit(int x, int y, int w, int h)
+    static void Fit(int x, int y, int w, int h, bool frame)
     {
         if (_emu == IntPtr.Zero) return;
         if (w < 16) w = 16;
         if (h < 16) h = 16;
-        SetWindowPos(_emu, HWND_TOP, x, y, w, h, SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        // SWP_FRAMECHANGED forces Windows to recompute the whole non-client area and
+        // repaint it. It is needed exactly once (right after SetParent); repeating it
+        // on every periodic sweep caused visible stutter and wasted GPU/CPU.
+        uint flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | (frame ? SWP_FRAMECHANGED : 0u);
+        SetWindowPos(_emu, HWND_TOP, x, y, w, h, flags);
     }
 
     static void Raise()
@@ -251,18 +262,48 @@ public class ApkAgent
         return CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
-    static void HookOn()
+    // A WH_MOUSE_LL hook is global: Windows synchronously waits for this callback on
+    // EVERY mouse event of EVERY application. It must therefore live on a thread whose
+    // only job is pumping messages. Installing it on the socket-serving thread (which
+    // used to block up to 4s in Poll) made the whole desktop pointer lag and drift.
+    // It is opt-in now: the JS side only calls "hook on" when the user explicitly
+    // enables mouse side buttons in settings. Default = no global hook at all.
+    static void HookThreadProc()
     {
-        if (_hook != IntPtr.Zero) return;
+        _hookTid = GetCurrentThreadId();
         _hookProc = HookCallback;
         _hook = SetWindowsHookEx(14, _hookProc, IntPtr.Zero, 0);
+        _hookReady.Set();
+        MSG m;
+        while (_hookRun && GetMessage(out m, IntPtr.Zero, 0, 0) > 0)
+        {
+            TranslateMessage(ref m);
+            DispatchMessage(ref m);
+        }
+        if (_hook != IntPtr.Zero) { UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
+        _hookTid = 0;
+    }
+
+    static void HookOn()
+    {
+        if (_hookThread != null && _hookThread.IsAlive) return;
+        _hookRun = true;
+        _hookReady.Reset();
+        _hookThread = new Thread(HookThreadProc);
+        _hookThread.IsBackground = true;
+        _hookThread.Start();
+        // Reply must reflect the real hook state; otherwise the JS side sees
+        // hooked:false and thinks enabling failed.
+        _hookReady.WaitOne(1000);
     }
     static void HookOff()
     {
-        if (_hook == IntPtr.Zero) return;
-        UnhookWindowsHookEx(_hook);
-        _hook = IntPtr.Zero;
-        _hookProc = null;
+        _hookRun = false;
+        if (_hook != IntPtr.Zero) { UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
+        if (_hookTid != 0) PostThreadMessage(_hookTid, 0x0012, IntPtr.Zero, IntPtr.Zero); // WM_QUIT
+        _hookThread = null;
+        // _hookProc 故意保留引用：钩子线程可能正在执行回调，提前置 null
+        // 会让委托被 GC 回收。线程退出时会自然释放。
     }
 
     // ------------------------------------------------------------------ plumbing
@@ -334,13 +375,23 @@ public class ApkAgent
             while (_events.TryDequeue(out ev))
                 Reply(sock, "{\"ev\":\"" + ev + "\"}");
 
-            // keep the emulator rail hidden; it can re-appear when Qt rebuilds the window
+            // The Qt tool rail can re-appear right after embedding. Sweep only for the
+            // first few seconds after an embed, then stop: a permanent 2s EnumWindows +
+            // SetWindowPos loop is pure overhead and competes with the foreground app.
             long now = Environment.TickCount;
-            if (now - _lastToolSweep > 2000) { _lastToolSweep = now; HideToolWindows(); Raise(); }
+            if (_embedAt != 0 && now - _embedAt < 8000 && now - _lastToolSweep > 1500)
+            {
+                _lastToolSweep = now;
+                HideToolWindows();
+                Raise();
+            }
+            if (_embedAt != 0 && now - _embedAt >= 8000) _embedAt = 0;
 
             try
             {
-                if (!sock.Poll(4000, SelectMode.SelectRead)) continue;
+                // Short poll: keep the message pump responsive even when no command
+                // arrives. Never block for seconds while owning window hooks.
+                if (!sock.Poll(50, SelectMode.SelectRead)) continue;
                 int n = sock.Receive(buf);
                 if (n <= 0) break;
                 rx.Append(Encoding.UTF8.GetString(buf, 0, n));
@@ -359,13 +410,15 @@ public class ApkAgent
                         _host = new IntPtr(L(line, "host"));
                         _emu = FindEmulator();
                         bool ok = Embed(_host, _emu);
-                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"));
+                        _embedAt = Environment.TickCount;
+                        _lastToolSweep = 0;
+                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), true);
                         Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + ",\"emu\":" + _emu.ToInt64() + "}");
                     }
                     else if (cmd == "fit")
                     {
                         if (_emu == IntPtr.Zero) _emu = FindEmulator();
-                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"));
+                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), false);
                         Reply(sock, "{\"ok\":true}");
                     }
                     else if (cmd == "rotate")

@@ -7,7 +7,7 @@
  *  - 所有对安卓的操作统一走 adb，因此引擎可替换
  *  - 虚拟机按需启动，空闲自动回收；启动后常驻复用，装/开应用几乎零等待
  */
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +16,7 @@ const store = require('./store');
 const { Provisioner } = require('./provision');
 const { EmulatorEngine } = require('./emulator');
 const doctor = require('./doctor');
+const container = require('./container');
 
 const LOG_DIR = path.join(store.DATA_DIR, 'logs');
 const MONITOR_PORT = 5556;
@@ -60,6 +61,7 @@ class Runtime {
     this._freeformReady = false;
     this._client = null;
     this._bootLog = [];
+    this._activeApps = new Set();  // 容器会话：当前打开的应用窗口
     this.emuSerial = EMU_SERIAL;   // 端口是动态挑的，serial 跟着变
     store.ensureDirs();
     if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -448,6 +450,34 @@ class Runtime {
       await this.emulator.stop({ adbPath: this.adbPath() });
       return true;
     }
+    // 接管来的模拟器（adoptExisting）在本进程里没有 proc 句柄，旧逻辑会直接
+    // return false —— 结果空闲看门狗永远关不掉它，容器一直占着 CPU/内存。
+    // 这条路径改用 adb 控制台关机，必要时再按端口强杀兜底。
+    let online = false;
+    try { online = await this.client().isOnline(); } catch (_) { /* ignore */ }
+    if (online && this.emuSerial) {
+      await this.client().exec(['emu', 'kill'], { timeout: 8000 }).catch(() => {});
+      for (let i = 0; i < 10; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 400));
+        // eslint-disable-next-line no-await-in-loop
+        const still = await this.client().isOnline().catch(() => false);
+        if (!still) break;
+      }
+      const still = await this.client().isOnline().catch(() => false);
+      if (still) {
+        const m = /:(\d+)$/.exec(this.emuSerial);
+        const port = m ? Number(m[1]) - 1 : this.emulator.port;
+        const pid = await this.pidOnPort(port);
+        if (pid) {
+          await new Promise((resolve) => {
+            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+          });
+        }
+      }
+      this._activeApps.clear();
+      return true;
+    }
     if (!this.vmProc) return false;
     if (graceful) {
       try { await this.monitorCmd('system_powerdown'); } catch (_) { /* ignore */ }
@@ -751,6 +781,77 @@ class Runtime {
     }
   }
 
+  // ---------------- 应用级容器会话 ----------------
+
+  /**
+   * 「像容器一样打开」的具体实现：
+   * Android 环境只引导一次并常驻（quickboot 快照 + adoptExisting 接管），
+   * 之后每次打开 App 只是 am start + 把已有窗口挂进来，不再重跑整个系统。
+   * 这里额外做三件降低系统压力的事：
+   *   - 停掉其他用户 App 的进程，让环境里只跑当前 App 需要的东西；
+   *   - 有窗口时给 qemu 一个「让着前台」的优先级；
+   *   - 只在有窗口时才开启文件同步 / 通知轮询（由 onActive 回调交给 UI 层）。
+   */
+  async beginApp(pkg, { onActive = () => {} } = {}) {
+    const first = this._activeApps.size === 0;
+    this._activeApps.add(pkg);
+    this.touch();
+    const state = container.nextSessionState([...this._activeApps], 'open', pkg);
+    const s = this.settings;
+    const perf = s.engine && s.engine.priorityMode === 'performance';
+
+    if (first) {
+      await this.emulator.setPriority(perf ? 'normal' : 'below').catch(() => {});
+      try { onActive(true); } catch (_) { /* 轮询启动失败不影响打开应用 */ }
+    }
+
+    const installed = store.getApps().map((a) => a && a.package).filter(Boolean);
+    const plan = container.buildSessionCommands({
+      pkg,
+      installed,
+      deep: !!(s.engine && s.engine.deepTrim),
+      // App 刚 am start 完，此刻清后台可能误伤正在进前台的进程；清理放到 endApp
+      killBackground: false,
+    });
+    if (plan.commands.length) {
+      await this.client().shell(plan.commands.join(' ; '), { timeout: 20000 }).catch(() => '');
+    }
+    this.log(container.describeSession(state, plan));
+    return { ...state, plan };
+  }
+
+  /**
+   * 关掉一个应用窗口：停掉它的进程；如果是最后一个窗口，让容器进入
+   * 「常驻但几乎不耗资源」的停放状态（清后台 + Android idle + qemu 降优先级）。
+   * 不关机、不删 AVD —— 下次点开还是秒进。
+   */
+  async endApp(pkg, { onIdle = () => {} } = {}) {
+    this._activeApps.delete(pkg);
+    await this.client().forceStop(pkg).catch(() => {});
+    const state = container.nextSessionState([...this._activeApps], 'close', pkg);
+    if (state.idle) {
+      const s = this.settings;
+      const cmds = container.buildIdleCommands({ deep: !!(s.engine && s.engine.deepTrim) });
+      await this.client().shell(cmds.join(' ; '), { timeout: 15000 }).catch(() => '');
+      await this.emulator.setPriority('idle').catch(() => {});
+      try { onIdle(true); } catch (_) { /* ignore */ }
+      this.log('容器已停放（Android 常驻，0 个应用进程，qemu 最低优先级）');
+    }
+    return state;
+  }
+
+  get activeApps() { return [...this._activeApps]; }
+  get containerIdle() { return this._activeApps.size === 0; }
+
+  /** 供设置页切换「深度裁剪」时恢复被禁用的系统包 */
+  async restoreSystemApps() {
+    const cmds = container.buildRestoreCommands();
+    await this.client().shell(cmds.join(' ; '), { timeout: 20000 }).catch(() => '');
+    return true;
+  }
+
+  setGuestPriority(level) { return this.emulator.setPriority(level); }
+
   // ---------------- 空闲回收 ----------------
 
   startWatchdog() {
@@ -758,8 +859,14 @@ class Runtime {
     this._watchdog = setInterval(async () => {
       const s = this.settings;
       const limit = (s.engine.idleShutdownMinutes || 0) * 60000;
-      if (!limit || !this.vmRunning) return;
-      if (Date.now() - this.lastActivity < limit) return;
+      if (!limit) return;
+      // 接管来的模拟器没有本地 proc 句柄，vmRunning 会是 false：
+      // 以前这里直接 return，导致容器永不回收。改成同时看 adb 是否在线。
+      if (!this.vmRunning) {
+        const online = await this.client().isOnline().catch(() => false);
+        if (!online) return;
+      }
+      if (this._activeApps.size > 0 || Date.now() - this.lastActivity < limit) return;
       try {
         const running = await this.client().runningPackages();
         const alive = running.filter((p) => !/launcher|systemui|settings|inputmethod|android\.systemui/i.test(p));

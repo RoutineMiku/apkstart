@@ -25,9 +25,11 @@ function iconUrl(p) {
 }
 
 class AppWindow {
-  constructor({ agent, setOrientation }) {
+  constructor({ agent, setOrientation, mouseHook = false }) {
     this.agent = agent;
     this.setOrientation = setOrientation || null;
+    // 全局鼠标钩子是可选功能，默认关闭。传函数可在设置变化时实时生效。
+    this.mouseHook = mouseHook;
     this.win = null;
     this.pkg = null;
     this.state = { label: '', tip: '', ready: false, landscape: false };
@@ -145,10 +147,25 @@ class AppWindow {
       this._closing = false;
       if (this._closedCb) this._closedCb(pkg);
     });
-    this.win.on('focus', () => this.agent.hook(true).catch(() => {}));
+    // 只在「应用窗口真正处于前台」且用户显式开启侧键映射时装全局钩子；
+    // 失焦/关闭立即卸载，绝不让 ApkStart 在后台拖慢整个系统的鼠标。
+    this.win.on('focus', () => this._syncHook(true));
+    this.win.on('blur', () => this._syncHook(false));
 
     if (fullscreen) this.win.maximize();
     return this.win;
+  }
+
+  _wantHook() {
+    const v = typeof this.mouseHook === 'function' ? this.mouseHook() : this.mouseHook;
+    return !!v;
+  }
+
+  _syncHook(active) {
+    const on = !!active && this._wantHook();
+    if (this.agent && typeof this.agent.setHook === 'function') {
+      this.agent.setHook(on).catch(() => {});
+    }
   }
 
   setState(patch) {
@@ -261,6 +278,7 @@ class AppWindow {
   close({ keepApp = false } = {}) {
     if (!this.isOpen) return;
     const pkg = this.pkg;
+    this._syncHook(false);
     this.agent.hide().catch(() => {});
     try { this.win.destroy(); } catch (_) { /* ignore */ }
     this.win = null;

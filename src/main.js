@@ -452,8 +452,10 @@ async function runLaunch(pkg) {
     const embedded = await appWin.embed();
     mark('embedded');
     appWin.setState({ ready: true, tip: '' });
-    winAgent.hook(true).catch(() => {});
-    startNotifier();
+    // 容器会话：环境已经就绪，这里只做「按应用裁剪 + 打开后台轮询」，
+    // 不再为这个 App 重新引导一遍 Android。全局鼠标钩子由窗口 focus 事件
+    // 按设置决定，默认不安装。
+    await runtime.beginApp(pkg, { onActive: onContainerActive }).catch(() => {});
     send('app:launched', { package: pkg, engine: r.engine });
     appLog(`launch ok ${pkg} embedded=${embedded}`);
     return { ok: true, embedded };
@@ -463,6 +465,22 @@ async function runLaunch(pkg) {
     showWindow();
     send('toast', { type: 'error', message: `启动失败：${e.message}` });
     return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * 容器有/无应用窗口时的后台任务开关。
+ * 文件同步每 8 秒要遍历共享目录并走一次 adb find/stat，通知桥也在轮询；
+ * 以前从 ApkStart 一启动就无条件开跑，哪怕一个 Android 应用都没打开。
+ * 现在只在容器里真的有应用时才开，关掉最后一个窗口立刻停。
+ */
+function onContainerActive(on) {
+  if (on) {
+    sharer?.start(8000);
+    startNotifier();
+  } else {
+    sharer?.stop();
+    notifier?.stop();
   }
 }
 
@@ -609,6 +627,13 @@ function registerIpc() {
 
   ipcMain.handle('shortcut:rebuild', async () => ({ ok: true, fixed: await installer.ensureShortcuts() }));
   ipcMain.handle('runtime:autoDeploy', () => autoDeploy());
+  // 关闭「深度裁剪」时把被 pm disable-user 的系统包恢复回来
+  ipcMain.handle('settings:restoreSystem', async () => runtime.restoreSystemApps());
+  // 关闭「鼠标侧键」时立刻卸载全局钩子，不用等窗口失焦
+  ipcMain.handle('settings:unhook', async () => {
+    if (winAgent && winAgent.hooked) await winAgent.setHook(false).catch(() => {});
+    return true;
+  });
 
   ipcMain.handle('runtime:status', async () => runtime.status());
   ipcMain.handle('runtime:probe', async () => runtime.probe());
@@ -971,17 +996,19 @@ if (!gotLock) {
     sharer = new Sharer(runtime);
     androidSet = new AndroidSettings(runtime);
 
-    // 窗口代理：内嵌模拟器窗口 + 鼠标侧键钩子（一次启动，常驻到进程退出）
+    // 窗口代理：只负责内嵌模拟器窗口。全局鼠标钩子默认不装（见 setHook）。
     winAgent = new WinAgent();
     appWin = new AppWindow({
       agent: winAgent,
       // 旋转要改 Android 的逻辑分辨率，交给 adb 客户端做
       setOrientation: (landscape) => runtime.client().setOrientation(landscape),
+      // 传 getter：设置页改了开关，下一次窗口 focus 就生效，不用重启
+      mouseHook: () => !!store.getSettings().engine.mouseSideButtons,
     });
     appWin.onCloseApp((pkg) => {
-      // 关窗口 = 关应用：先把应用停掉，内存立刻还回来；引擎留着，下次点开秒进
-      runtime.client().forceStop(pkg).catch(() => {});
-      if (notifier) notifier.stop();
+      // 关窗口 = 停这个应用；最后一个窗口关掉时容器停放（降优先级、停轮询），
+      // 但 Android 环境留着，下次点开是秒进而非重新冷启动。
+      runtime?.endApp(pkg, { onIdle: onContainerActive }).catch(() => {});
     });
     winAgent.on('back', () => { runtime.client().keyBack().catch(() => {}); });
     winAgent.on('forward', () => { runtime.client().keyForward().catch(() => {}); });
@@ -1009,12 +1036,16 @@ if (!gotLock) {
     if (args.apk) runInstall(args.apk).catch(() => {});
     else if (args.launch) await runLaunch(args.launch);
 
-    // 首次运行自动完成全部部署（后台，不弹任何步骤）
-    autoDeploy().then((r) => {
-      if (r && r.ok) send('toast', { type: 'ok', message: '运行时已自动准备完成' });
-    }).catch(() => {});
+    // 首次运行的组件部署延后 20 秒：冷启动那段时间磁盘/CPU 已经打满，
+    // 再并发下载解压只会让桌面更卡。真有应用要打开时 ensure() 自会准备。
+    setTimeout(() => {
+      autoDeploy().then((r) => {
+        if (r && r.ok) send('toast', { type: 'ok', message: '运行时已自动准备完成' });
+      }).catch(() => {});
+    }, 20000).unref?.();
 
-    sharer.start(8000);
+    // 文件同步 / 通知轮询不再无条件常驻：只在容器里真的有应用窗口时才跑
+    // （见 onContainerActive）。
 
     // 冒烟测试：截图后退出，用于自动化验证界面是否正常渲染
     if (process.argv.includes('--smoke') && mainWindow) {

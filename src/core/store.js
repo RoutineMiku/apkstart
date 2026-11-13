@@ -30,6 +30,11 @@ const DEFAULT_SETTINGS = {
     headless: false,
     gpuMode: 'auto',         // auto = 按 emulator 版本自动挑后端并逐级降级
     forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
+    // ---- 轻量容器（默认全开省资源，用户可逐项关掉）----
+    liteMode: true,          // 收敛 vCPU 配额，避免 qemu 占满物理核拖慢 Windows
+    mouseSideButtons: false, // 全局 WH_MOUSE_LL 钩子：默认关闭，开启才有侧键返回
+    deepTrim: false,         // 深度裁剪系统后台包（Play 商店/向导等），默认不动系统
+    priorityMode: 'balanced', // balanced=让出前台 | performance=qemu 用 Normal 优先级
   },
   runtime: {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime

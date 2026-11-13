@@ -377,7 +377,34 @@ class EmulatorEngine {
       fs.appendFileSync(logFile, `spawn error: ${e.message}\n`);
       this.proc = null;
     });
+
+    // qemu 是 detached 的独立进程，等它真正起来再把优先级降下来。
+    // 不降的话 2~4 个 vCPU 线程会以 Normal 优先级和 Windows 桌面抢 CPU，
+    // 用户最直观的感受就是「一打开 ApkStart，鼠标就发飘、整机变卡」。
+    const perf = this.settings?.engine?.priorityMode === 'performance';
+    setTimeout(() => {
+      this.setPriority(perf ? 'normal' : 'below').catch(() => {});
+    }, 3500).unref?.();
     return { proc, args };
+  }
+
+  /**
+   * 调整本机 qemu/emulator 进程的优先级（只匹配命令行里带本 AVD 名的进程）。
+   * level: idle（容器停放）| below（有应用在前台）| normal（性能优先）。
+   */
+  setPriority(level = 'below') {
+    if (process.platform !== 'win32') return Promise.resolve(0);
+    const script = path.join(__dirname, 'win', 'priority.ps1');
+    if (!fs.existsSync(script)) return Promise.resolve(0);
+    return new Promise((resolve) => {
+      execFile('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', script, '-Avd', AVD_NAME, '-Level', level,
+      ], { windowsHide: true, timeout: 15000 }, (_err, out) => {
+        const m = /CHANGED=(\d+)/.exec(String(out || ''));
+        resolve(m ? Number(m[1]) : 0);
+      });
+    });
   }
 
   /** 强杀当前尝试（含 qemu 子进程树） */

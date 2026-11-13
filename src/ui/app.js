@@ -629,6 +629,10 @@ function fillSettings(s) {
   $('setMemory').value = s.engine.memoryMB;
   $('setCores').value = s.engine.cores;
   $('setIdle').value = s.engine.idleShutdownMinutes;
+  $('setLiteMode').checked = s.engine.liteMode !== false;
+  $('setPriorityMode').value = s.engine.priorityMode === 'performance' ? 'performance' : 'balanced';
+  $('setDeepTrim').checked = !!s.engine.deepTrim;
+  $('setMouseSideButtons').checked = !!s.engine.mouseSideButtons;
   $('setCompat').checked = !!(s.runtime && s.runtime.compatImage);
   $('setAutoShortcut').checked = !!s.createShortcutOnInstall;
   $('setStartMenuShortcut').checked = s.createStartMenuShortcut !== false;
@@ -686,6 +690,20 @@ function bindSettings() {
   $('setMemory').addEventListener('change', (e) => save({ engine: { memoryMB: Number(e.target.value) || 0 } }));
   $('setCores').addEventListener('change', (e) => save({ engine: { cores: Number(e.target.value) || 0 } }));
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
+  $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
+  $('setPriorityMode').addEventListener('change', (e) => save({ engine: { priorityMode: e.target.value } }));
+  $('setMouseSideButtons').addEventListener('change', (e) => {
+    save({ engine: { mouseSideButtons: e.target.checked } });
+    if (!e.target.checked) api.restoreMouseHook().catch(() => {});
+  });
+  $('setDeepTrim').addEventListener('change', async (e) => {
+    await save({ engine: { deepTrim: e.target.checked } });
+    // 关掉深度裁剪必须把之前 pm disable-user 的包恢复回来，否则影响是持久的
+    if (!e.target.checked) {
+      api.restoreSystemApps().catch(() => {});
+      toast({ title: '已恢复系统组件', body: '深度裁剪关闭，后台包正在恢复', type: 'info' });
+    }
+  });
   $('setCompat').addEventListener('change', async (e) => {
     const on = e.target.checked;
     await save({ runtime: { compatImage: on } });

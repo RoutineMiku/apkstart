@@ -431,6 +431,121 @@ const { friendlyInstallError, friendlyLaunchError } = require('../src/core/adb')
     assert(back.equals(payload), '解压内容必须与源镜像逐字节一致');
   });
 
+  console.log('\n[container.js 应用级容器]');
+
+  const container = require('../src/core/container');
+
+  await test('系统/框架包永不裁剪，用户 App 才纳入会话清理', () => {
+    for (const p of ['android', 'com.android.systemui', 'com.google.android.gms', 'com.foo.bar.baz']) {
+      const sys = container.isSystemPackage(p);
+      if (p.startsWith('com.foo')) assert(!sys, `${p} 应识别为用户 App`);
+      else assert(sys, `${p} 应识别为系统包`);
+    }
+    assert(container.isSystemPackage(''), '空包名当作系统包，避免生成非法命令');
+  });
+
+  await test('启动应用只停其他已装 App，默认绝不动系统包', () => {
+    const r = container.buildSessionCommands({
+      pkg: 'com.phoenix.read',
+      installed: ['com.phoenix.read', 'com.other.app', 'com.android.vending', 'com.google.android.gms', 'com.third.game'],
+    });
+    assert(r.stopped.length === 2, `应停 2 个其他用户 App，实际 ${r.stopped.join(',')}`);
+    assert(r.stopped.includes('com.other.app') && r.stopped.includes('com.third.game'));
+    assert(!r.commands.some((c) => c.includes('pm disable')), '默认不能禁用系统包');
+    assert(!r.commands.some((c) => c.includes('kill-all')), '启动阶段不能清后台，避免误伤刚进前台的 App');
+    assert(!r.commands.some((c) => /force-stop (android|com\.android|com\.google\.android)/.test(c)), '不能 force-stop 系统框架');
+  });
+
+  await test('包名白名单：被污染的清单不会拼出注入命令', () => {
+    const r = container.buildSessionCommands({
+      pkg: 'com.phoenix.read',
+      installed: ['com.evil;rm -rf /', 'com.ok.app', '$(whoami)', 'com.foo-bar'],
+    });
+    assert(r.stopped.length === 1 && r.stopped[0] === 'com.ok.app', `只应停合法包名，实际 ${r.stopped.join(',')}`);
+    assert(!r.commands.some((c) => c.includes('rm -rf') || c.includes('$(')), '不能出现注入片段');
+  });
+
+  await test('深度裁剪可禁用后台包，且能完整恢复、不碰必需组件', () => {
+    const r = container.buildSessionCommands({
+      pkg: 'com.phoenix.read', installed: [], deep: true,
+    });
+    assert(r.disabled.length > 0, '深度裁剪应有可禁用项');
+    assert(r.commands.some((c) => c.includes('pm disable-user --user 0 com.android.vending')));
+    for (const p of container.NEVER_TRIM) {
+      assert(!r.disabled.includes(p), `${p} 绝不能被禁用`);
+    }
+    const back = container.buildRestoreCommands();
+    for (const p of container.OPTIONAL_SYSTEM) {
+      assert(back.some((c) => c.includes(`pm enable ${p}`)), `${p} 必须可恢复`);
+    }
+  });
+
+  await test('容器停放：清后台 + Android idle，且状态机覆盖多窗口/最后关闭', () => {
+    const idle = container.buildIdleCommands();
+    assert(idle.some((c) => c.includes('am kill-all')), '停放要清后台缓存进程');
+    assert(idle.some((c) => c.includes('deviceidle force-idle')), '停放要让 Android 进 idle');
+    let s = container.nextSessionState([], 'open', 'a');
+    assert(s.hasApp && !s.idle && s.foreground === 'a');
+    s = container.nextSessionState(s.active, 'open', 'b');
+    assert(s.active.length === 2 && s.foreground === 'b');
+    s = container.nextSessionState(s.active, 'close', 'a');
+    assert(s.active.length === 1 && s.hasApp && !s.idle);
+    s = container.nextSessionState(s.active, 'close', 'b');
+    assert(s.idle && !s.hasApp && s.active.length === 0, '最后一个窗口关闭后容器应停放');
+  });
+
+  await test('doctor 轻量容器：收敛 vCPU，手动设置优先', () => {
+    const host = { totalMB: 32768, freeMB: 20000, cores: 16, home: 'C:\\x', homeAscii: true, tmp: TMP, platform: 'win32', arch: 'x64', rdp: false };
+    const lite = doctor.liteProfile({ host, engine: {} });
+    assert(lite && lite.cores <= 3 && lite.cores >= 2, `16 核机器轻量模式应给 2~3 核，实际 ${lite && lite.cores}`);
+    assert(doctor.liteProfile({ host, engine: { liteMode: false } }) === null, '显式关闭应返回 null');
+    const low = doctor.liteProfile({ host: { ...host, cores: 2 }, engine: {} });
+    assert(low.cores === 2, '2 核机器至少保留 2 核');
+
+    const auto = doctor.autoProfile({
+      settings: { engine: { autoMemory: true, liteMode: true } },
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
+    });
+    assert(auto.lite === true && auto.cores <= 3, JSON.stringify({ lite: auto.lite, cores: auto.cores }));
+    const manual = doctor.autoProfile({
+      settings: { engine: { autoMemory: false, cores: 6, liteMode: true } },
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
+    });
+    assert(manual.cores === 6, '用户手动指定的核数必须优先于轻量模式');
+    assert(/轻量容器/.test(doctor.describeProfile(auto)), '诊断摘要应标出轻量容器');
+  });
+
+  await test('全局鼠标钩子默认关闭，且窗口代理不再长时间阻塞消息泵', () => {
+    const root = path.join(__dirname, '..');
+    const agentPs1 = fs.readFileSync(path.join(root, 'src', 'core', 'win', 'agent.ps1'), 'utf8');
+    const agentJs = fs.readFileSync(path.join(root, 'src', 'core', 'agent.js'), 'utf8');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const appwinJs = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    const uiHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+
+    assert(/mouseSideButtons:\s*false/.test(storeJs), '默认设置里侧键钩子必须关闭');
+    assert(!/winAgent\.hook\(true\)/.test(mainJs), '主进程不能再无条件安装全局钩子');
+    assert(!/agent\.hook\(true\)/.test(appwinJs), '应用窗口不能再无条件安装全局钩子');
+    assert(!/sharer\.start\(8000\)/.test(mainJs), '文件同步不能无条件常驻');
+    assert(/setHook/.test(agentJs) && /hooked/.test(agentJs), '钩子开关必须幂等可关闭');
+    assert(/new Thread\(HookThreadProc\)/.test(agentPs1), '钩子必须装在专用消息线程上');
+    assert(/GetMessage\(out MSG/.test(agentPs1), '钩子线程必须跑消息循环');
+    assert(!/Poll\(4000,\s*SelectMode\.SelectRead\)/.test(agentPs1), '主循环不能再阻塞 4 秒');
+    assert(/Poll\(50,\s*SelectMode\.SelectRead\)/.test(agentPs1), '主循环应短轮询保持消息泵响应');
+    assert(/now - _embedAt < 8000/.test(agentPs1), '窗口巡检必须限时，不能永久每 2 秒 EnumWindows');
+    assert(/setLiteMode/.test(uiHtml) && /setDeepTrim/.test(uiHtml), '设置页需暴露轻量容器选项');
+  });
+
+  await test('WinAgent.setHook(false) 在默认状态下不会拉起 PowerShell 代理', async () => {
+    const { WinAgent } = require('../src/core/agent');
+    const a = new WinAgent();
+    a.hooked = false;
+    const r = await a.setHook(false);
+    assert(r && r.hooked === false, '关闭应返回 hooked=false');
+    assert(a.ready === null, '默认关闭时不能为此启动常驻代理进程');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }

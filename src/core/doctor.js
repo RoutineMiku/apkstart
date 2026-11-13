@@ -95,9 +95,27 @@ function shortPath(p) {
  * 用户设置里若显式给了 engine.memoryMB / cores / gpuMode，则作为上限/覆盖，
  * 但不会再因为「没设置」而用 4G/4核 硬编码把小内存机器搞崩。
  */
+/**
+ * 「轻量容器」配额：只约束最影响主机手感的那一项 —— vCPU 数。
+ *
+ * 旧逻辑给 16 核机器分 4 核，qemu 的 4 个 vCPU 线程会长期占满物理核，
+ * Windows 桌面、鼠标、浏览器只能抢剩下的时间片，表现就是「一打开就卡」。
+ * 实际跑一个 Android App 2 个 vCPU 已经绰绰有余，多给只是拖慢主机。
+ *
+ * 内存、分辨率刻意不动：内存上限本来就是 2~3G，降分辨率还会让 quickboot
+ * 快照指纹变化、每次切模式都要重新冷启动，得不偿失。
+ *
+ * 纯函数，settings 为 null 时返回 null（保持旧调用方/单测的行为不变）。
+ */
+function liteProfile({ host = hostInfo(), engine = {} } = {}) {
+  if (engine && engine.liteMode === false) return null;
+  const cores = clamp(Math.floor((host.cores || 2) / 4), 2, 3);
+  return { cores, priority: 'below' };
+}
+
 function chooseProfile({
   host = hostInfo(), accel, emulatorVersion = '', diskMB = 0,
-  port = 5554, adbPort = 5044, overrides = {},
+  port = 5554, adbPort = 5044, overrides = {}, settings = null,
 } = {}) {
   const accelOk = !!(accel && accel.ok);
   // 3GB 足够 Android 14 与主流应用；再高只会放大内存占用和 quickboot 快照体积
@@ -110,6 +128,9 @@ function chooseProfile({
 
   let cores = clamp(Math.floor(host.cores / 2), 2, 4);
   if (overrides.cores) cores = clamp(Number(overrides.cores) || cores, 1, 8);
+  // 用户没手动指定核数时才由轻量模式收敛，手动值永远优先
+  const lite = settings ? liteProfile({ host, engine: settings.engine || {} }) : null;
+  if (lite && !overrides.cores) cores = Math.min(cores, lite.cores);
 
   const disk = diskMB || freeDiskMB(host.tmp);
   const dataMB = disk && disk < 8192 ? 2048 : 4096;
@@ -129,6 +150,7 @@ function chooseProfile({
     port,
     adbPort,
     snapshot: true,
+    lite: !!lite,
     // 无加速的纯软件模拟在 Windows 上确实能起来，但 Android 14 冷启动可能 5-10 分钟
     bootTimeoutMs: accelOk ? 240000 : 600000,
     emulatorVersion,
@@ -158,7 +180,7 @@ function overridesFromSettings(engine = {}) {
  */
 function autoProfile({ settings = {}, accel, emulatorVersion = '', diskMB = 0, port = 5554, adbPort = 5044 } = {}) {
   return chooseProfile({
-    accel, emulatorVersion, diskMB, port, adbPort,
+    accel, emulatorVersion, diskMB, port, adbPort, settings,
     overrides: overridesFromSettings(settings && settings.engine),
   });
 }
@@ -347,7 +369,8 @@ function diagnose(lines) {
 /** 人类可读的一行摘要，放在设置页让高级用户知道自动选了什么 */
 function describeProfile(p) {
   return `自动：${(p.memoryMB / 1024).toFixed(1)}GB 内存 · ${p.cores} 核 · ${p.gpu} 渲染 · `
-    + `${p.accelOk ? '硬件加速' : '软件模拟'} · ${p.snapshot ? '按需快照' : '冷启动'} · 端口 ${p.port}`;
+    + `${p.accelOk ? '硬件加速' : '软件模拟'} · ${p.snapshot ? '按需快照' : '冷启动'}`
+    + `${p.lite ? ' · 轻量容器' : ''} · 端口 ${p.port}`;
 }
 
 /** 导出诊断报告（纯文本，便于发邮件/贴 issue） */
@@ -382,7 +405,7 @@ function writeReport({ dataDir, profile, logLines = [], extra = {} }) {
 }
 
 module.exports = {
-  hostInfo, freeDiskMB, isAsciiPath, shortPath, lcdFor,
+  hostInfo, freeDiskMB, isAsciiPath, shortPath, lcdFor, liteProfile,
   versionNumbers, gpuCandidates, chooseProfile, planVariants,
   overridesFromSettings, autoProfile,
   freePortPair, freeAdbPort, snapshotKey,
