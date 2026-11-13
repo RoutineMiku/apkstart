@@ -98,6 +98,65 @@ class EmulatorEngine {
     } catch (_) { /* ignore */ }
   }
 
+  /** AVD 目录里是否真的有一份 quickboot 快照 */
+  hasSnapshot() {
+    try {
+      const dir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`, 'snapshots');
+      return fs.readdirSync(dir).length > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * 清掉占着 AVD 锁的孤儿模拟器。
+   * emulator.exe 只是个启动器，真正的 qemu 被 spawn 成独立进程（detached），
+   * 所以只 kill 自己手上的 proc 句柄经常留个孤儿在那占着 multiinstance.lock，
+   * 下一次启动就会 FATAL "Running multiple emulators with the same AVD"。
+   * 按「AVD 锁里的 pid」+「命令行带本 AVD 名的 qemu/emulator」两个来源清。
+   */
+  async killOrphanProcesses({ onLog = () => {} } = {}) {
+    if (process.platform !== 'win32') return 0;
+    const { execFile } = require('child_process');
+    const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+    const pids = new Set();
+    // 1) 锁文件里 emulator 自己写的 pid（最可靠）
+    try {
+      const f = path.join(avdDir, 'hardware-qemu.ini.lock', 'pid');
+      if (fs.existsSync(f) && fs.statSync(f).isFile()) {
+        const pid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+        if (pid) pids.add(pid);
+      }
+    } catch (_) { /* ignore */ }
+    // 2) 兜底：命令行里引用本 AVD 的 qemu / emulator
+    try {
+      const out = await new Promise((res) => execFile(
+        'wmic',
+        ['process', 'where', "name='qemu-system-x86_64.exe' or name='emulator.exe'", 'get', 'processid,commandline', '/format:csv'],
+        { windowsHide: true, maxBuffer: 32 * 1024 * 1024 },
+        (e, o) => res(e ? '' : o || ''),
+      ));
+      for (const line of String(out).split('\n')) {
+        if (line.includes(AVD_NAME) && /qemu|emulator/i.test(line)) {
+          const m = /,(\d+)\s*$/.exec(line.trim());
+          if (m) pids.add(Number(m[1]));
+        }
+      }
+    } catch (_) { /* wmic 不可用就只靠锁文件 */ }
+    pids.delete(process.pid);
+    if (!pids.size) {
+      this.clearLocks(avdDir);
+      return 0;
+    }
+    onLog(`清理 ${pids.size} 个残留模拟器进程`);
+    await Promise.all([...pids].map((pid) => new Promise((r) => {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => r());
+    })));
+    await sleep(1200);
+    this.clearLocks(avdDir);
+    return pids.size;
+  }
+
   /**
    * 准备 AVD：写 config.ini。每次启动按当前自动配置重写，保证降级重试即时生效。
    */
@@ -235,6 +294,9 @@ class EmulatorEngine {
       '-no-audio',
       '-no-boot-anim',
       '-no-metrics',
+      // 关掉崩溃上报：一旦历史崩溃报告存在，emulator 会弹「同意上传」模态框，
+      // 主线程被卡住、永远不开机（日志表现为 Showing crashdialog to get consent）。
+      '-crash-report-mode', 'disabled',
       '-gpu', gpu,
       '-memory', String(memoryMB),
       '-cores', String(cores),
@@ -252,7 +314,11 @@ class EmulatorEngine {
       // 不要模拟器自带的手机外壳；侧边浮动工具栏由窗口代理隐藏。
       args.push('-no-skin');
     }
-    if (snapshot && !wipe) args.push('-snapshot', SNAPSHOT_NAME);
+    // 只有快照真的存在才传 -snapshot：全新 AVD（或快照刚被作废）时传了它，
+    // qemu 会一直等一份不存在的内存状态，进程活着但永远不开机——
+    // 上层只看到「开机超时」，接着换参数重试，反而被 AVD 锁挡成
+    // "Running multiple emulators with the same AVD"。
+    if (snapshot && !wipe && this.hasSnapshot()) args.push('-snapshot', SNAPSHOT_NAME);
     else args.push('-no-snapshot');
     if (wipe) args.push('-wipe-data');
     if (accel === 'off') args.push('-accel', 'off');
@@ -318,12 +384,16 @@ class EmulatorEngine {
   async killAttempt() {
     const proc = this.proc;
     this.proc = null;
-    if (!proc) return;
-    try { proc.kill(); } catch (_) { /* ignore */ }
-    if (process.platform === 'win32' && proc.pid) {
-      try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (_) { /* ignore */ }
+    if (proc) {
+      try { proc.kill(); } catch (_) { /* ignore */ }
+      if (process.platform === 'win32' && proc.pid) {
+        try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (_) { /* ignore */ }
+      }
     }
-    await sleep(1200);
+    await sleep(800);
+    // proc 句柄常常已经没了（emulator.exe 启动完就退出，qemu 是 detached 的独立进程），
+    // 不按进程名兜底清一遍，下一轮就会被 AVD 锁挡成 FATAL。
+    await this.killOrphanProcesses().catch(() => {});
   }
 
   /**
@@ -381,6 +451,11 @@ class EmulatorEngine {
     this.attempts = [];
     this.lastDiagnosis = null;
     let lastError = '';
+
+    // 冷启前先清孤儿：上一次运行留下的 qemu 仍占着 AVD 锁时，
+    // 所有尝试都会立刻 FATAL "Running multiple emulators with the same AVD"。
+    // eslint-disable-next-line no-await-in-loop
+    await this.killOrphanProcesses({ onLog }).catch(() => {});
 
     for (let i = 0; i < variants.length; i += 1) {
       const base = variants[i];

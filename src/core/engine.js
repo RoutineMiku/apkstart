@@ -651,45 +651,10 @@ class Runtime {
    * 清理上一次运行遗留、却没被接管的孤儿模拟器。
    * 关掉 ApkStart 时 emulator 是 detached 的，qemu 会存活；下次启动时它仍占着 AVD 锁，
    * 表现为冷启直接 FATAL "Running multiple emulators with the same AVD"。
-   * 优先用 AVD 锁文件里 emulator 自己写的 PID（最可靠），再兜底按命令行扫一遍本 AVD 的 qemu/emulator。
+   * 实现收敛到 EmulatorEngine，重试路径（killAttempt）也用同一份逻辑。
    */
   async killOrphanEmulators({ onLog = () => {} } = {}) {
-    const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
-    const killPid = (pid) => new Promise((resolve) => {
-      if (!pid) return resolve();
-      const { execFile } = require('child_process');
-      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
-    });
-    const pids = new Set();
-    // 1) 锁文件记录的 PID（emulator 启动时写入，指向 emulator.exe，/T 会连带杀掉 qemu）
-    try {
-      const f = path.join(avdDir, 'hardware-qemu.ini.lock', 'pid');
-      if (fs.existsSync(f) && fs.statSync(f).isFile()) {
-        const pid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
-        if (pid) pids.add(pid);
-      }
-    } catch (_) { /* ignore */ }
-    // 2) 兜底：命令行里引用本 AVD 的 qemu / emulator 全部强杀（wmic 不可用时跳过）
-    try {
-      const { execFile } = require('child_process');
-      const out = await new Promise((res) => execFile(
-        'wmic',
-        ['process', 'where', "name='qemu-system-x86_64.exe' or name='emulator.exe'", 'get', 'processid,commandline', '/format:csv'],
-        { windowsHide: true, maxBuffer: 32 * 1024 * 1024 },
-        (e, o) => res(e ? '' : o || ''),
-      ));
-      for (const line of String(out).split('\n')) {
-        if (line.includes(AVD_NAME) && /qemu|emulator/i.test(line)) {
-          const m = /,(\d+)\s*$/.exec(line.trim());
-          if (m) pids.add(Number(m[1]));
-        }
-      }
-    } catch (_) { /* wmic 不可用就跳过，锁文件 PID 已覆盖绝大多数情况 */ }
-    if (pids.size) {
-      onLog(`清理 ${pids.size} 个残留模拟器进程`);
-      await Promise.all([...pids].map(killPid));
-      await new Promise((r) => setTimeout(r, 1500));
-    }
+    return this.emulator.killOrphanProcesses({ onLog });
   }
 
   async ensure({ onLog = () => {} } = {}) {
