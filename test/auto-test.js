@@ -273,11 +273,25 @@ const { friendlyInstallError, friendlyLaunchError } = require('../src/core/adb')
   await test('启动参数带自动内存/核心/快照，且不再用弃用的 GPU 模式', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));
-    const args = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
-    assert(/-gpu software/.test(args));
-    assert(!/swiftshader_indirect/.test(args));
-    assert(/-memory 2048/.test(args) && /-cores 2/.test(args));
-    assert(/-snapshot apkstart/.test(args), '应使用 quickboot 快照');
+    // 快照不存在时（全新 AVD / 刚被作废）绝不能传 -snapshot：
+    // qemu 会一直等一份不存在的内存状态，进程活着但永不开机。
+    const fresh = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
+    assert(/-gpu software/.test(fresh));
+    assert(!/swiftshader_indirect/.test(fresh));
+    assert(/-memory 2048/.test(fresh) && /-cores 2/.test(fresh));
+    if (!emu.hasSnapshot()) {
+      assert(/-no-snapshot/.test(fresh), '没有快照时必须是 -no-snapshot');
+      assert(!/-snapshot apkstart/.test(fresh), '没有快照时不能传 -snapshot');
+    }
+    // 快照确实存在时才走 quickboot
+    const avdDir = path.join(emu.provisioner.paths().avdHome, 'apkstart.avd');
+    const snapDir = path.join(avdDir, 'snapshots');
+    const created = !fs.existsSync(snapDir);
+    fs.mkdirSync(path.join(snapDir, 'apkstart'), { recursive: true });
+    const withSnap = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
+    assert(/-snapshot apkstart/.test(withSnap), '有快照时应使用 quickboot 快照');
+    if (created) fs.rmSync(snapDir, { recursive: true, force: true });
+
     const cold = emu.buildArgs({ wipe: true }).join(' ');
     assert(/-wipe-data/.test(cold) && /-no-snapshot/.test(cold), 'wipe 时不能同时加载快照');
   });
