@@ -467,17 +467,38 @@ class Provisioner {
     const srcRoot = path.join(this.root, 'system-images');
     const destRoot = path.join(store.DATA_DIR, 'system-images');
     const jobs = [];
+    const copies = []; // 压缩镜像之外的文件（kernel-ranchu / ramdisk / 未压缩 .img 等）必须一并落到展开目录
+    const found = new Map(); // dest -> job（同镜像 .xz/.gz 并存时优先 .xz）
     const walk = (dir, rel = '') => {
       let entries = [];
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
       for (const e of entries) {
         const p = path.join(dir, e.name);
-        if (e.isDirectory()) walk(p, path.join(rel, e.name));
-        else if (/\.img\.gz$/i.test(e.name)) jobs.push({ src: p, dest: path.join(destRoot, rel, e.name.replace(/\.gz$/i, '')) });
+        if (e.isDirectory()) { walk(p, path.join(rel, e.name)); continue; }
+        // 支持 .img.xz（LZMA2，体积比 .gz 小 ~25%）和旧的 .img.gz
+        if (/\.img\.(xz|gz)$/i.test(e.name)) {
+          const dest = path.join(destRoot, rel, e.name.replace(/\.img\.(xz|gz)$/i, '.img'));
+          const job = { src: p, dest, xz: /\.xz$/i.test(e.name) };
+          const prev = found.get(dest);
+          if (!prev || (job.xz && !prev.xz)) found.set(dest, job);
+        } else {
+          copies.push({ src: p, dest: path.join(destRoot, rel, e.name) });
+        }
       }
     };
     walk(srcRoot);
-    if (!jobs.length) return 0;
+    jobs.push(...found.values());
+    if (!jobs.length && !copies.length) return 0;
+
+    // 先补齐非镜像文件（模拟器靠 kernel-ranchu 等定位/引导，缺了会报"还差系统镜像"）
+    for (const c of copies) {
+      try {
+        const have = fileSize(c.dest);
+        if (have > 0 && have === fileSize(c.src)) continue;
+        fs.mkdirSync(path.dirname(c.dest), { recursive: true });
+        fs.copyFileSync(c.src, c.dest);
+      } catch (e) { onLog(`复制镜像组件失败：${e.message}`); }
+    }
 
     let done = 0;
     for (const j of jobs) {
@@ -488,12 +509,16 @@ class Provisioner {
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve, reject) => {
         const { pipeline } = require('stream');
-        pipeline(
-          fs.createReadStream(j.src),
-          zlib.createGunzip(),
-          fs.createWriteStream(j.dest),
-          (err) => (err ? reject(err) : resolve()),
-        );
+        const parts = [fs.createReadStream(j.src)];
+        if (j.xz) {
+          // LZMA2 流式解压；@napi-rs/lzma 是 NAPI 预编译，无 Electron ABI 问题
+          const { createDecompressStream } = require('@napi-rs/lzma/xz');
+          parts.push(createDecompressStream());
+        } else {
+          parts.push(zlib.createGunzip());
+        }
+        parts.push(fs.createWriteStream(j.dest));
+        pipeline(...parts, (err) => (err ? reject(err) : resolve()));
       }).catch((e) => onLog(`展开镜像失败：${e.message}`));
       done += 1;
     }

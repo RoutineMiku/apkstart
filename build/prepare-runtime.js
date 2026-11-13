@@ -31,6 +31,32 @@ async function gzipFile(src, dest) {
   );
 }
 
+/** 大镜像用 XZ（LZMA2 9e）：比 gzip -6 再省 ~25%（system.img 1.5GB→~1.1GB）。
+ *  优先 python（支持 EXTREME 极限档）；没有 python 时回退 napi-rs（preset 9）。 */
+async function xzFile(src, dest) {
+  const { spawn } = require('child_process');
+  const ok = await new Promise((resolve) => {
+    const py = spawn('python', ['-c', [
+      'import lzma,sys,shutil',
+      'flt=[{"id":lzma.FILTER_LZMA2,"preset":9|lzma.PRESET_EXTREME,"dict_size":1<<27}]',
+      'z=lzma.LZMAFile(sys.stdout.buffer,mode="wb",format=lzma.FORMAT_XZ,filters=flt)',
+      'shutil.copyfileobj(sys.stdin.buffer,z); z.close()',
+    ].join(';')], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+    const out = fs.createWriteStream(dest);
+    py.stdout.pipe(out);
+    py.on('exit', (c) => resolve(c === 0));
+    py.on('error', () => resolve(false));
+  });
+  if (ok) return;
+  console.log('  （未找到 python，回退 napi-rs preset 9）');
+  const { createCompressStream } = require('@napi-rs/lzma/xz');
+  await pipeline(
+    fs.createReadStream(src),
+    createCompressStream({ preset: 9 }),
+    fs.createWriteStream(dest),
+  );
+}
+
 async function main() {
   const force = process.argv.includes('--force');
   if (fs.existsSync(MARK) && !force) {
@@ -58,7 +84,7 @@ async function main() {
     slim(OUT, { aggressive: !process.argv.includes('--safe-slim') });
   }
 
-  // 2. 系统镜像：system.img 压成 .gz，其余原样带
+  // 2. 系统镜像：大镜像压成 .xz（运行时 materializeImages 流式解压），其余原样带
   const imgRoot = path.join(SRC, 'system-images');
   let compressed = 0;
   if (fs.existsSync(imgRoot)) {
@@ -71,12 +97,19 @@ async function main() {
           for (const f of fs.readdirSync(from)) {
             const src = path.join(from, f);
             if (!fs.statSync(src).isFile()) continue;
+            // NOTICE.txt 是 GMS 许可文本（~20MB），运行不需要
+            if (/^NOTICE\.txt$/i.test(f)) continue;
             if (/^(system|vendor|cache)\.img$/i.test(f) && sizeOf(src) > 32 * 1024 * 1024) {
-              // 大镜像压一份，原图不进包
-              const gz = path.join(to, `${f}.gz`);
-              console.log(`压缩 ${f}（${(sizeOf(src) / 1073741824).toFixed(2)} GB）…`);
+              // 大镜像压一份，原图不进包；已有 .xz（且大小合理）则跳过重复压缩
+              const xz = path.join(to, `${f}.xz`);
+              if (fs.existsSync(xz) && sizeOf(xz) > 32 * 1024 * 1024) {
+                console.log(`跳过 ${f}（已有 .xz ${(sizeOf(xz) / 1048576).toFixed(0)} MB）`);
+                compressed += 1;
+                continue;
+              }
+              console.log(`压缩 ${f}（${(sizeOf(src) / 1073741824).toFixed(2)} GB）→ XZ 9e（较慢，一次性）…`);
               // eslint-disable-next-line no-await-in-loop
-              await gzipFile(src, gz);
+              await xzFile(src, xz);
               compressed += 1;
             } else {
               fs.copyFileSync(src, path.join(to, f));

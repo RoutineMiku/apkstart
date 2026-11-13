@@ -208,7 +208,9 @@ class EmulatorEngine {
   /** emulator 依赖这些环境变量定位 SDK / AVD；中文路径一律转 8.3 短路径 */
   env(root, plan = {}) {
     const safeRoot = doctor.shortPath(root);
-    const avdHome = doctor.shortPath(path.join(root, 'avd'));
+    // AVD 目录必须与 provisioner.paths().avdHome 一致：bundled 只读运行时（EXE 旁
+    // resources/runtime）时 root/avd 不存在也不可写，AVD 要落到用户数据目录。
+    const avdHome = doctor.shortPath(this.provisioner.paths().avdHome);
     const adbPort = String(plan.adbPort || process.env.ANDROID_ADB_SERVER_PORT || '5044');
     return {
       ...process.env,

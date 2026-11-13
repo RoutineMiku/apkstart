@@ -37,7 +37,7 @@
 
 到 [Releases](https://github.com/RoutineMiku/apkstart/releases) 下载安装包：
 
-- **`ApkStart-v*-Setup.exe`**（约 1.0~1.1 GB）：**一个 EXE 包含全部运行时**（adb / Android Emulator / 系统镜像），装完首次启动自动把镜像展开到用户目录，**之后不再联网下载任何东西**。装到当前用户目录、不要求管理员权限。
+- **`ApkStart-v*-Setup.exe`**（约 1.3 GB）：**一个 EXE 包含全部运行时**（adb / Android Emulator / 系统镜像），装完首次启动自动把镜像展开到用户目录，**之后不再联网下载任何东西**。装到当前用户目录、不要求管理员权限。
 - 另有轻量版 `ApkStart-v*-win64-portable.zip`（约 100 MB）：首次启动才在后台下载运行时。
 
 **开箱即有的默认行为**（不用去设置里找）：
@@ -70,8 +70,8 @@ npm run pack
 如果希望「一个 EXE 发出去，对方双击就能跑，不用等下载」，用这条：
 
 ```powershell
-# 先把 engine/ 整理成可分发运行时（system.img 压成 .gz，3.1GB → 约 580MB；
-# 同时裁掉 emulator 里用不到的部分：arm64 的 QEMU、Vulkan 后端、多语言包，约 -190MB）
+# 先把 engine/ 整理成可分发运行时（system.img 用 xz/LZMA2 极限压缩，3.1GB → 约 1.1GB；
+# 同时裁掉 emulator 里用不到的部分：arm64 的 QEMU、Vulkan 后端、多语言包、qsn/自检工具、VR 资源）
 npm run runtime
 
 # 再打成安装版 EXE（electron-builder nsis 目标，装到当前用户目录）
@@ -79,11 +79,12 @@ npm run build:exe
 # 产出 dist/release/ApkStart-<版本>-Setup.exe
 ```
 
-体积构成（实测）：Electron 约 180MB、emulator 瘦身后约 340MB、系统镜像压缩后约 580MB，
-最终安装包约 1.0～1.1GB。能再压的硬下限就在 system.img 那条（它就是安卓系统本身，无法再裁）。
+体积构成（实测）：Electron 约 180MB、emulator 瘦身后约 480MB、系统镜像 xz 压缩后约 1.1GB，
+最终安装包约 1.32GB（相比 gzip 方案省约 490MB）。能再压的硬下限就在 system.img 那条
+（它就是安卓系统本身，且是 verity 保护的镜像，无法从外部裁掉 GMS 组件）。
 网络默认走主机 NAT，不创建虚拟网卡，所以也不依赖任何额外驱动。
 
-首次启动会把 `.gz` 镜像展开到 `%APPDATA%\apkstart\system-images`（约 1 分钟，只做一次），
+首次启动会把 xz 镜像展开到 `%APPDATA%\apkstart\system-images`（约 20 秒，只做一次），
 之后每次直接复用。AVD 与已装应用固定存放在 `%APPDATA%\apkstart\avd`，
 即使便携版每次解压到临时目录也不会丢。
 
@@ -95,7 +96,7 @@ ApkStart 是一个**自持**的项目，运行时组件全部由自己下载、�
 |---|---|---|---|
 | adb（platform-tools） | dl.google.com 官方源 | ~8 MB | 安装/启动安卓应用 |
 | Android Emulator | dl.google.com 官方源（8 线程并行下载） | ~440 MB | 运行时引擎（自带设备模型与 GPU 转译） |
-| Android 14 通用系统镜像（Google Play x86_64） | dl.google.com 官方源 | ~1.5 GB | 唯一的基础层：x86 应用、仅含 ARM 库的应用、GMS 都能跑，镜像即系统，无需安装 |
+| Android 14 通用系统镜像（Google Play x86_64） | dl.google.com 官方源 | 源镜像 ~3.1 GB（xz 后 ~1.1 GB） | 唯一的基础层：x86 应用、仅含 ARM 库的应用、GMS 都能跑，镜像即系统，无需安装 |
 | AEHD 驱动（可选） | dl.google.com 官方源 | ~0.2 MB | 硬件加速（或用 Windows「虚拟机平台」WHPX） |
 
 首次使用时，「运行时」页会引导完成以上部署（**一键部署**）：

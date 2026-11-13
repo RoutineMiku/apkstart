@@ -46,5 +46,8 @@
   "devDependencies": {
     "electron": "^33.4.11",
     "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "@napi-rs/lzma": "^1.5.3"
   }
 }

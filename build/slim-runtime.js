@@ -29,6 +29,13 @@ const SAFE = [
   ['emulator/qemu/windows-x86_64/qemu-system-aarch64.exe', 'arm64 的 QEMU 二进制（只发 x86_64 镜像）'],
   ['emulator/lib64/vulkan', 'Vulkan 后端（固定 -gpu software，删掉退回 swiftshader）'],
   ['emulator/lib64/qt/translations', '模拟器界面的多语言包（只剩 38px 标题栏）'],
+  ['emulator/emulator-check.exe', 'CI 自检工具（运行时用不到，-16MB）'],
+  ['emulator/qsn.exe', 'QEMU 快照通知助手（emulator.exe 无任何引用，已 strings 实证，-34MB）'],
+  ['emulator/resources/Toren1BD_Main.png', 'VR 全景环境贴图（红果用不到，-3.7MB）'],
+  ['emulator/resources/Toren1BD_Decor.png', 'VR 全景装饰贴图（-3.5MB）'],
+  ['emulator/resources/Toren1BD.obj', 'VR 全景 3D 模型（-3.5MB）'],
+  ['emulator/resources/macroPreviews', '宏操作预览图（-2.7MB）'],
+  ['emulator/resources/default360.mp4', '360° 全景默认视频（-2.4MB）'],
 ];
 
 /** 激进档目前为空：WebEngine 是硬依赖、gles_angle 是软渲染依赖，都不敢删 */
