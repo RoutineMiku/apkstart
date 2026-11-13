@@ -226,7 +226,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     const cfg = fs.readFileSync(path.join(r.avdDir, 'config.ini'), 'utf8');
     assert(/^hw\.cpu\.arch=x86_64$/m.test(cfg), `hw.cpu.arch 应为 x86_64，实际：${cfg.match(/^hw\.cpu\.arch=.*$/m)}`);
     assert(/^abi\.type=x86_64$/m.test(cfg), 'abi.type 应为 x86_64');
-    assert(/^image\.sysdir\.1=system-images\//m.test(cfg), 'image.sysdir.1 缺失');
+    assert(/^image\.sysdir\.1=\S*system-images\//m.test(cfg), 'image.sysdir.1 缺失');
   });
 
   await test('安装失败原因翻译：NO_MATCHING_ABIS 给出中文指引', async () => {
