@@ -62,7 +62,7 @@ jobs:
   full:
     name: 构建完整版（内置运行时，离线开箱即用）
     runs-on: windows-latest
-    needs: portable
+    needs: build
     steps:
       - uses: actions/checkout@v4
 
