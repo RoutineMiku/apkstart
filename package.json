@@ -1,7 +1,7 @@
 {
   "name": "apkstart",
   "productName": "ApkStart",
-  "version": "0.2.4",
+  "version": "0.2.6",
   "description": "极致轻量的 Windows 安卓应用运行器：双击 APK 即装，应用以独立窗口与桌面图标运行",
   "main": "src/main.js",
   "author": "RoutineMiku",
