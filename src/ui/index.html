@@ -352,13 +352,14 @@
           <span class="sub">大文件按块并行下载。默认 8 线程已经能跑满大多数家宽；网络稳定时可以试 16。</span>
         </div>
         <details class="mini-details">
-          <summary>Gitee 更新源（可选，需要 token）</summary>
+          <summary>Gitee 更新源（可选）</summary>
           <div class="field">
-            <label>Gitee 只读 token</label>
-            <input id="setGiteeToken" type="password" placeholder="留空 = 不使用 Gitee 作为更新源" />
-            <span class="sub">Gitee 的发行版接口即使公开仓库也要求 token，不填就只能走 GitHub + 镜像。
-              在 gitee.com → 设置 → 私人令牌 生成一个只勾「projects」的令牌填进来即可；
-              它只用于读取本项目的发行版列表，不会上传任何东西。</span>
+            <label>Gitee 只读 token（一般不用填）</label>
+            <input id="setGiteeToken" type="password" placeholder="留空即可：公开仓库匿名也能读" />
+            <span class="sub">本项目仓库已公开，Gitee 的发行版列表匿名就能读，留空也能用 Gitee 源。
+              只有在「Gitee 被限流（返回 403/429）」或你想读私有分支时才需要填：
+              gitee.com → 设置 → 私人令牌，只勾「projects」即可，它只用于读取发行版列表，
+              不会上传任何东西。</span>
           </div>
         </details>
       </div>

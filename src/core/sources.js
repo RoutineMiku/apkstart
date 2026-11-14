@@ -220,8 +220,9 @@ class Sources {
   async fetchReleases() {
     const prefs = String((this.settings().runtime || {}).sourcePreference || 'auto');
     const ids = prefs === 'github' || prefs === 'gitee' ? [prefs] : ['github', 'gitee'];
-    // Gitee 的 releases 接口即使对公开仓库也要求 access_token（无 token 直接 404
-    // "Not Found Project"）。所以调用方可以在设置里填一个只读 token，填了才走 Gitee。
+    // 公开仓库的 releases 接口匿名就能读；仓库若是私有的，Gitee 会回 404
+    // "Not Found Project"（而不是 401），那种情况才需要在这里填一个只读 token。
+    // 另外匿名调用有频率限制，感兴趣的用户可以填 token 提高额度。
     const token = String((this.settings().runtime || {}).giteeToken || '').trim();
     const withToken = (id, url) => (id === 'gitee' && token
       ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}`
@@ -239,7 +240,9 @@ class Sources {
           const first = (Array.isArray(list) ? list : []).find((r) => r && !r.draft);
           if (first) return { source: id, name: s.name, web: s.web, rel: first };
         } catch (_) { /* 这个源彻底不可用 */ }
-        const hint = id === 'gitee' && !token ? '（Gitee 需要 token，可在设置里填）' : '';
+        const hint = id === 'gitee' && !token
+          ? '（若是私有仓库请填 token；公开仓库通常只是被限流，稍后重试即可）'
+          : '';
         return { source: id, name: s.name, web: s.web, error: `${e.message}${hint}` };
       }
     });
