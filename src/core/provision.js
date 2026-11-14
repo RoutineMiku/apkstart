@@ -11,7 +11,7 @@ const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const store = require('./store');
 const doctor = require('./doctor');
-const { download, downloadAny, downloadAnyParallel, head } = require('./download');
+const { download, downloadAny, downloadAnyParallel, downloadMulti, head } = require('./download');
 const { ZipArchive, ZipFile } = require('./zip');
 const { Sources } = require('./sources');
 const { cmpVer } = require('./version');
@@ -526,7 +526,7 @@ class Provisioner {
     onProgress({ stage: 'download', message: `下载运行时（约 1.5 GB，只需一次，${conn} 线程）…`, percent: 2 });
     // 分块并行（8 线程）比单流快得多：GitHub 对单连接限速很常见，单流实测只有
     // 一两百 KB/s，8 线程能跑满本地带宽。中途断掉会退回单流续传。
-    await downloadAnyParallel(urls, zip, {
+    await downloadMulti(urls, zip, {
       connections: conn,
       onProgress: (pr) => {
         const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);

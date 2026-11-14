@@ -283,6 +283,146 @@ async function downloadAny(urls, dest, opt = {}) {
   throw new Error(`所有下载源均失败：\n${errors.join('\n')}`);
 }
 
+/**
+ * 多源同时下载：把文件切成若干块，**不同块同时从不同源拉**，带宽叠加。
+ *
+ * 为什么需要：GitHub 单连接限速很常见，而镜像站通常也各自限速；
+ * 8 条连接都指向同一个地址时，天花板就是那个地址的上限。把 4 条给 GitHub、
+ * 4 条给镜像，两者上限相加，实测能快一倍以上。
+ *
+ * 安全前提：只有「声明总大小一致」的源才会被混用，否则可能拼出坏文件；
+ * 任一源中途失败，它的分块会自动换到下一条可用地址重试（不整包重来）。
+ */
+async function downloadMulti(urls, dest, opt = {}) {
+  const {
+    connections = 8,
+    onProgress = () => {},
+    minChunk = 2 * 1024 * 1024,
+    retries = 3,
+  } = opt;
+
+  const list = [...new Set((urls || []).filter(Boolean))];
+  if (!list.length) throw new Error('没有可用的下载地址');
+  if (list.length === 1) return downloadParallel(list[0], dest, opt);
+
+  // 1) 并行探测：总大小 + 是否支持 Range
+  const probes = await Promise.all(list.map(async (u) => {
+    try {
+      const res = await openStream(u, { headers: { Range: 'bytes=0-0' } });
+      const cr = res.headers['content-range'];
+      const total = res.statusCode === 206 && cr ? Number(/\/(\d+)$/.exec(cr)[1]) || 0 : 0;
+      res.destroy();
+      return { url: u, total, ranged: !!total };
+    } catch (_) {
+      return { url: u, total: 0, ranged: false };
+    }
+  }));
+
+  const usable = probes.filter((p) => p.ranged && p.total > 0);
+  if (!usable.length) {
+    return downloadAnyParallel(list, dest, opt);
+  }
+  // 只保留「总大小和最大那一组一致」的源
+  const total = Math.max(...usable.map((p) => p.total));
+  const same = usable.filter((p) => p.total === total);
+  if (same.length === 1 || total < minChunk * 2) {
+    return downloadParallel(same[0].url, dest, opt);
+  }
+
+  // 2) 切块，轮转分配源
+  const n = Math.max(2, Math.min(connections, Math.ceil(total / minChunk)));
+  const per = Math.ceil(total / n);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.rmSync(dest, { force: true });
+  const fd = fs.openSync(dest, 'w');
+  fs.ftruncateSync(fd, total);
+
+  const chunks = Array.from({ length: n }, (_, i) => ({
+    start: i * per,
+    end: Math.min(total - 1, i * per + per - 1),
+    pos: i * per,
+    src: i % same.length,
+    tries: 0,
+  }));
+
+  let got = 0;
+  let lastTick = Date.now();
+  let lastBytes = 0;
+  const tick = (force) => {
+    const now = Date.now();
+    if (!force && now - lastTick < 400) return;
+    const speed = (got - lastBytes) / Math.max(0.001, (now - lastTick) / 1000);
+    lastTick = now;
+    lastBytes = got;
+    onProgress({
+      got,
+      total,
+      percent: Math.min(100, (got / total) * 100),
+      speed,
+      eta: speed > 0 ? Math.max(0, (total - got) / speed) : null,
+      sources: same.length,
+    });
+  };
+
+  const fetchChunk = async (c) => {
+    const url = same[c.src % same.length].url;
+    const res = await openStream(url, { headers: { Range: `bytes=${c.pos}-${c.end}` } });
+    if (res.statusCode !== 206) {
+      res.resume();
+      throw new Error(`分块被拒绝 HTTP ${res.statusCode}`);
+    }
+    await new Promise((resolve, reject) => {
+      // 空闲看门狗：连接建立了但一个字节都不来（常见的「TCP 通但被墙/被限」），
+      // 光等 socket 超时要 30 秒，一块卡住整包就停在那里。20 秒没动静就换源。
+      let idle = setTimeout(() => res.destroy(new Error('连接停滞（20 秒无数据）')), 20000);
+      const kick = () => { clearTimeout(idle); idle = setTimeout(() => res.destroy(new Error('连接停滞（20 秒无数据）')), 20000); };
+      res.on('data', (buf) => {
+        try {
+          fs.writeSync(fd, buf, 0, buf.length, c.pos);
+        } catch (e) {
+          res.destroy();
+          return reject(e);
+        }
+        c.pos += buf.length;
+        got += buf.length;
+        kick();
+        tick(false);
+      });
+      res.on('end', () => { clearTimeout(idle); resolve(); });
+      res.on('error', (e) => { clearTimeout(idle); reject(e); });
+    });
+    return c.pos > c.end;
+  };
+
+  try {
+    await Promise.all(chunks.map(async (c) => {
+      for (;;) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          if (await fetchChunk(c)) return;
+          throw new Error('分块未完整返回');
+        } catch (e) {
+          c.tries += 1;
+          if (c.tries >= retries) throw new Error(`分块失败（${c.start}-${c.end}）：${e.message}`);
+          // 换一个源再试：一个镜像抽风不该拖垮整个下载
+          c.src += 1;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 600 * c.tries));
+        }
+      }
+    }));
+  } catch (e) {
+    fs.closeSync(fd);
+    throw e;
+  }
+  fs.closeSync(fd);
+
+  const size = fs.statSync(dest).size;
+  tick(true);
+  if (size !== total) throw new Error(`下载不完整：${size}/${total} 字节`);
+  return { file: dest, size, parallel: n, sources: same.length, multi: true };
+}
+
 /** 依次尝试多个源（并行分块版），任一成功即返回 */
 async function downloadAnyParallel(urls, dest, opt = {}) {
   const errors = [];
@@ -299,5 +439,5 @@ async function downloadAnyParallel(urls, dest, opt = {}) {
 }
 
 module.exports = {
-  download, downloadAny, downloadParallel, downloadAnyParallel, head, sha256File, openStream,
+  download, downloadAny, downloadParallel, downloadAnyParallel, downloadMulti, head, sha256File, openStream,
 };

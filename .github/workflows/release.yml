@@ -63,6 +63,21 @@ jobs:
           if (-not $ok) { Write-Error "上传失败: $zip"; exit 1 }
           gh release view $tag --json assets --jq '.assets[].name'
 
+      # 同步到 Gitee：国内直连 GitHub 只有几十 KB/s，Gitee 通常能跑几 MB/s。
+      # Gitee 附件单文件上限 100MB，所以 publish-gitee.js 会把便携包切成 .part1/.part2；
+      # 应用端 updater 会自动识别分片、逐片选源下载再拼回整包。
+      # Setup（1.4GB）与运行时整包（1.4GB）超限太多，只留在 GitHub ——
+      # 应用端对「哪个源有资产」是取并集的，不影响更新。
+      - name: 同步便携版到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        shell: pwsh
+        run: |
+          if (-not $env:GITEE_TOKEN) { Write-Output "未配置 GITEE_TOKEN，跳过 Gitee 同步"; exit 0 }
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip"
+
   full:
     name: 构建完整版（内置运行时，离线开箱即用）
     runs-on: windows-latest

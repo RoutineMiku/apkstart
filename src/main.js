@@ -411,6 +411,14 @@ function createWindow({ show = true } = {}) {
   mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
   if (show) mainWindow.once('ready-to-show', () => mainWindow.show());
 
+  // 冒烟测试时把渲染进程的报错打到 stdout：界面空白、按钮点了没反应，
+  // 十有八九是 app.js 里某个 id 改动后抛了异常，正常运行看不到。
+  if (process.argv.includes('--smoke')) {
+    mainWindow.webContents.on('console-message', (_e, level, message, line, source) => {
+      if (level >= 2) console.log(`[renderer] ${message} (${String(source).split('/').pop()}:${line})`);
+    });
+  }
+
   // 外链一律交给系统浏览器（公众号/GitHub 等），绝不把应用窗口导航走
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -1692,6 +1700,13 @@ if (!gotLock) {
                 "document.getElementById('perfGroup').scrollIntoView({ block: 'start' }); true;",
               );
               await snap(out.replace(/\.png$/i, '-perf.png'));
+            }
+            if (process.argv.includes('--download')) {
+              // 拍一张「下载与更新源」区
+              await mainWindow.webContents.executeJavaScript(
+                "document.getElementById('downloadGroup').scrollIntoView({ block: 'start' }); true;",
+              );
+              await snap(out.replace(/\.png$/i, '-download.png'));
             }
             if (process.argv.includes('--settings')) {
               // 再拍一张「关于」区（二维码 / GitHub / Powered by）

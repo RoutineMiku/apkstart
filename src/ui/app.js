@@ -447,7 +447,7 @@ async function markInstalled() {
 
 /* ---------------- 安装 ---------------- */
 
-async /** 把安装失败翻译成「下一步该做什么」，只对最常见的几种做提示，其它原样显示 */
+/** 把安装失败翻译成「下一步该做什么」，只对最常见的几种做提示，其它原样显示 */
 function friendlyInstallErrorText(msg) {
   const s = String(msg || '未知错误');
   if (/INSUFFICIENT_STORAGE|not enough space|空间不足|ENOSPC/i.test(s)) {

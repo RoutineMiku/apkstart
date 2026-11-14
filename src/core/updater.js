@@ -17,7 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { downloadAnyParallel } = require('./download');
+const { downloadAnyParallel, downloadMulti } = require('./download');
 const { ZipFile } = require('./zip');
 const { cmpVer } = require('./version');
 const { Sources } = require('./sources');
@@ -107,28 +107,37 @@ class Updater {
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, it.asset.name);
     const total = it.asset.size || 0;
-
-    this.onProgress({ stage: 'download', percent: 1, message: `正在下载 ${it.asset.name}…` });
-    // 候选地址 = 源站 + 镜像前缀；先各下 128KB 实测速度，再拿最快的那个分块下载。
-    // 这是「GitHub 直连几十 KB/s、镜像能跑几 MB/s」时唯一靠谱的选路方式：
-    // 按域名猜没用，同一天不同时段差别很大。
     const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
-    const cands = this.sources.candidates(it.asset);
-    const ranked = await this.sources.rank(cands, { onProgress: (p) => this.onProgress(p) }).catch(() => cands);
-    await downloadAnyParallel(ranked, file, {
-      connections: conns,
-      onProgress: (pr) => {
-        const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
-        const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
-        const sp = Number(pr.speed) > 0 ? ` · ${(pr.speed / 1048576).toFixed(2)} MB/s` : '';
-        this.onProgress({
-          stage: 'download',
-          percent: Math.max(1, Math.min(99, pct)),
-          message: `下载中 ${mb}${sp}`,
-          speed: pr.speed,
-        });
-      },
-    });
+
+    // Gitee 附件单文件上限 100MB，所以发布时会把包切成 .part1/.part2。
+    // 每个分片单独测速选源（可以一部分来自 Gitee、一部分来自 GitHub 镜像），
+    // 下完按顺序拼回整包 —— 对用户来说仍然只是「下载 + 解压」。
+    if (it.asset.parts && it.asset.parts.length) {
+      await this._downloadParts(it.asset, file, conns, total);
+    } else {
+      this.onProgress({ stage: 'download', percent: 1, message: `正在下载 ${it.asset.name}…` });
+      // 候选地址 = 源站 + 镜像前缀；先各下 256KB 实测速度，再拿最快的那个分块下载。
+      // 这是「GitHub 直连几十 KB/s、镜像能跑几 MB/s」时唯一靠谱的选路方式：
+      // 按域名猜没用，同一天不同时段差别很大。
+      const cands = this.sources.candidates(it.asset);
+      const ranked = await this.sources.rank(cands, { onProgress: (p) => this.onProgress(p) }).catch(() => cands);
+      // downloadMulti：分块同时从「GitHub 直连」和「镜像」拉，带宽叠加；
+      // 只有一个源可用或对方不支持 Range 时，它自己退回单源分块。
+      await downloadMulti(ranked, file, {
+        connections: conns,
+        onProgress: (pr) => {
+          const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
+          const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
+          const sp = Number(pr.speed) > 0 ? ` · ${(pr.speed / 1048576).toFixed(2)} MB/s` : '';
+          this.onProgress({
+            stage: 'download',
+            percent: Math.max(1, Math.min(99, pct)),
+            message: `下载中 ${mb}${sp}`,
+            speed: pr.speed,
+          });
+        },
+      });
+    }
 
     if (/\.zip$/i.test(file)) {
       const out = path.join(dir, 'payload');
@@ -140,6 +149,57 @@ class Updater {
     }
     this.onProgress({ stage: 'ready', percent: 100, message: '安装包已下载完成' });
     return { mode: 'setup', payload: file, version: it.version };
+  }
+
+  /**
+   * 下载并拼装分片包。
+   * @param {{name:string, size:number, parts:Array<{index:number,size:number,urls:string[]}>}} asset
+   */
+  async _downloadParts(asset, target, conns, total) {
+    const dir = path.dirname(target);
+    let doneBytes = 0;
+    const fd = fs.openSync(target, 'w');
+    try {
+      for (const part of asset.parts) {
+        const tmp = path.join(dir, `${asset.name}.${part.index}.tmp`);
+        const cands = [];
+        for (const u of part.urls) {
+          for (const c of this.sources.candidates(u)) if (!cands.includes(c)) cands.push(c);
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const ranked = await this.sources.rank(cands, {
+          onProgress: (p) => this.onProgress({ ...p, percent: Math.max(1, Math.min(99, Math.round((doneBytes / (total || 1)) * 100))) }),
+        }).catch(() => cands);
+        // eslint-disable-next-line no-await-in-loop
+        await downloadAnyParallel(ranked, tmp, {
+          connections: conns,
+          onProgress: (pr) => {
+            const got = doneBytes + (pr.got || 0);
+            const pct = total ? Math.round((got / total) * 100) : 0;
+            const sp = Number(pr.speed) > 0 ? ` · ${(pr.speed / 1048576).toFixed(2)} MB/s` : '';
+            this.onProgress({
+              stage: 'download',
+              percent: Math.max(1, Math.min(99, pct)),
+              message: `下载中 ${(got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`
+                + `（第 ${part.index}/${asset.parts.length} 片）${sp}`,
+              speed: pr.speed,
+            });
+          },
+        });
+        const buf = fs.readFileSync(tmp);
+        if (part.size && buf.length !== part.size) {
+          throw new Error(`分片 ${part.index} 大小不对（${buf.length} ≠ ${part.size}），已中止，可重试`);
+        }
+        fs.writeSync(fd, buf, 0, buf.length, doneBytes);
+        doneBytes += buf.length;
+        fs.rmSync(tmp, { force: true });
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (total && doneBytes !== total) {
+      throw new Error(`更新包拼装后大小不对（${doneBytes} ≠ ${total}），已中止，可重试`);
+    }
   }
 
   async _extract(zipPath, dest) {

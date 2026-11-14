@@ -35,18 +35,35 @@
 
 ## 下载即用（不想编译）
 
-到 [Releases](https://github.com/RoutineMiku/apkstart/releases) 下载安装包：
+两个源内容一致，国内建议用 Gitee：
+
+- GitHub：[github.com/RoutineMiku/apkstart/releases](https://github.com/RoutineMiku/apkstart/releases)
+- Gitee：[gitee.com/daily-miku/apkstart/releases](https://gitee.com/daily-miku/apkstart/releases)（国内直连快得多）
+
+安装包：
 
 - **`ApkStart-v*-Setup.exe`**（约 1.3 GB）：**一个 EXE 包含全部运行时**（adb / Android Emulator / 系统镜像），装完首次启动自动把镜像展开到用户目录，**之后不再联网下载任何东西**。装到当前用户目录、不要求管理员权限。
 - 另有轻量版 `ApkStart-v*-win64-portable.zip`（约 100 MB）：首次启动才在后台下载运行时。运行时的下载源就是**本项目的 GitHub Release**（`ApkStart-runtime-*.zip` 整包），不走 dl.google.com；整包拿不到时才自动退回官方源。
 
-### 在线更新
+### 在线更新（自动选较快的源）
 
-设置 → **软件更新** → 「检查更新」，或托盘右键 → 「检查更新」。发现新版本后点「立即更新」即可：
+设置 → **软件更新** → 「检查更新」，或托盘右键 → 「检查更新」。发现新版本后点「立即更新」即可。
 
 - 安装版下载 `ApkStart-v*-Setup.exe` 静默安装；
 - 轻量版下载 `ApkStart-v*-win64-portable.zip`，解压后覆盖**程序目录**——运行时目录（`%APPDATA%\apkstart\runtime`）、已装应用与快照都不在程序目录里，所以更新不会丢东西；
 - 替换动作由一段独立 PowerShell 脚本完成（等主进程退出 → 覆盖 → 重新拉起），**不会出现「请手动关闭程序」的弹窗**，也不会在桌面上残留模拟器窗口。
+
+更新链路不是死连 GitHub，而是**每次现测现选**：
+
+1. 同时问 GitHub 与 Gitee 的最新版本，取版本号更高的那个（一个源超时/被墙不影响另一个）；
+2. 把「源站直连 / Gitee 同名资产 / 镜像前缀」列成候选，每个地址真下 256KB 测速，
+   只算「收到首字节之后」的吞吐（握手时间不计入，否则高延迟大带宽的源会被误判成慢）；
+3. 按实测速度排序，用最快的那条分块并行下载；失败自动换下一条。
+
+设置里的「下载与更新源」可以强制只用某一边（企业网络只放行一个域名时用），
+也可以关掉公共加速镜像、或改用自建镜像前缀。Gitee 附件单文件上限 100MB，
+所以便携包在 Gitee 上以 `.part1/.part2` 形式发布，客户端会自动拼装。
+
 
 **开箱即有的默认行为**（不用去设置里找）：
 

@@ -17,6 +17,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const { cmpVer } = require('./version');
 
 const OWNER_GH = 'RoutineMiku';
 const OWNER_GITEE = 'daily-miku';
@@ -162,6 +163,43 @@ function withMirror(url, prefix) {
   return `${p}${url}`;
 }
 
+/**
+ * Gitee 发行版附件单文件上限 100MB，安装包 105~110MB 装不下，所以发布时切成
+ * xxx.zip.part1 / xxx.zip.part2。这里把分片还原成一个逻辑资产：
+ *   { name: 'xxx.zip', size: 总和, parts: [{index, size, urls:[...]}] }
+ * 分片必须从 part1 开始连续，否则视为残缺、丢弃（宁可用整包，也不下一个坏包）。
+ */
+function groupParts(assets) {
+  const groups = new Map();
+  const out = [];
+  for (const a of assets) {
+    const m = /^(.*)\.part(\d+)$/i.exec(String(a.name || ''));
+    if (!m) { out.push(a); continue; }
+    const base = m[1];
+    const idx = Number(m[2]);
+    let g = groups.get(base);
+    if (!g) {
+      g = { name: base, size: 0, parts: [], partial: true };
+      groups.set(base, g);
+      out.push(g);
+    }
+    let p = g.parts.find((x) => x.index === idx);
+    if (!p) {
+      p = { index: idx, size: Number(a.size) || 0, urls: [] };
+      g.parts.push(p);
+    }
+    if (a.url && !p.urls.includes(a.url)) p.urls.push(a.url);
+    if (!p.size) p.size = Number(a.size) || 0;
+  }
+  for (const g of groups.values()) {
+    g.parts.sort((x, y) => x.index - y.index);
+    const contiguous = g.parts.every((p, i) => p.index === i + 1);
+    g.size = g.parts.reduce((n, p) => n + p.size, 0);
+    if (!contiguous || !g.parts.every((p) => p.size > 0 && p.urls.length)) g.broken = true;
+  }
+  return { list: out.filter((a) => !a.broken), broken: [...groups.values()].filter((g) => g.broken).map((g) => g.name) };
+}
+
 /** mirrors 列表：用户自定义优先，其次内置（autoMirror 关掉就只用自定义的） */
 function mirrorList(settings) {
   const r = (settings && settings.runtime) || {};
@@ -211,32 +249,37 @@ class Sources {
       const why = all.map((x) => `${x.name || x.source}: ${x.error || '无数据'}`).join('；');
       throw new Error(`连不上更新服务器（${why}）`);
     }
-    const cmp = require('./updater').cmpVer;
-    ok.sort((a, b) => cmp(b.rel.tag_name || b.rel.name, a.rel.tag_name || a.rel.name));
+    ok.sort((a, b) => cmpVer(b.rel.tag_name || b.rel.name, a.rel.tag_name || a.rel.name));
     const top = ok[0];
     const tag = String(top.rel.tag_name || top.rel.name || '');
     const version = tag.replace(/^v/i, '');
 
-    // 只有同版本的资产才算数（不同源的旧版本资产不能拿来装）
-    const assets = [];
-    const seen = new Set();
+    // 只有同版本的资产才算数（不同源的旧版本资产不能拿来装）。
+    // 同名整包 + 分片组同时存在时优先用整包：分片要拼装，多一个失败点。
+    let raw = [];
     for (const item of ok) {
       const t = String(item.rel.tag_name || item.rel.name || '').replace(/^v/i, '');
       if (t !== version) continue;
       for (const a of (item.rel.assets || [])) {
         const key = String(a.name || '');
-        if (!key || seen.has(key)) {
-          // 同名资产保留第一个（按源顺序：先 GitHub 后 Gitee，或反之）
-          continue;
-        }
-        seen.add(key);
-        assets.push({
+        if (!key) continue;
+        raw.push({
           name: key,
           size: Number(a.size) || 0,
           url: a.browser_download_url || a.url || '',
           source: item.source,
         });
       }
+    }
+    const grouped = groupParts(raw);
+    const wholeNames = new Set(grouped.list.filter((a) => !a.partial).map((a) => a.name));
+    raw = grouped.list.filter((a) => !(a.partial && wholeNames.has(a.name)));
+    const assets = [];
+    const seen = new Set();
+    for (const a of raw) {
+      if (seen.has(a.name)) continue;
+      seen.add(a.name);
+      assets.push(a);
     }
 
     return {

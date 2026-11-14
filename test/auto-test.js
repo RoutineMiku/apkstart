@@ -873,6 +873,112 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(m.assets.length === 1 && m.assets[0].url === 'gh://a', '旧版本同名资产不能覆盖新版本');
   });
 
+  await test('分片更新包：按顺序拼回整包，大小不符立刻中止', async () => {
+    const http = require('http');
+    const { Updater } = require('../src/core/updater');
+    const partA = Buffer.alloc(4096, 0x41);
+    const partB = Buffer.alloc(2048, 0x42);
+    const srv = http.createServer((req, res) => {
+      if (req.url.startsWith('/a')) { res.writeHead(200, { 'Content-Length': partA.length }); res.end(partA); return; }
+      if (req.url.startsWith('/b')) { res.writeHead(200, { 'Content-Length': partB.length }); res.end(partB); return; }
+      res.writeHead(404); res.end();
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const sb = path.join(TMP, 'parts-upd');
+    fs.mkdirSync(sb, { recursive: true });
+    const u = new Updater({ currentVersion: '0.0.0', exePath: path.join(sb, 'A.exe'), isPackaged: true, dataDir: sb, settings: () => ({}) });
+    const target = path.join(sb, 'joined.zip');
+    try {
+      await u._downloadParts({
+        name: 'joined.zip',
+        size: partA.length + partB.length,
+        parts: [
+          { index: 1, size: partA.length, urls: [`http://127.0.0.1:${port}/a`] },
+          { index: 2, size: partB.length, urls: [`http://127.0.0.1:${port}/b`] },
+        ],
+      }, target, 2, partA.length + partB.length);
+      const got = fs.readFileSync(target);
+      assert(got.length === partA.length + partB.length, '拼装后大小必须等于各分片之和');
+      assert(got.slice(0, partA.length).every((b) => b === 0x41), '第一片内容顺序错误');
+      assert(got.slice(partA.length).every((b) => b === 0x42), '第二片内容顺序错误');
+    } finally {
+      srv.close();
+      fs.rmSync(sb, { recursive: true, force: true });
+    }
+  });
+
+  await test('多源并行下载：不同分块从不同源拉，拼出来的字节必须完全一致', async () => {
+    const http = require('http');
+    const { downloadMulti } = require('../src/core/download');
+    const data = Buffer.alloc(3 * 1024 * 1024);
+    for (let i = 0; i < data.length; i += 1) data[i] = i % 251;
+    const handler = (req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': data.length }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), data.length - 1);
+      res.writeHead(206, {
+        'Content-Range': `bytes ${a}-${b}/${data.length}`,
+        'Content-Length': b - a + 1,
+      });
+      res.end(data.slice(a, b + 1));
+    };
+    // 显式等 listening 回调：先 listen 再挂事件监听会漏掉已经触发的事件，测试会挂住
+    const mk = () => new Promise((resolve) => {
+      const srv = http.createServer(handler);
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    const s1 = await mk();
+    const s2 = await mk();
+    const urls = [
+      `http://127.0.0.1:${s1.address().port}/f`,
+      `http://127.0.0.1:${s2.address().port}/f`,
+    ];
+    const out = path.join(TMP, 'multi.bin');
+    try {
+      const r = await downloadMulti(urls, out, { connections: 6, minChunk: 512 * 1024 });
+      const got = fs.readFileSync(out);
+      assert(Buffer.compare(got, data) === 0, '多源拼装后内容必须与源文件完全一致');
+      assert(r.sources === 2 && r.parallel >= 2, `应同时用到 2 个源，实际 ${JSON.stringify(r)}`);
+      assert(got.length === data.length, '大小必须一致');
+    } finally {
+      s1.close(); s2.close();
+      fs.rmSync(out, { force: true });
+    }
+  });
+
+  await test('多源并行下载：只有一条可用地址时退回单源分块', async () => {
+    const http = require('http');
+    const { downloadMulti } = require('../src/core/download');
+    const data = Buffer.alloc(2 * 1024 * 1024, 7);
+    const srv = http.createServer((req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': data.length }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), data.length - 1);
+      res.writeHead(206, { 'Content-Range': `bytes ${a}-${b}/${data.length}`, 'Content-Length': b - a + 1 });
+      res.end(data.slice(a, b + 1));
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${srv.address().port}/f`;
+    // 拿一个「刚被释放、现在肯定没人监听」的端口当坏源，连接会立刻被拒而不是等超时
+    const probe = http.createServer(() => {});
+    await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+    const deadPort = probe.address().port;
+    await new Promise((r) => probe.close(r));
+    const out = path.join(TMP, 'multi1.bin');
+    try {
+      // 第二个地址故意指到不通的端口：必须自动忽略而不是整包失败
+      const r = await downloadMulti([url, `http://127.0.0.1:${deadPort}/nope`], out, { connections: 4 });
+      assert(fs.statSync(out).size === data.length, '单源也要下完整');
+      assert(!r.multi || r.sources === 1, '可用源只有一个时不该标记为多源');
+    } finally {
+      srv.close();
+      fs.rmSync(out, { force: true });
+    }
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {
