@@ -559,7 +559,8 @@ class EmulatorEngine {
       args.push('-no-snapshot');
     } else if (snapshot !== false) {
       args.push('-snapshot', SNAPSHOT_NAME);
-      if (!this.hasSnapshot()) args.push('-no-snapshot-load');
+      // 网络自愈要求这次冷启动：快照可能是在「没网」时存的，恢复出来依旧没网。
+      if (!this.hasSnapshot() || this._coldBoot) args.push('-no-snapshot-load');
     } else {
       args.push('-no-snapshot');
     }
@@ -771,11 +772,16 @@ class EmulatorEngine {
   }
 
   /**
-   * 让「下一次启动」带上 -wipe-data（仅「修复网络」在等待超时后使用）。
+   * 让「下一次启动」强制冷启动（不加载快速启动快照）。
    *
-   * 实测：这个 Android 14 镜像的 Wi-Fi，在已有用户数据上冷启时经常一直
-   * NO-CARRIER、拿不到 IP；而重置数据后的那次开机是能连上的。
-   * 注意「删掉 userdata 镜像文件」与 emulator 的 `-wipe-data` 并不等价，必须走后者。
+   * 快照里连网卡状态一起被保存：如果快照是在「没网」的时候存的，之后每次恢复都会
+   * 继续没网。网络自愈时先冷启动一次能绕开这份坏快照。
+   */
+  forceColdBootOnNextStart() { this._coldBoot = true; }
+
+  /**
+   * 让「下一次启动」带上 -wipe-data（仅「修复网络」在多种尝试都失败后使用）。
+   * 「删掉 userdata 镜像文件」与 emulator 的 `-wipe-data` 并不等价，必须走后者。
    */
   forceWipeOnNextStart() { this._forceWipe = true; }
 
@@ -975,7 +981,9 @@ class EmulatorEngine {
       // eslint-disable-next-line no-await-in-loop
       const forceWipe = !!this._forceWipe;
       this._forceWipe = false;
+      // _coldBoot 只对这次 spawn 生效，避免之后每次开机都退化成长时间冷启动
       this.spawnOnce({ ...plan, wipe: plan.wipe || avd.wipePending || forceWipe }, { headless, onLog, logFile });
+      this._coldBoot = false;
 
       // 参数错误 / DLL 缺失会立刻退出
       // eslint-disable-next-line no-await-in-loop

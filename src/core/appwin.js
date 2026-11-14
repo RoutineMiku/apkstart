@@ -149,7 +149,15 @@ class AppWindow {
       const pkg = this.pkg;
       this.pkg = null;
       this._closing = false;
-      if (this._closedCb) this._closedCb(pkg);
+      // 不走 close() 的关闭路径（Alt+F4、任务栏关闭、系统关机）也必须停掉安卓应用、
+      // 把模拟器窗口摘下来。否则窗口消失了但应用还在后台跑，用户再点开会因为
+      // 「已在运行」直接切过去，看起来就是「关不掉」。
+      if (pkg && this._onCloseApp) {
+        try { this._onCloseApp(pkg); } catch (_) { /* ignore */ }
+      }
+      Promise.resolve(this.agent && this.agent.park()).catch(() => {}).then(() => {
+        if (this._closedCb) this._closedCb(pkg);
+      });
     });
     // 只在「应用窗口真正处于前台」且至少一项鼠标映射开启时装全局钩子；
     // 失焦/关闭立即卸载，绝不让 ApkStart 在后台拖慢整个系统的鼠标。

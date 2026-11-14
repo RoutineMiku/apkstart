@@ -1142,30 +1142,67 @@ class Runtime {
    *
    * @returns {Promise<{ok:boolean, network?:object, boot?:boolean, error?:string}>}
    */
+  /**
+   * 确保虚拟机联网：先等，等不到就冷启动一次（绕开可能「没网」的快照）再等。
+   * 这是「红果点同意后黑屏」的根治手段：应用一定要在网络就绪后才启动。
+   *
+   * @returns {Promise<{ok:boolean,reason?:string,ip?:string,gateway?:string}>}
+   */
+  async ensureNetwork({ onLog = () => {}, firstWaitMs = 60000, secondWaitMs = 180000 } = {}) {
+    let net = await this.waitForNetwork({ onLog, timeoutMs: firstWaitMs });
+    if (net && net.ok) return net;
+    onLog('网络仍未就绪，正在冷启动一次虚拟机（不加载快照）后重试…');
+    try {
+      await this.stop({ graceful: false }).catch(() => {});
+      this.emulator.forceColdBootOnNextStart();
+      const boot = await this.ensure({ onLog });
+      if (!boot || !boot.ok) return { ok: false, reason: 'boot-failed' };
+    } catch (e) {
+      return { ok: false, reason: e.message };
+    }
+    net = await this.waitForNetwork({ onLog, timeoutMs: secondWaitMs });
+    if (net && net.ok) {
+      // 网络正常后立刻存快照，下次恢复时网卡状态一起还原
+      try { await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 }); } catch (_) { /* ignore */ }
+    }
+    return net;
+  }
+
+  /**
+   * 修复「安卓虚拟机没有网络」。
+   * 顺序：冷启动（不动数据）→ 等网络 → 还不行才重置数据（会丢应用内数据）。
+   *
+   * @returns {Promise<{ok:boolean, network?:object, boot?:boolean, wiped?:boolean, error?:string}>}
+   */
   async repairNetwork({ onLog = () => {} } = {}) {
     try {
-      onLog('正在修复虚拟机网络：重置安卓数据并重新开机（应用清单会保留，点开时自动重装）…');
+      onLog('正在修复虚拟机网络：先冷启动重试…');
       if (this.vmRunning) await this.stop({ graceful: false }).catch(() => {});
-      // 这个 Android 14 镜像上，已有用户数据冷启时 Wi-Fi 经常一直 NO-CARRIER；
-      // 重置数据后的那次开机才能稳定连上，所以这里显式走 -wipe-data。
-      this.emulator.forceWipeOnNextStart();
-      const boot = await this.ensure({ onLog });
+      this.emulator.forceColdBootOnNextStart();
+      let boot = await this.ensure({ onLog });
       if (!boot || !boot.ok) {
         return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false };
       }
-      // Wi-Fi 关联 + DHCP 比 sys.boot_completed 晚很多（实测最长 2 分多钟），要给足时间。
-      const network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
+      let network = await this.waitForNetwork({ onLog, timeoutMs: 180000 });
+      let wiped = false;
+      if (!network || !network.ok) {
+        onLog('冷启动后仍然没有网络，改为重置安卓数据再试一次（应用清单会保留）…');
+        await this.stop({ graceful: false }).catch(() => {});
+        this.emulator.forceWipeOnNextStart();
+        boot = await this.ensure({ onLog });
+        if (!boot || !boot.ok) {
+          return { ok: false, error: (boot && boot.error) || '重置后虚拟机没能启动', boot: false, wiped: true };
+        }
+        network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
+        wiped = true;
+      }
       if (network && network.ok) {
-        // 立刻把「网络正常」的状态存成快速启动快照，下次恢复时网卡状态一起还原。
-        try {
-          const saved = await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 });
-          onLog(saved ? '已把「网络正常」的状态存成快速启动快照。' : '快照没存下（不影响本次使用）。');
-        } catch (_) { /* ignore */ }
+        try { await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 }); } catch (_) { /* ignore */ }
         onLog(`网络已恢复（${network.ip || ''} 网关 ${network.gateway || '可达'}）。`);
       } else {
         onLog('等待超时，虚拟机仍没有网络。多半是宿主机网络/防火墙拦住了模拟器，请检查后重试。');
       }
-      return { ok: !!(network && network.ok), network, boot: true };
+      return { ok: !!(network && network.ok), network, boot: true, wiped };
     } catch (e) {
       return { ok: false, error: e.message };
     }

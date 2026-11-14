@@ -419,7 +419,7 @@ class Installer {
     // 没网时首页渲染成整块黑底 —— 这就是「点同意并继续后一直黑屏」的真正原因。
     // 所以拉起应用前先等网络就绪（最多 90 秒），宁可多等几秒也不要给用户一块黑屏。
     if (rt.engine === 'emulator' || rt.engine === 'builtin') {
-      const net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 150000 }).catch(() => null);
+      const net = await this.runtime.ensureNetwork({ onLog }).catch(() => null);
       if (net && net.ok) {
         onLog(`虚拟机网络就绪（${net.ip || ''}）`);
       } else {

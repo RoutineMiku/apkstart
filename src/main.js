@@ -1446,7 +1446,13 @@ function registerIpc() {
     else w.maximize();
     appWin.scheduleFit();
   });
-  ipcMain.handle('shell:close', (e) => { winOf(e)?.close(); });
+  // 关闭必须走 appWin.close()：它会先把模拟器窗口从宿主上摘下来、再停掉安卓应用。
+  // 老实现直接 win.close()，绕过了这段收尾 —— 窗口是没了，但安卓侧的进程还在跑，
+  // 就是用户说的「点关闭关不掉应用」。
+  ipcMain.handle('shell:close', () => {
+    if (appWin && appWin.isOpen) { appWin.close(); return { ok: true }; }
+    return { ok: false };
+  });
   ipcMain.handle('shell:rotate', () => appWin.rotate());
   ipcMain.handle('shell:back', async () => { await runtime.client().keyBack(); });
   ipcMain.handle('shell:forward', async () => { await runtime.client().keyForward(); });
