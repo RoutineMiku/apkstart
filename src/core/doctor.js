@@ -109,7 +109,12 @@ function shortPath(p) {
  */
 function liteProfile({ host = hostInfo(), engine = {} } = {}) {
   if (engine && engine.liteMode === false) return null;
-  const cores = clamp(Math.floor((host.cores || 2) / 4), 2, 3);
+  const cores = engine && engine.resourceMode === 'save'
+    ? 2
+    // 老逻辑是 floor(核数/4) 再夹到 2~3 —— 8 核机器只给 2 个 vCPU，软件解码视频
+    // （红果/抖音这类）直接卡成幻灯片。改成「一半物理核、上限 4」：
+    // 8 核给 4、4 核给 2，桌面仍有富余核，视频也够用。
+    : clamp(Math.floor((host.cores || 2) / 2), 2, 4);
   return { cores, priority: 'below' };
 }
 
@@ -133,16 +138,31 @@ function chooseProfile({
   if (lite && !overrides.cores) cores = Math.min(cores, lite.cores);
 
   const disk = diskMB || freeDiskMB(host.tmp);
-  const dataMB = disk && disk < 8192 ? 2048 : 4096;
+  // /data 容量：应用本体、游戏资源包和它们的「更新包」都占这里，4GB 太容易满
+  // （表现就是应用内更新时提示「磁盘空间不足」）。默认按磁盘余量给 6/8GB，
+  // 用户也可以直接在设置里指定（改大后下次开机就地扩容，不丢数据）。
+  const wantGB = Number((settings && settings.engine && settings.engine.dataPartitionGB) || 0);
+  const autoDataMB = disk && disk < 12288 ? 4096 : 6144;
+  const dataMB = wantGB > 0 ? clamp(Math.round(wantGB * 1024), 2048, 65536) : autoDataMB;
 
   const gpus = gpuCandidates(emulatorVersion);
   const gpu = overrides.gpuMode && gpus.includes(overrides.gpuMode) ? overrides.gpuMode : gpus[0];
+
+  // 渲染分辨率：auto 时按加速状态选（软件模拟降到 540x960 保流畅）
+  const wantLcd = String((settings && settings.engine && settings.engine.renderSize) || 'auto');
+  const lcd = /^\d{3,4}x\d{3,4}$/.test(wantLcd)
+    ? { ...lcdFor({ accelOk }), ...(() => {
+      const [w, h] = wantLcd.split('x').map(Number);
+      return { w, h, dpi: w <= 540 ? 240 : (w <= 720 ? 320 : 420) };
+    })() }
+    : lcdFor({ accelOk });
 
   return {
     memoryMB,
     cores,
     heapMB: memoryMB >= 3072 ? 384 : 256,
     dataMB,
+    lcd,
     gpu,
     gpuCandidates: gpus,
     accel: accelOk ? 'auto' : 'off',
@@ -214,14 +234,20 @@ function planVariants(profile) {
     cores: 2,
     dataMB: Math.min(profile.dataMB, 2048),
     label: '保守冷启动（最小内存 + 清快照）',
-    wipe: true,
+    // 这里**绝对不能** wipe：以前写的是 wipe:true，而磁盘写满时每次尝试都会失败，
+    // 于是连续重试把用户已装的应用和存档一起「清快照 + 清数据」了 ——
+    // 「磁盘满了，结果打开 ApkStart 应用全没了」就是这么发生的。
+    // 需要重建 userdata 时由 ensureDataPartition 自己判断（它只在镜像损坏时重建），
+    // 不靠启动参数里的 -wipe-data。
+    wipe: false,
     snapshot: false,
     lastResort: true,
   });
-  // 去重（相同 gpu/accel/wipe 组合不重复试）
+  // 去重（相同 gpu/accel/wipe 组合不重复试）——但「最后一档」必须保留：
+  // 它是唯一「不加载快照」的方案，小内存机器上可能和前一档参数完全一样。
   const seen = new Set();
   return out.filter((v) => {
-    const k = `${v.gpu}|${v.accel}|${!!v.wipe}|${v.memoryMB}`;
+    const k = `${v.gpu}|${v.accel}|${!!v.wipe}|${v.memoryMB}|${v.snapshot !== false ? 'snap' : 'nosnap'}|${v.lastResort ? 'last' : ''}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
@@ -262,9 +288,16 @@ async function freeAdbPort(start = 5044) {
  * 故意不包含 GPU、加速方式、内存 —— 那些是自动重试会频繁切换的参数，
  * 若纳入会让每次重试都触发 -wipe-data，把用户已装的应用清空。
  */
+/**
+ * quickboot 快照的「配置指纹」：只有这些变化会让旧快照失效（加载后黑屏/起不来）。
+ *
+ * 刻意**不包含 dataMB**：数据分区调大以后旧快照照样能用（qemu 会按新的分区大小
+ * 重新挂载），把它算进指纹的后果是「用户只想扩个容，结果快照作废 + 冷启动 +
+ * 数据被删」—— 实测踩过一次，代价是整机应用全丢。
+ */
 function snapshotKey(plan, imageDir) {
   return crypto.createHash('sha1').update([
-    imageDir, plan.dataMB || 0, plan.emulatorVersion || '', plan.api || '', plan.tag || '',
+    imageDir, plan.emulatorVersion || '', plan.api || '', plan.tag || '',
   ].join('|')).digest('hex').slice(0, 16);
 }
 
@@ -321,8 +354,9 @@ const RULES = [
   {
     code: 'DISK_FULL',
     re: /No space left|disk full|not enough space|磁盘空间不足/i,
-    title: '磁盘空间不足',
-    hint: '已自动缩小数据分区并清理旧快照。请给系统盘留出至少 8GB 可用空间。',
+    title: '磁盘空间不足，无法启动安卓',
+    hint: '请把运行时目录（设置 → 系统集成 → 运行时数据目录）改到空间充足的盘，'
+      + '或在设置里关掉「保留快速启动快照」/ 调小数据分区。安卓数据不会被自动清除。',
   },
   {
     code: 'NON_ASCII',

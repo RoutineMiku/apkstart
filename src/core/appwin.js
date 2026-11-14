@@ -212,16 +212,21 @@ class AppWindow {
    */
   async embed() {
     if (!this.isOpen) return false;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    let last = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       if (!this.isOpen) return false;
       const hwnd = this._hwnd();
       if (!hwnd) return false;
       // eslint-disable-next-line no-await-in-loop
-      const r = await this.agent.embed(hwnd, this._rect()).catch(() => null);
+      const r = await this.agent.embed(hwnd, this._rect()).catch((e) => ({ ok: false, error: e.message }));
+      last = r;
       if (r && r.ok) return true;
       // eslint-disable-next-line no-await-in-loop
-      await new Promise((res) => setTimeout(res, 300));
+      await sleep(attempt < 2 ? 300 : 800);
     }
+    // 把失败原因带出去：上层会写进 app.log，出问题时一眼能看出是「没找到模拟器窗口」
+    // 还是「SetParent 失败」，不用再靠猜。
+    this.lastEmbedError = last ? (last.error || `emu=${last.emu}`) : 'no-response';
     return false;
   }
 

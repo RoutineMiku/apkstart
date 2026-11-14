@@ -802,3 +802,31 @@ kbd {
   white-space: pre-wrap;
   color: var(--text-2, #556);
 }
+
+/* 组内的小号折叠块（容器细节等） */
+.mini-details {
+  margin: 2px 0 6px;
+  border: 1px dashed var(--line, #e8ebf0);
+  border-radius: 10px;
+  padding: 0 10px 2px;
+}
+.mini-details > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 10px 0 8px;
+  font-size: 12px;
+  color: var(--muted, #7b828e);
+  font-weight: 600;
+}
+.mini-details > summary::-webkit-details-marker { display: none; }
+.mini-details > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform .15s ease;
+}
+.mini-details[open] > summary::before { transform: rotate(90deg); }
+
+/* 行内按钮不要折行（空间紧张时「立即扩容」会被拆成两行） */
+.row .btn { white-space: nowrap; flex: 0 0 auto; }

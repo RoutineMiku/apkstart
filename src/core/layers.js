@@ -154,11 +154,29 @@ function prune(root, { apply = false, keepAvd, aggressive = false, keepSnapshots
 /** 给设置页用的简短摘要 */
 function summary(root) {
   const a = analyze(root);
-  const mb = (n) => `${(n / 1048576).toFixed(0)} MB`;
+  const mb = (n) => (n >= 1048576 * 1024
+    ? `${(n / 1073741824).toFixed(2)} GB`
+    : `${(n / 1048576).toFixed(0)} MB`);
+  // 除了运行时目录，用户最关心「这东西一共占了我多少盘」：
+  // AVD（应用数据 + 快照）、APK 缓存、图标、日志都算进来。
+  const store = require('./store');
+  const extra = [
+    { key: 'avd', label: '安卓数据（应用 + 快照）', path: path.join(store.DATA_DIR, 'avd') },
+    { key: 'apk', label: 'APK 安装包缓存', path: store.APK_DIR },
+    { key: 'icons', label: '桌面图标缓存', path: store.ICON_DIR },
+    { key: 'logs', label: '日志', path: path.join(store.DATA_DIR, 'logs') },
+  ].map((g) => ({ ...g, size: dirSize(g.path) })).filter((g) => g.size > 0);
+
+  const extraTotal = extra.reduce((n, g) => n + g.size, 0);
+  const totalAll = a.total + extraTotal;
   return {
-    total: a.total,
-    totalText: mb(a.total),
-    groups: a.groups.map((g) => ({ ...g, text: mb(g.size) })),
+    total: totalAll,
+    totalText: mb(totalAll),
+    runtimeText: mb(a.total),
+    groups: [
+      { key: 'runtime', label: '运行时（引擎 + 系统镜像）', size: a.total, text: mb(a.total) },
+      ...extra.map((g) => ({ ...g, text: mb(g.size) })),
+    ],
     reclaimable: a.candidates.reduce((n, c) => n + c.size, 0),
     reclaimableText: mb(a.candidates.reduce((n, c) => n + c.size, 0)),
     count: a.candidates.length,

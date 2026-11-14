@@ -366,6 +366,15 @@ public class ApkAgent
         if (_emu == IntPtr.Zero) return;
         if (w < 16) w = 16;
         if (h < 16) h = 16;
+        // 只有「确实已经嵌进我们窗口」的才允许显示。
+        // 万一 embed 失败（模拟器窗口还没建好 / 句柄换了），Fit 绝不能把它当独立窗口
+        // 顶到桌面上 —— 那正是用户看到的那个 "Android Emulator - apkstart5554" 黑窗。
+        bool embedded = _host != IntPtr.Zero && GetParent(_emu) == _host;
+        if (!embedded)
+        {
+            ShowWindow(_emu, 0);
+            return;
+        }
         // SWP_FRAMECHANGED forces Windows to recompute the whole non-client area and
         // repaint it. It is needed exactly once (right after SetParent); repeating it
         // on every periodic sweep caused visible stutter and wasted GPU/CPU.

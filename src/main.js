@@ -40,6 +40,28 @@ const { Updater } = require('./core/updater');
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
+/**
+ * 系统盘快满时，把 Chromium 自己的缓存（Cache / GPUCache / Local Storage …）
+ * 挪到「安卓数据目录」所在的盘。
+ * 默认这些缓存写在 %APPDATA%\apkstart 里 —— C 盘只剩几百 MB 时，连启动都可能失败，
+ * 而用户往往已经把安卓数据挪到别的盘了，缓存却还在 C 盘上挤。
+ * 必须在 app ready 之前设置，之后改无效。
+ */
+function relocateUserDataIfCrowded() {
+  try {
+    const doctor = require('./core/doctor');
+    const freeMB = doctor.freeDiskMB(store.DATA_DIR);
+    const avd = String(store.getSettings().runtime.avdDir || '').trim();
+    if (!avd) return;
+    const avdFree = doctor.freeDiskMB(avd);
+    if (freeMB >= 2048 || avdFree <= freeMB * 2) return;
+    const target = path.join(avd, 'appdata');
+    fs.mkdirSync(target, { recursive: true });
+    app.setPath('userData', target);
+  } catch (_) { /* 放不进去就维持默认，不影响启动 */ }
+}
+relocateUserDataIfCrowded();
+
 // 应用窗口把模拟器以 SetParent 方式嵌进来当子窗口。Chromium 默认用
 // DirectComposition 上半透明图层（Intermediate D3D Window /
 // WS_EX_NOREDIRECTIONBITMAP）绘制网页，这层由 DWM 在窗口级别合成，
@@ -59,8 +81,8 @@ const IS_DEV = process.argv.includes('--dev');
 function appLog(line) {
   try {
     const dir = path.join(store.DATA_DIR, 'logs');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'app.log'), `${new Date().toISOString()} ${line}\n`);
+    const limit = store.getSettings().engine.logLimitKB || 2048;
+    require('./core/logfile').append(path.join(dir, 'app.log'), `${new Date().toISOString()} ${line}`, limit);
   } catch (_) { /* 日志失败不能影响主流程 */ }
 }
 process.on('uncaughtException', (e) => appLog(`UNCAUGHT ${e && (e.stack || e.message)}`));
@@ -575,8 +597,15 @@ async function runLaunch(pkg) {
 
     // 2) 应用真的活下来了，才把画面嵌进窗口（否则用户会看到闪一下的桌面/崩溃页）
     const embedded = await appWin.embed();
-    mark('embedded');
+    if (!embedded) appLog(`embed failed: ${appWin.lastEmbedError || 'unknown'}`);
+    mark(`embedded=${embedded}`);
     appWin.setState({ ready: true, tip: '' });
+    // 嵌入失败（模拟器窗口还没建好）时再补两次：用户看到的是黑窗口，
+    // 后台补上就恢复正常，不用让用户手动重开。
+    if (!embedded) {
+      setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 1500);
+      setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 4000);
+    }
     // 容器会话：环境已经就绪，这里只做「按应用裁剪 + 打开后台轮询」，
     // 不再为这个 App 重新引导一遍 Android。鼠标键位钩子由窗口 focus 事件
     // 按设置决定，失焦即卸载。
@@ -930,6 +959,56 @@ function registerIpc() {
   });
 
   ipcMain.handle('runtime:usage', () => runtime.usage());
+
+  // 通用确认框（渲染层统一走这里，避免各处自己拼 dialog 文案）
+  ipcMain.handle('app:confirm', async (_e, opts = {}) => {
+    const { response } = await dialog.showMessageBox(mainWindow || undefined, {
+      type: opts.type || 'question',
+      title: opts.title || '确认',
+      message: opts.message || '',
+      detail: opts.detail || '',
+      buttons: ['取消', opts.okLabel || '确定'],
+      defaultId: 1,
+      cancelId: 0,
+      noLink: true,
+    });
+    return { response };
+  });
+
+  // 数据分区（/data）容量：应用、游戏与它们的更新包都装在这里。
+  // 「游戏更新提示空间不足」几乎都是这一项太小，扩容是就地做的，不丢数据。
+  ipcMain.handle('runtime:dataInfo', () => {
+    const doctor = require('./core/doctor');
+    const info = runtime.emulator.dataInfo();
+    return { ...info, freeDiskMB: doctor.freeDiskMB(runtime.provisioner.paths().root) };
+  });
+
+  ipcMain.handle('runtime:setDataSize', async (_e, gb) => {
+    const want = Math.max(0, Math.min(64, Number(gb) || 0));
+    store.saveSettings({ engine: { dataPartitionGB: want } });
+    if (!want) {
+      const info = runtime.emulator.dataInfo();
+      return { ok: true, auto: true, ...info };
+    }
+    const mb = Math.round(want * 1024);
+    // 镜像正被 qemu 占着时不能改，先停容器（应用会跟着退出，属于预期）
+    let stopped = false;
+    try {
+      const online = await runtime.client().isOnline().catch(() => false);
+      if (runtime.emulator.running() || online) {
+        await runtime.stop().catch(() => {});
+        stopped = true;
+      }
+    } catch (_) { /* ignore */ }
+    try {
+      const r = runtime.emulator.resizeDataPartition(mb);
+      appLog(`data partition -> ${want}GB: ${JSON.stringify(r)}`);
+      if (r && r.ok) notify('数据分区已调整', `安卓可用空间约 ${want} GB${stopped ? '（运行时已重启）' : ''}`);
+      return { ok: !!(r && r.ok), stopped, ...r, ...runtime.emulator.dataInfo() };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
 
   ipcMain.handle('runtime:cleanup', async (_e, opts = {}) => {
     // 明确两次确认：先给清单，用户确认后才真正删；且只清理 ApkStart 自己的运行时目录
@@ -1442,6 +1521,20 @@ if (!gotLock) {
     buildTray();
     applyAutoStart();
 
+    // 磁盘余量：小于 3GB 时安卓根本起不来（写镜像/快照都会失败）。
+    // 与其让用户看着「打不开」不明所以，不如开门见山告诉他往哪儿改。
+    {
+      const doctor = require('./core/doctor');
+      const freeMB = doctor.freeDiskMB(store.DATA_DIR);
+      if (freeMB && freeMB < 3072) {
+        appLog(`LOW_DISK free=${freeMB}MB dir=${store.DATA_DIR}`);
+        setTimeout(() => {
+          notify('磁盘空间不足', `只剩 ${(freeMB / 1024).toFixed(1)} GB。请到「设置 → 系统集成」把安卓数据目录/运行时目录改到其他盘，或先清理磁盘。`);
+          send('toast', { type: 'error', message: `磁盘只剩 ${(freeMB / 1024).toFixed(1)} GB，安卓可能无法启动（设置 → 系统集成 可换盘）` });
+        }, 3000).unref?.();
+      }
+    }
+
     // 老版本只建过桌面快捷方式 / 图标是 null：启动即自动补齐，不用用户操作
     installer.ensureShortcuts().then((fixed) => {
       if (fixed && fixed.length) {
@@ -1559,6 +1652,13 @@ if (!gotLock) {
               console.log('[smoke] saved', file);
             };
             await snap(out);
+            if (process.argv.includes('--perf')) {
+              // 拍一张「性能与资源占用」区（设置页里控件最多的一块）
+              await mainWindow.webContents.executeJavaScript(
+                "document.getElementById('perfGroup').scrollIntoView({ block: 'start' }); true;",
+              );
+              await snap(out.replace(/\.png$/i, '-perf.png'));
+            }
             if (process.argv.includes('--settings')) {
               // 再拍一张「关于」区（二维码 / GitHub / Powered by）
               await mainWindow.webContents.executeJavaScript(

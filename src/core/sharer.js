@@ -69,16 +69,27 @@ class Sharer {
       const state = this.loadState();
 
       // --- 本机 → 设备 ---
+      // 状态里同时记「本机 mtime」和「设备 mtime」两个值。
+      // 老实现只记一个 mtime、拉完写回本机时间，于是下一轮拿本机时间去和设备的
+      // 时间比 —— 永远不相等 → 每 8 秒把同一个文件从设备拉一遍，落盘时间又变，
+      // 再下一轮继续拉……表现就是「硬盘一直转、文件反复重写、空间越用越少」。
+      const stateOf = (prev) => (prev ? {
+        size: prev.size,
+        lmtime: prev.lmtime || prev.mtime || 0,
+        rmtime: prev.rmtime || 0,
+        dir: prev.dir || '',
+      } : null);
+
       const localFiles = walk(this.localDir);
       for (const f of localFiles) {
-        const prev = state[f.rel];
-        const changed = !prev || Math.abs((prev.mtime || 0) - f.mtime) > 1500 || prev.size !== f.size;
+        const prev = stateOf(state[f.rel]);
+        const changed = !prev || prev.size !== f.size || Math.abs(prev.lmtime - f.mtime) > 1500;
         if (!changed) continue;
         const remote = `${this.remoteDir}/${f.rel}`;
         try {
           await client.shell(`mkdir -p "$(dirname '${remote}')"`);
           await client.push(f.abs, remote);
-          state[f.rel] = { mtime: f.mtime, size: f.size, dir: 'up' };
+          state[f.rel] = { size: f.size, lmtime: f.mtime, rmtime: 0, dir: 'up', at: Date.now() };
           result.pushed++;
         } catch (e) {
           result.errors.push(`↑ ${f.rel}: ${e.message}`);
@@ -98,18 +109,27 @@ class Sharer {
       }
 
       for (const r of remoteList) {
-        const prev = state[r.rel];
+        // 超大文件（视频/游戏数据包）不往回拉：本地目录不该成为设备缓存的下水道
+        if (r.size > MAX_FILE) continue;
+        const prev = stateOf(state[r.rel]);
         const sizeSame = !!prev && prev.size === r.size;
-        // 新文件（prev 为空）必须拉回来；旧版在这里直接读 prev.mtime 会抛异常，
-        // 让整次同步中断，表现为「设备 → 本机永远不同步」
-        const mtimeSame = (prev && r.mtime) ? Math.abs((prev.mtime || 0) - r.mtime) <= 1500 : false;
-        if (prev && sizeSame && mtimeSame) continue;
+        const rmtimeSame = !!(prev && prev.rmtime && r.mtime)
+          && Math.abs(prev.rmtime - r.mtime) <= 1500;
+        if (prev && sizeSame && (rmtimeSame || prev.dir === 'up')) {
+          // 大小一致，且要么设备时间没变、要么这个文件就是我们刚推上去的：
+          // 只把设备时间记下来收工，绝不重复下载
+          if (r.mtime && prev.rmtime !== r.mtime) {
+            state[r.rel] = { ...prev, rmtime: r.mtime };
+          }
+          continue;
+        }
+        if (prev && sizeSame && !r.mtime) continue;   // 拿不到设备时间且大小相同 → 视为一致
         const local = path.join(this.localDir, r.rel);
         try {
           fs.mkdirSync(path.dirname(local), { recursive: true });
           await client.pull(`${this.remoteDir}/${r.rel}`, local);
           const st = fs.statSync(local);
-          state[r.rel] = { mtime: st.mtimeMs, size: st.size, dir: 'down' };
+          state[r.rel] = { size: st.size, lmtime: st.mtimeMs, rmtime: r.mtime || 0, dir: 'down', at: Date.now() };
           result.pulled++;
         } catch (e) {
           result.errors.push(`↓ ${r.rel}: ${e.message}`);

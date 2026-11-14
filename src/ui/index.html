@@ -145,12 +145,12 @@
           <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。</span>
         </div>
         <div class="field">
-          <label>运行时占用（文件逻辑大小）</label>
+          <label>磁盘总占用（运行时 + 安卓数据 + 缓存）</label>
           <div class="row">
             <span class="inline-note" id="usageText">正在统计…</span>
             <button class="btn ghost sm" id="btnCleanup">清理可回收文件</button>
           </div>
-          <span class="sub">只读系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照和锁文件可随时回收。</span>
+          <span class="sub">系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照、日志和锁文件都可回收。日志超过上限会自动滚动，不会无限增长。</span>
         </div>
         <div class="runtime-actions">
           <button class="btn ghost sm" id="btnDiagnostics">导出诊断报告</button>
@@ -222,8 +222,56 @@
         </div>
       </div>
 
-      <div class="group">
-        <div class="group-title">性能与轻量容器</div>
+      <div class="group" id="perfGroup">
+        <div class="group-title">性能与资源占用</div>
+        <div class="field">
+          <label>资源策略</label>
+          <select id="setResourceMode">
+            <option value="save">省资源 · 2 核 / 让出前台 / 540p（老机器、挂机）</option>
+            <option value="balanced">均衡 · 一半物理核 / 让出前台 / 720p（推荐）</option>
+            <option value="smooth">流畅 · 不限核数 / 与前台同优先级（视频、游戏）</option>
+          </select>
+          <span class="sub">决定安卓虚拟机吃多少 CPU、画面多细腻。红果/抖音发卡就切「流畅」，只想挂着跑小应用就切「省资源」。改完下一次打开应用生效。</span>
+        </div>
+        <div class="field two">
+          <div>
+            <label>画质（安卓内部渲染分辨率）</label>
+            <select id="setRenderSize">
+              <option value="auto">自动（按加速状态）</option>
+              <option value="540x960">流畅 · 540 × 960</option>
+              <option value="720x1280">均衡 · 720 × 1280</option>
+              <option value="1080x1920">高清 · 1080 × 1920</option>
+            </select>
+          </div>
+          <div>
+            <label>安卓数据分区（应用与游戏装这里）</label>
+            <select id="setDataGB">
+              <option value="0">自动</option>
+              <option value="4">4 GB</option>
+              <option value="6">6 GB</option>
+              <option value="8">8 GB</option>
+              <option value="12">12 GB</option>
+              <option value="16">16 GB</option>
+              <option value="24">24 GB</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <div class="row">
+            <button class="btn ghost sm" id="btnGrowData">立即扩容</button>
+            <span class="sub" style="flex:1;margin:0">扩容是就地做的：已装应用与存档都保留，只是下次打开应用会多花十几秒。</span>
+          </div>
+        </div>
+        <div class="field">
+          <span class="sub" id="dataNote">正在读取数据分区…</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>网络加速（推荐）</label>
+            <span class="sub">给安卓指定国内公共 DNS（阿里 / 腾讯）。安卓默认走主机的 DNS，主机挂着 VPN 或走公司网时解析会拖到几百毫秒，视频类应用首屏发慢。内网域名访问异常时可关掉。</span>
+          </div>
+          <input type="checkbox" id="setFastDns" class="switch" />
+        </div>
         <div class="field switch-field">
           <div>
             <label>安卓声音</label>
@@ -233,19 +281,29 @@
         </div>
         <div class="field switch-field">
           <div>
-            <label>轻量容器（推荐）</label>
-            <span class="sub">把安卓虚拟机限制在 2–3 个 vCPU 并降低进程优先级，CPU 优先让给 Windows 桌面。关掉后按机器配置分配更多核心，安卓更猛但主机会明显变卡。</span>
+            <label>保留快速启动快照（推荐）</label>
+            <span class="sub">第二次打开应用只要几秒，代价是磁盘上多一份约 2–3 GB 的 <code>ram.bin</code>。磁盘紧张可以关掉：只影响启动速度，不影响应用与存档。</span>
           </div>
-          <input type="checkbox" id="setLiteMode" class="switch" />
+          <input type="checkbox" id="setKeepSnapshot" class="switch" />
         </div>
-        <div class="field">
-          <label>虚拟机优先级</label>
-          <select id="setPriorityMode">
-            <option value="balanced">均衡（推荐）· 运行时让着前台窗口</option>
-            <option value="performance">性能优先 · 运行时与前台同等优先级</option>
-          </select>
-          <span class="sub">没有应用窗口时，容器一律自动降到最低优先级停放。</span>
-        </div>
+        <details class="mini-details">
+          <summary>容器细节（高级）</summary>
+          <div class="field switch-field">
+            <div>
+              <label>轻量容器</label>
+              <span class="sub">收敛 vCPU 配额并降低进程优先级，CPU 优先让给 Windows 桌面。上面的「资源策略」已经会自动设置这一项。</span>
+            </div>
+            <input type="checkbox" id="setLiteMode" class="switch" />
+          </div>
+          <div class="field">
+            <label>虚拟机优先级</label>
+            <select id="setPriorityMode">
+              <option value="balanced">均衡（推荐）· 运行时让着前台窗口</option>
+              <option value="performance">性能优先 · 运行时与前台同等优先级</option>
+            </select>
+            <span class="sub">没有应用窗口时，容器一律自动降到最低优先级停放。</span>
+          </div>
+        </details>
         <div class="field switch-field">
           <div>
             <label>深度裁剪系统后台</label>
@@ -458,6 +516,16 @@
             <button class="btn ghost sm" id="btnOpenData">打开</button>
           </div>
           <span class="sub">这里占用空间最大（数 GB）。改到非系统盘可大幅减轻 C 盘压力；修改后需重启软件，已存在的数据不会自动搬移（请手动复制后删除旧目录）。</span>
+        </div>
+        <div class="field">
+          <label>安卓数据目录（应用、游戏与快速启动快照）</label>
+          <div class="row">
+            <input id="setAvdDir" type="text" readonly placeholder="默认：运行时目录下的 avd 文件夹" />
+            <button class="btn ghost sm" id="btnBrowseAvdDir">浏览</button>
+            <button class="btn ghost sm" id="btnOpenAvdDir">打开</button>
+          </div>
+          <span class="sub">真正吃盘的是这一块：数据分区（默认 6 GB，可在上面对大）+ 快速启动快照（约 2–3 GB）。
+            磁盘紧张时把它指到另一个盘（如 D:），重启软件后生效；旧目录里的 <code>apkstart.avd</code> 可整体搬过去再删。</span>
         </div>
         <div class="field">
           <label>卸载 ApkStart</label>

@@ -222,6 +222,34 @@ function clearEncryptFlag(file) {
   }
 }
 
+/**
+ * 读文件系统**自身**的容量（字节）。
+ * 关键用途：镜像文件被 qemu-img 撑到 8GB，不代表里面的 ext4 也长到了 8GB。
+ * 如果 resize2fs 没跑成功（老版本 qemu-img 参数顺序写错就会这样），
+ * 文件看着有 6GB、安卓却只有 64MB 可用 —— 表现正是「装游戏/更新时空间不足」。
+ * 这里直接读超级块的块数与块大小，判断要不要补一次 resize2fs。
+ */
+function fsBytes(file) {
+  let fd;
+  try {
+    fd = require('fs').openSync(file, 'r');
+    const sb = Buffer.alloc(2048);
+    const n = require('fs').readSync(fd, sb, 0, sb.length, 0);
+    if (n < 2048) return 0;
+    if (sb.readUInt16LE(1024 + 0x38) !== 0xEF53) return 0;
+    const blocksLo = sb.readUInt32LE(1024 + 0x4);
+    const logBlock = sb.readUInt32LE(1024 + 0x18) & 0xffff;
+    const blockSize = 1024 << logBlock;
+    return blocksLo * blockSize;
+  } catch (_) {
+    return 0;
+  } finally {
+    if (fd !== undefined) {
+      try { require('fs').closeSync(fd); } catch (_) { /* ignore */ }
+    }
+  }
+}
+
 module.exports = {
-  buildEmptyExt4, hasExt4Superblock, setEncryptFlag, clearEncryptFlag, BLOCK,
+  buildEmptyExt4, hasExt4Superblock, setEncryptFlag, clearEncryptFlag, fsBytes, BLOCK,
 };

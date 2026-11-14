@@ -309,6 +309,18 @@ class Runtime {
         onLog,
         probe,
       });
+      // start() 失败时是「返回 {ok:false}」而不是抛异常（磁盘不足、多次重试仍失败等）。
+      // 老实现不看这个字段，直接把 ok:true 往上返回 —— 上层于是认为「已经就绪」，
+      // 接着 adb 一顿报 device not found，用户看到的是「点开没反应」而不是真实原因。
+      if (!st || st.ok === false) {
+        return {
+          ok: false,
+          error: (st && st.error) || '安卓运行时未能启动',
+          needsSpace: !!(st && st.needsSpace),
+          attempts: (st && st.attempts) || [],
+          diagnosis: this.emulator.lastDiagnosis,
+        };
+      }
       this.lastActivity = Date.now();
       this.emuSerial = st.serial || this.emulator.serial;
       const client = this.client(this.emuSerial);

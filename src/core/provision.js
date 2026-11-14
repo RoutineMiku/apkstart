@@ -190,7 +190,10 @@ class Provisioner {
     // AVD（含用户数据、已装应用、quickboot 快照）必须落在可写且不会被清理的地方。
     // 单文件发行版的运行时是随包解压到临时目录的，把 AVD 放进去等于每次退出都丢应用。
     // 只要运行时目录不在 %APPDATA% 里，就把 AVD 固定指到用户数据目录。
-    const writable = path.join(store.DATA_DIR, 'avd');
+    // 另外：允许在设置里单独指定「安卓数据目录」——它才是真正吃盘的地方
+    // （6~24GB 数据分区 + 2~3GB 快照），只挪运行时、不挪它，C 盘一样会满。
+    const explicitAvd = String(store.getSettings().runtime.avdDir || '').trim();
+    const writable = explicitAvd || path.join(store.DATA_DIR, 'avd');
     const insideData = root.toLowerCase().startsWith(store.DATA_DIR.toLowerCase());
     // 单文件发行版的镜像会展开到用户目录（见 materializeImages），那里有就用那里的
     const dataImg = path.join(store.DATA_DIR, 'system-images');

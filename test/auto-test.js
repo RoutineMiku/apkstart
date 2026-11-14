@@ -52,7 +52,13 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // accel 关闭时的保底参数必须是软件渲染，否则 TCG 下无 GPU 可用
     const lastResort = doctor.planVariants(p).find((v) => v.lastResort);
     assert(lastResort && /software|swiftshader/.test(lastResort.gpu), '保底方案必须用软件渲染');
-    assert(p.dataMB <= 4096, '数据分区不应再是 16G');
+    // 数据分区默认按磁盘余量给 4/6/8GB（不再写死 16G），且可以被设置覆盖
+    assert(p.dataMB >= 4096 && p.dataMB <= 8192, `数据分区应在 4~8GB，实际 ${p.dataMB}`);
+    const big = doctor.chooseProfile({
+      host, accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 200000,
+      settings: { engine: { dataPartitionGB: 24 } }, overrides: {},
+    });
+    assert(big.dataMB === 24 * 1024, '设置里的数据分区容量必须生效');
   });
 
   await test('大内存机器不会无限吃内存', () => {
@@ -70,9 +76,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const v = doctor.planVariants(p);
     assert(v.length >= 3 && v.length <= 4, `重试次数应 3-4，实际 ${v.length}`);
     assert(v.some((x) => x.accel === 'off'), '缺少软件模拟兜底');
-    assert(v[v.length - 1].wipe === true, '最后一档应强制冷启动清快照');
+    // 最后一档只做「不加载快照 + 最小内存」，绝不允许 -wipe-data：
+    // 磁盘写满时每一档都会失败，带 wipe 的话会把用户已装应用一起清掉（实测踩过）。
+    assert(v[v.length - 1].snapshot === false, '最后一档必须跳过快照加载');
+    assert(v[v.length - 1].wipe === false, '任何自动重试都不允许清用户数据');
     assert(v[v.length - 1].memoryMB <= 2048, '最后一档应降到最小内存');
-    const keys = v.map((x) => `${x.gpu}|${x.accel}|${x.wipe}|${x.memoryMB}`);
+    const keys = v.map((x) => `${x.gpu}|${x.accel}|${x.wipe}|${x.memoryMB}|${x.snapshot !== false}`);
     assert(new Set(keys).size === keys.length, '重试方案不应重复');
   });
 
@@ -166,6 +175,62 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   await test('ARM 翻译层崩溃能给出可执行的中文结论', () => {
     const s = friendlyLaunchError('F DEBUG: DoBadTrampoline libndk_translation SIGABRT', 'com.phoenix.read');
     assert(s.includes('ARM 翻译层') && s.includes('兼容镜像'), s);
+  });
+
+  console.log('\n[sharer 不再来回搬运（磁盘写满的元凶）]');
+
+  await test('同一个文件不会每轮都被从设备拉回来', async () => {
+    const { Sharer } = require('../src/core/sharer');
+    const localDir = path.join(TMP, 'shared');
+    fs.mkdirSync(localDir, { recursive: true });
+    const file = path.join(localDir, 'a.txt');
+    fs.writeFileSync(file, 'hello');
+
+    const calls = { push: 0, pull: 0 };
+    const fakeClient = {
+      isOnline: async () => true,
+      shellMkdir: async () => {},
+      shell: async () => '',
+      push: async () => { calls.push += 1; },
+      pull: async (_r, dst) => { calls.pull += 1; fs.writeFileSync(dst, 'hello'); },
+      listRemoteStat: async () => [{ rel: 'a.txt', size: 5, mtime: Date.now() - 60000 }],
+    };
+    const sh = new Sharer({ client: () => fakeClient });
+    sh.localDirOverride = localDir;
+    // 用真实的路径/状态文件，但目录指向临时目录
+    Object.defineProperty(sh, 'localDir', { get: () => localDir });
+    Object.defineProperty(sh, 'remoteDir', { get: () => '/sdcard/x' });
+    sh.stateFile = path.join(TMP, 'shared-state.json');
+
+    await sh.sync();          // 第 1 轮：本机新文件 → 推上去
+    const firstPull = calls.pull;
+    await sh.sync();          // 第 2 轮
+    await sh.sync();          // 第 3 轮
+    await sh.sync();          // 第 4 轮
+    assert(calls.push === 1, `只应推送一次，实际 ${calls.push}`);
+    assert(firstPull === 0, `刚推上去的文件不该立刻被拉回来，实际拉取 ${firstPull} 次`);
+    assert(calls.pull === firstPull, `后续轮次不应再反复拉取，实际累计 ${calls.pull} 次`);
+  });
+
+  await test('超大文件不会被反向拉回本机（本地目录不是设备缓存下水道）', async () => {
+    const { Sharer } = require('../src/core/sharer');
+    const localDir = path.join(TMP, 'shared2');
+    fs.mkdirSync(localDir, { recursive: true });
+    let pulled = 0;
+    const fakeClient = {
+      isOnline: async () => true,
+      shellMkdir: async () => {},
+      shell: async () => '',
+      push: async () => {},
+      pull: async () => { pulled += 1; },
+      listRemoteStat: async () => [{ rel: 'big.mp4', size: 600 * 1024 * 1024, mtime: Date.now() }],
+    };
+    const sh = new Sharer({ client: () => fakeClient });
+    Object.defineProperty(sh, 'localDir', { get: () => localDir });
+    Object.defineProperty(sh, 'remoteDir', { get: () => '/sdcard/x' });
+    sh.stateFile = path.join(TMP, 'shared-state2.json');
+    await sh.sync();
+    assert(pulled === 0, '超过 512MB 的文件不应拉回本机');
   });
 
   console.log('\n[adb/sharer 文件互通]');
@@ -566,7 +631,11 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   await test('doctor 轻量容器：收敛 vCPU，手动设置优先', () => {
     const host = { totalMB: 32768, freeMB: 20000, cores: 16, home: 'C:\\x', homeAscii: true, tmp: TMP, platform: 'win32', arch: 'x64', rdp: false };
     const lite = doctor.liteProfile({ host, engine: {} });
-    assert(lite && lite.cores <= 3 && lite.cores >= 2, `16 核机器轻量模式应给 2~3 核，实际 ${lite && lite.cores}`);
+    // 老逻辑是 floor(核数/4) 夹到 2~3 —— 8 核机器只给 2 个 vCPU，视频应用直接卡。
+    // 现在均衡模式给「一半物理核、上限 4」，省资源模式固定 2。
+    assert(lite && lite.cores === 4, `16 核机器均衡模式应给 4 核，实际 ${lite && lite.cores}`);
+    const save = doctor.liteProfile({ host, engine: { resourceMode: 'save' } });
+    assert(save.cores === 2, `省资源模式应固定 2 核，实际 ${save.cores}`);
     assert(doctor.liteProfile({ host, engine: { liteMode: false } }) === null, '显式关闭应返回 null');
     const low = doctor.liteProfile({ host: { ...host, cores: 2 }, engine: {} });
     assert(low.cores === 2, '2 核机器至少保留 2 核');
@@ -575,7 +644,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       settings: { engine: { autoMemory: true, liteMode: true } },
       accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
     });
-    assert(auto.lite === true && auto.cores <= 3, JSON.stringify({ lite: auto.lite, cores: auto.cores }));
+    assert(auto.lite === true && auto.cores <= 4, JSON.stringify({ lite: auto.lite, cores: auto.cores }));
     const manual = doctor.autoProfile({
       settings: { engine: { autoMemory: false, cores: 6, liteMode: true } },
       accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
@@ -759,6 +828,48 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 资产挑选是纯函数式的，这里直接喂一个假的 check 结果验证兜底命名规则
     assert(/Setup\.exe$/i.test('ApkStart-0.3.2-Setup.exe'), '安装版资产名匹配');
     assert(/portable.*\.zip$/i.test('ApkStart-v0.3.2-win64-portable.zip'), '便携版资产名匹配');
+  });
+
+  console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
+
+  await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {
+    const store = require('../src/core/store');
+    let s = store.saveSettings({ engine: { resourceMode: 'smooth' } });
+    assert(s.engine.liteMode === false, '流畅模式不应限制核数');
+    assert(s.engine.priorityMode === 'performance', '流畅模式应与前台同优先级');
+    assert(s.engine.renderSize === '720x1280', `分辨率应 720p，实际 ${s.engine.renderSize}`);
+    s = store.saveSettings({ engine: { resourceMode: 'save' } });
+    assert(s.engine.liteMode === true && s.engine.renderSize === '540x960', '省资源应 540p + 轻量容器');
+    s = store.saveSettings({ engine: { resourceMode: 'balanced' } });
+    assert(s.engine.renderSize === 'auto', '均衡模式分辨率交给自动');
+  });
+
+  await test('数据分区容量可配置，且默认不再是死数字', () => {
+    const store = require('../src/core/store');
+    store.saveSettings({ engine: { dataPartitionGB: 12 } });
+    const p = doctor.autoProfile({ settings: store.getSettings(), accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000 });
+    assert(p.dataMB === 12 * 1024, `应为 12GB，实际 ${p.dataMB}MB`);
+    store.saveSettings({ engine: { dataPartitionGB: 0 } });
+    const auto = doctor.autoProfile({ settings: store.getSettings(), accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000 });
+    assert(auto.dataMB === 6144, `磁盘充裕时自动应 6GB，实际 ${auto.dataMB}`);
+  });
+
+  await test('快照指纹不含数据分区大小（扩容不该作废快照、更不该清数据）', () => {
+    const base = { emulatorVersion: '37.3.8', api: '34', tag: 'google_apis_playstore' };
+    const a = doctor.snapshotKey({ ...base, dataMB: 4096 }, 'img');
+    const b = doctor.snapshotKey({ ...base, dataMB: 24576 }, 'img');
+    assert(a === b, '只改容量不应改变指纹');
+    const c = doctor.snapshotKey({ ...base, dataMB: 4096, emulatorVersion: '36.0.0' }, 'img');
+    assert(a !== c, '换引擎版本应改变指纹');
+  });
+
+  await test('日志超过上限自动滚动，只保留一份备份', () => {
+    const lf = require('../src/core/logfile');
+    const f = path.join(TMP, 'rot.log');
+    fs.writeFileSync(f, 'x'.repeat(300 * 1024));
+    const rotated = lf.rotate(f, 256);
+    assert(rotated === true, '应执行滚动');
+    assert(!fs.existsSync(f) && fs.existsSync(path.join(TMP, 'rot.1.log')), '应变成 .1.log');
   });
 
   console.log(results.join('\n'));

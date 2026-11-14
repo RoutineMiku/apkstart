@@ -257,15 +257,16 @@ class EmulatorEngine {
       }
     }
 
-    // 配置指纹变化 → 旧 quickboot 快照必然加载失败或产生黑屏，主动作废
+    // 配置指纹变化 → 旧 quickboot 快照必然加载失败或产生黑屏，主动作废。
+    // 注意：这里只作废**快照**，绝不能顺手 -wipe-data —— 用户数据里是已装的应用和存档。
     const key = `${doctor.snapshotKey({
       dataMB, emulatorVersion: this._emuVersion || '', api, tag,
     }, choice.dir)}|${screen.w}x${screen.h}@${screen.dpi}`;
     const keyFile = path.join(avdDir, 'snapshot.key');
     let prevKey = '';
     try { prevKey = fs.readFileSync(keyFile, 'utf8').trim(); } catch (_) { /* 首次 */ }
-    if (prevKey && prevKey !== key) this.wipePending = true;
-    if (this.wipePending || wipe) {
+    const snapshotStale = !!(prevKey && prevKey !== key);
+    if (this.wipePending || snapshotStale || wipe) {
       // 删除可能被系统/安全软件拦截（快照目录常有几个 GB）。
       // 失败就改名让 emulator 不再加载它，绝不因为清理失败而中断启动。
       const snapDir = path.join(avdDir, 'snapshots');
@@ -274,8 +275,9 @@ class EmulatorEngine {
       } catch (_) {
         try { fs.renameSync(snapDir, `${snapDir}.stale-${Date.now()}`); } catch (__) { /* ignore */ }
       }
-      // 用户数据不删（保留已装应用），只让模拟器按需重建；镜像切换本身由 -wipe-data 处理
     }
+    // 只有「镜像换了」（tag / sysdir 变化）才需要 -wipe-data：旧 userdata 与新镜像
+    // 的 APEX 不兼容，不重建会一直卡在引导循环。改容量 / 改分辨率 / 换渲染后端都不算。
     fs.writeFileSync(keyFile, key, 'utf8');
 
     // hw.cpu.arch 必须是 ABI 本身（x86_64 不能截成 x86）
@@ -342,6 +344,7 @@ class EmulatorEngine {
   ensureDataPartition(avdDir, dataMB = 4096) {
     const emulatorExe = this.locate().emulatorExe;
     if (!emulatorExe || !fs.existsSync(emulatorExe)) return { ok: false, reason: 'no-emulator' };
+    try { fs.mkdirSync(avdDir, { recursive: true }); } catch (_) { /* ignore */ }
     const emuDir = path.dirname(emulatorExe);
     const img = path.join(avdDir, 'userdata-qemu.img');
     const wantBytes = Math.max(1024, Math.round(dataMB || 4096)) * 1024 * 1024;
@@ -349,17 +352,25 @@ class EmulatorEngine {
     try { size = fs.statSync(img).size; } catch (_) { /* 不存在 */ }
 
     if (size > 0 && userdata.hasExt4Superblock(img)) {
-      if (size >= wantBytes) return { ok: true, created: false, size };
-      // 容量配置变大了：就地扩容（不重建，保留已装应用）
+      // 文件够大 + 文件系统也真的长到了这个大小，才算「不用动」。
+      // 只看文件大小会漏掉一种真实故障：qemu-img 撑开了文件、resize2fs 却失败了，
+      // 于是文件 6GB、安卓只有 64MB —— 用户看到的就是「装游戏说空间不足」。
+      const fsBytes = userdata.fsBytes(img);
+      const fsOk = fsBytes >= Math.min(size, wantBytes) * 0.95;
+      if (size >= wantBytes && fsOk) return { ok: true, created: false, size, fsBytes };
+      // 容量配置变大了（或文件系统没长到位）：就地扩容，不重建、保留已装应用
       try {
         userdata.clearEncryptFlag(img);
-        this._qemuImg('resize', img, wantBytes);
+        if (size < wantBytes) this._qemuImg('resize', img, wantBytes);
         this._resize2fs(img);
         userdata.setEncryptFlag(img);
-        return { ok: true, created: false, grown: true, size: wantBytes };
+        const grown = userdata.fsBytes(img);
+        this.log(`userdata 扩容：文件 ${size} → ${wantBytes}，文件系统 ${fsBytes} → ${grown}`);
+        return { ok: true, created: false, grown: true, size: wantBytes, fsBytes: grown };
       } catch (e) {
         this.log(`扩容 userdata 失败（继续用现有分区）：${e.message}`);
-        return { ok: true, created: false, size, error: e.message };
+        // 老分区仍然可用，但必须如实告诉调用方「这次没扩成」，不能让设置页显示成功
+        return { ok: false, created: false, size, fsBytes, error: e.message };
       }
     }
 
@@ -382,13 +393,15 @@ class EmulatorEngine {
     }
   }
 
-  /** emulator 自带 qemu-img.exe：把原始镜像文件撑到目标大小（稀疏，瞬间完成） */
-  _qemuImg(...args) {
+  /** emulator 自带 qemu-img.exe：把原始镜像文件撑到目标大小（稀疏，瞬间完成）
+   *  注意参数顺序：`qemu-img <命令> -f raw <文件> <大小>`。
+   *  把 -f 放命令前面会被它当成全局参数直接报 unrecognized option。 */
+  _qemuImg(op, ...rest) {
     const exe = path.join(path.dirname(this.locate().emulatorExe), 'qemu-img.exe');
-    const r = spawnSync(exe, ['-f', 'raw', ...args], {
+    const r = spawnSync(exe, [op, '-f', 'raw', ...rest], {
       cwd: path.dirname(exe), windowsHide: true, encoding: 'utf8',
     });
-    if (r.status !== 0) throw new Error(`qemu-img ${args[0]} 失败: ${(r.stderr || '').trim() || r.status}`);
+    if (r.status !== 0) throw new Error(`qemu-img ${op} 失败: ${(r.stderr || '').trim() || r.status}`);
   }
 
   /** emulator 自带 resize2fs.exe（cygwin 版，必须在 bin64 目录下跑才能找到 DLL） */
@@ -447,6 +460,15 @@ class EmulatorEngine {
     // （那必须 -netdev tap 或桥接才会发生，我们全程不启用）。
     // 所以安卓应用用的是"一台挂在主机 NAT 后面的设备"，主机网络栈完全不动，
     // 不需要装驱动、也不多一个网络适配器。
+    // 显式声明不限速：默认值虽然是 full，但某些 -gpu / -net 组合下会被带上
+    // 模拟器的保守配置，视频类应用（红果、抖音）首屏就会明显慢半拍。
+    args.push('-netdelay', 'none', '-netspeed', 'full');
+    // DNS：安卓默认用 10.0.2.3（转发到主机 DNS）。主机走 VPN / 公司网 / 某些运营商
+    // 时，一次解析能拖到几百毫秒，表现为「页面转圈半天才开始加载」。给一份国内公共
+    // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景）。
+    if (this.settings?.engine?.fastDns !== false) {
+      args.push('-dns-server', '223.5.5.5,119.29.29.29');
+    }
     if (lcd) args.push('-skin', `${lcd.w}x${lcd.h}`);
     if (headless) {
       args.push('-no-window');
@@ -467,7 +489,9 @@ class EmulatorEngine {
     // 于是第一次冷启动结束后永远产生不了快照，用户每次点开都是全量引导。
     // 正确做法是 -no-snapshot-load：这次不加载（避免等一个不存在的快照），
     // 但退出时照常把内存状态写成 apkstart，下次就直接恢复。
-    if (wipe) {
+    // 快照要占一份约 2~3GB 的 ram.bin（磁盘紧张的用户可以关掉，只影响启动速度）
+    const wantSnapshot = this.settings?.engine?.keepSnapshot !== false;
+    if (wipe || !wantSnapshot) {
       args.push('-no-snapshot');
     } else if (snapshot !== false) {
       args.push('-snapshot', SNAPSHOT_NAME);
@@ -489,7 +513,7 @@ class EmulatorEngine {
       memoryMB: plan.memoryMB, cores: plan.cores,
       snapshot: plan.snapshot, wipe: plan.wipe, lcd: plan.lcd,
     });
-    fs.appendFileSync(logFile, `\n--- ${new Date().toISOString()} ${plan.label} ---\n${loc.emulatorExe} ${args.join(' ')}\n`);
+    this._logWrite(logFile, `\n--- ${new Date().toISOString()} ${plan.label} ---\n${loc.emulatorExe} ${args.join(' ')}\n`);
 
     const proc = spawn(loc.emulatorExe, args, {
       cwd: path.dirname(loc.emulatorExe),
@@ -515,7 +539,7 @@ class EmulatorEngine {
         for (const l of lines) {
           if (!l.trim()) continue;
           this.log(l.trim());
-          fs.appendFileSync(logFile, `${l.trim()}\n`);
+          this._logWrite(logFile, `${l.trim()}\n`);
         }
       });
     };
@@ -523,13 +547,13 @@ class EmulatorEngine {
     pipe(proc.stderr);
     proc.on('exit', (code) => {
       this.log(`emulator exit ${code}`);
-      fs.appendFileSync(logFile, `emulator exit ${code}\n`);
+      this._logWrite(logFile, `emulator exit ${code}\n`);
       this.proc = null;
       onLog(`运行时已退出（code=${code}）`);
     });
     proc.on('error', (e) => {
       this.log(`spawn error: ${e.message}`);
-      fs.appendFileSync(logFile, `spawn error: ${e.message}\n`);
+      this._logWrite(logFile, `spawn error: ${e.message}\n`);
       this.proc = null;
     });
 
@@ -541,6 +565,36 @@ class EmulatorEngine {
       this.setPriority(perf ? 'normal' : 'below').catch(() => {});
     }, 3500).unref?.();
     return { proc, args };
+  }
+
+  /** 写模拟器日志：带大小滚动，避免长期使用把磁盘写满 */
+  _logWrite(file, text) {
+    const limit = Math.max(2048, Number(this.settings?.engine?.logLimitKB || 2048) * 4);
+    require('./logfile').append(file, text, limit);
+  }
+
+  /** 当前 /data 镜像的实际情况（设置页展示用，不启动安卓也能取） */
+  dataInfo() {
+    const dir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+    const img = path.join(dir, 'userdata-qemu.img');
+    let bytes = 0;
+    try { bytes = fs.statSync(img).size; } catch (_) { /* 还没建 */ }
+    return {
+      avdDir: dir,
+      imageBytes: bytes,
+      imageGB: bytes ? Number((bytes / 1073741824).toFixed(1)) : 0,
+      configuredGB: Number(this.settings?.engine?.dataPartitionGB || 0),
+    };
+  }
+
+  /**
+   * 立即把 /data 分区扩容到指定大小（必须保证模拟器已停止，否则镜像被占用）。
+   * 走的是 ensureDataPartition 的就地扩容路径：qemu-img resize + resize2fs，
+   * 不重建、不丢已装应用与存档。
+   */
+  resizeDataPartition(dataMB) {
+    const dir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+    return this.ensureDataPartition(dir, dataMB);
   }
 
   /**
@@ -667,7 +721,29 @@ class EmulatorEngine {
     }
 
     const s = this.settings;
+    // 开机前先看一眼磁盘：模拟器写的是 AVD（数据分区 + 快照，几个 GB），
+    // 只有它所在磁盘的余量才决定能不能开机；运行时目录只写日志，要求低得多。
+    // 之前把两者的余量取最小值，结果「数据目录已经挪到 D 盘、C 盘只剩 400MB」
+    // 会被误判成磁盘不足 —— 挪盘等于白挪。
+    const avdHome = this.provisioner.paths().avdHome;
+    const avdFreeMB = doctor.freeDiskMB(avdHome);
     const diskMB = doctor.freeDiskMB(loc.root);
+    const needMB = 2500;
+    if (avdFreeMB && avdFreeMB < needMB) {
+      const msg = `磁盘空间不足：安卓数据目录（${avdHome}）所在磁盘只剩 ${(avdFreeMB / 1024).toFixed(1)} GB，`
+        + `运行时至少要 ${(needMB / 1024).toFixed(1)} GB 可用。请在「设置 → 系统集成 → 安卓数据目录」`
+        + '把它改到空间充足的盘（例如 D:），或先清理磁盘。你的应用与存档不会被自动删除。';
+      this.log(msg);
+      onLog(msg);
+      return { ok: false, error: msg, needsSpace: true, attempts: [] };
+    }
+    if (diskMB && diskMB < 300) {
+      const msg = `运行时目录（${loc.root}）所在磁盘只剩 ${(diskMB / 1024).toFixed(1)} GB，`
+        + '连日志和临时文件都写不下。请清理磁盘，或把「运行时数据目录」也换到别的盘。';
+      this.log(msg);
+      onLog(msg);
+      return { ok: false, error: msg, needsSpace: true, attempts: [] };
+    }
     const adbPort = await doctor.freeAdbPort(Number(process.env.ANDROID_ADB_SERVER_PORT) || 5044);
     // 让本进程里所有 adb 调用和 emulator 用同一个 server 端口
     process.env.ANDROID_ADB_SERVER_PORT = String(adbPort);
@@ -711,10 +787,11 @@ class EmulatorEngine {
 
     const logFile = path.join(store.DATA_DIR, 'logs', 'emulator.log');
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.appendFileSync(logFile, `\n\n=== ${new Date().toISOString()} START ${doctor.describeProfile(profile)} ===\n`);
+    this._logWrite(logFile, `\n\n=== ${new Date().toISOString()} START ${doctor.describeProfile(profile)} ===\n`);
 
-    // 屏幕规格在整个启动过程中保持一致，否则每次重试都换分辨率会狂清快照
-    const screen = doctor.lcdFor({ accelOk: accelInfo.ok });
+    // 屏幕规格在整个启动过程中保持一致，否则每次重试都换分辨率会狂清快照。
+    // 分辨率来自 doctor 的 profile（设置里可改「画质」），auto 时按加速状态选。
+    const screen = (profile && profile.lcd) || doctor.lcdFor({ accelOk: accelInfo.ok });
     this.attempts = [];
     this.lastDiagnosis = null;
     let lastError = '';
@@ -756,6 +833,12 @@ class EmulatorEngine {
         this.attempts.push({ plan: plan.label, diagnosis: d.code });
         this.lastDiagnosis = d;
         lastError = `${d.title}：${d.hint}`;
+        // 磁盘写满不是「换组参数就能好」的问题：继续重试只会反复失败，
+        // 而且历史上最后那组参数带 wipe，会把用户数据一起抹掉。直接收工、如实报错。
+        if (d.code === 'DISK_FULL') {
+          onLog('磁盘空间不足，已停止重试（不会动你的应用与存档）。');
+          return { ok: false, error: lastError, needsSpace: true, attempts: this.attempts };
+        }
         // 加速/镜像类结论可能是缓存里的旧数据，作废掉，下次启动重新探测
         if (['ACCEL', 'GPU_INIT', 'GPU_MODE', 'IMAGE', 'DLL'].includes(d.code)) {
           try { this.provisioner.invalidateEnvCache(); } catch (_) { /* ignore */ }
@@ -880,6 +963,14 @@ class EmulatorEngine {
         this._snapTimer = null;
         if (!this.running()) return;
         if (!isIdle()) { arm(15000); return; }
+        // 磁盘余量不够写快照（内存大小 + 1GB 余量）就跳过：硬写只会把磁盘写满，
+        // 进而让下一次开机直接失败。快照只影响启动速度，不写也不影响数据。
+        const freeMB = require('./doctor').freeDiskMB(store.DATA_DIR);
+        const needMB = Math.round(Number(this.profile?.memoryMB || 3072) * 1.15) + 1024;
+        if (freeMB && freeMB < needMB) {
+          this.log(`跳过快照保存：磁盘剩余 ${(freeMB / 1024).toFixed(1)}GB < 需要 ${(needMB / 1024).toFixed(1)}GB`);
+          return;
+        }
         await this.saveSnapshotNow(adbPath).catch(() => false);
         this._snapSaved = true;
       }, ms);

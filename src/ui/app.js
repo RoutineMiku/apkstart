@@ -664,9 +664,28 @@ function fillSettings(s) {
   $('setDeviceSharedDir').value = s.deviceSharedDir || '';
   const d = s.display || {};
   $('setAutoStart').checked = s.autoStart !== false;
+  const eng = s.engine || {};
+  if ($('setResourceMode')) $('setResourceMode').value = eng.resourceMode || 'balanced';
+  if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
+  if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
+  if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
+  if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
   $('setPortrait').value = d.portrait || '900x1600';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
+}
+
+/** 数据分区实际大小 + 磁盘余量，显示在设置页容量选择下方 */
+async function refreshDataInfo() {
+  const el = $('dataNote');
+  if (!el) return;
+  const info = await api.dataInfo().catch(() => null);
+  if (!info) { el.textContent = '读取数据分区信息失败'; return; }
+  const auto = Number(($('setDataGB') || {}).value || 0) === 0;
+  const img = info.imageGB ? `${info.imageGB} GB` : '尚未创建';
+  const free = info.freeDiskMB ? `${(info.freeDiskMB / 1024).toFixed(1)} GB` : '未知';
+  el.textContent = `当前数据分区镜像：${img}${auto ? '（自动）' : ''} · 所在磁盘剩余 ${free}。`
+    + '游戏提示「存储空间不足」就把这里调大后点「立即扩容」——扩容是就地做的，已装应用与存档都保留。';
 }
 
 async function openSettings() {
@@ -674,6 +693,10 @@ async function openSettings() {
   fillSettings(state.settings);
   const info = await api.info();
   $('setRuntimeDir').value = info.runtimeDir || info.dataDir;
+  if ($('setAvdDir')) {
+    const di = await api.dataInfo().catch(() => null);
+    $('setAvdDir').value = (di && di.avdDir) || '';
+  }
   const verEl = document.getElementById('aboutVer');
   if (verEl && info.version) verEl.textContent = `v${info.version}`;
   const curVerEl = document.getElementById('updateCurrent');
@@ -694,6 +717,7 @@ async function openSettings() {
 
   $('settingsMask').classList.add('on');
   refreshAndroid();
+  refreshDataInfo();
 }
 
 function closeSettings() {
@@ -831,8 +855,65 @@ function bindSettings() {
     refreshStatus();
   });
   $('setSystemImage').addEventListener('change', (e) => save({ runtime: { isoPath: e.target.value.trim() } }));
-  $('setMemory').addEventListener('change', (e) => save({ engine: { memoryMB: Number(e.target.value) || 0 } }));
-  $('setCores').addEventListener('change', (e) => save({ engine: { cores: Number(e.target.value) || 0 } }));
+  // 内存 / 核心：填了具体值就关掉「自动」，填 0 又回到自动。
+  // 旧代码只写 memoryMB，而 overridesFromSettings 只在 autoMemory=false 时才认它，
+  // 于是「手动填了内存」一直被忽略 —— 这是设置页最容易被当成“没用”的一项。
+  $('setMemory').addEventListener('change', (e) => {
+    const v = Number(e.target.value) || 0;
+    save(v > 0 ? { engine: { memoryMB: v, autoMemory: false } } : { engine: { memoryMB: 0, autoMemory: true } });
+  });
+  $('setCores').addEventListener('change', (e) => {
+    const v = Number(e.target.value) || 0;
+    save(v > 0 ? { engine: { cores: v, autoMemory: false } } : { engine: { cores: 0, autoMemory: true } });
+  });
+  if ($('setResourceMode')) {
+    $('setResourceMode').addEventListener('change', async (e) => {
+      // 资源策略会连带改 liteMode / priorityMode / renderSize（主进程里翻译）
+      state.settings = await api.setSettings({ engine: { resourceMode: e.target.value } });
+      fillSettings(state.settings);
+      toast({ title: '资源策略已切换', body: '下一次打开应用生效', type: 'ok' });
+    });
+  }
+  if ($('setRenderSize')) {
+    $('setRenderSize').addEventListener('change', (e) => save({ engine: { renderSize: e.target.value } }));
+  }
+  if ($('setFastDns')) {
+    $('setFastDns').addEventListener('change', (e) => save({ engine: { fastDns: e.target.checked } }));
+  }
+  if ($('setKeepSnapshot')) {
+    $('setKeepSnapshot').addEventListener('change', (e) => save({ engine: { keepSnapshot: e.target.checked } }));
+  }
+  if ($('setDataGB')) {
+    $('setDataGB').addEventListener('change', (e) => {
+      save({ engine: { dataPartitionGB: Number(e.target.value) || 0 } });
+      refreshDataInfo();
+    });
+  }
+  if ($('btnGrowData')) {
+    $('btnGrowData').addEventListener('click', async () => {
+      const gb = Number($('setDataGB').value) || 0;
+      if (!gb) { toast({ title: '先选一个容量', body: '「自动」表示由软件按磁盘余量决定，不需要扩容', type: 'info' }); return; }
+      const { response } = await api.confirm({
+        title: '立刻把安卓数据分区扩容？',
+        message: `将把 /data 调整为 ${gb} GB（就地扩容，已装应用和存档都会保留）。`,
+        detail: '扩容需要先关掉正在运行的安卓应用，完成后下次打开应用会重新引导，约多花十几秒。',
+        okLabel: '开始扩容',
+      });
+      if (response !== 1) return;
+      $('btnGrowData').disabled = true;
+      const old = $('btnGrowData').textContent;
+      $('btnGrowData').textContent = '扩容中…';
+      const r = await api.setDataSize(gb).catch((e) => ({ ok: false, error: e.message }));
+      $('btnGrowData').disabled = false;
+      $('btnGrowData').textContent = old;
+      toast({
+        type: r && r.ok ? 'ok' : 'error',
+        title: r && r.ok ? '数据分区已扩容' : '扩容失败',
+        body: r && r.ok ? `现在约 ${r.imageGB || gb} GB 可用` : (r && r.error) || '未知错误',
+      });
+      refreshDataInfo();
+    });
+  }
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
   $('setAudio').addEventListener('change', (e) => save({ engine: { audio: e.target.checked } }));
   $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
@@ -1039,6 +1120,29 @@ function bindSettings() {
     $('setRuntimeDir').value = picked;
     toast({ title: '数据目录已更新', body: '请重启 ApkStart 使其生效（旧数据不会自动搬移）', type: 'ok', sticky: true });
   });
+
+  // 安卓数据目录（AVD + 快照）：真正吃盘的那块，单独指到别的盘
+  if ($('btnBrowseAvdDir')) {
+    $('btnBrowseAvdDir').addEventListener('click', async () => {
+      const picked = await api.openDir();
+      if (!picked) return;
+      await api.setSettings({ runtime: { avdDir: picked } });
+      $('setAvdDir').value = picked;
+      toast({
+        title: '安卓数据目录已更新',
+        body: '请重启 ApkStart 使其生效。旧目录里的 apkstart.avd 可以整体搬到新目录，再删掉旧的。',
+        type: 'ok',
+        sticky: true,
+      });
+    });
+  }
+  if ($('btnOpenAvdDir')) {
+    $('btnOpenAvdDir').addEventListener('click', async () => {
+      const info = await api.dataInfo().catch(() => null);
+      const dir = (info && info.avdDir) || (await api.info()).dataDir;
+      window.open(`file:///${String(dir).replace(/\\/g, '/')}`);
+    });
+  }
 
   $('btnProbe').addEventListener('click', async () => {
     const el = $('probeResult');

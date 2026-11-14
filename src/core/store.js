@@ -36,6 +36,23 @@ const DEFAULT_SETTINGS = {
     audio: true,             // 安卓应用的声音（提示音/视频）。关闭可省一点 CPU
     // ---- 轻量容器（默认全开省资源，用户可逐项关掉）----
     liteMode: true,          // 收敛 vCPU 配额，避免 qemu 占满物理核拖慢 Windows
+    // 一句话策略：save（省资源）/ balanced（均衡）/ smooth（流畅，视频·游戏优先）。
+    // 界面上只暴露这一个选项，保存时自动翻译成 liteMode / priorityMode / renderSize，
+    // 底部仍然保留细项开关给高级用户。
+    resourceMode: 'balanced',
+    // 数据分区容量（GB）：应用、游戏缓存和它们的更新包都装在这里。
+    // 0 = 自动（按磁盘剩余给 6/8GB）。改大后在下次开安卓时**就地扩容**，不丢已装应用。
+    dataPartitionGB: 0,
+    // 渲染分辨率：越低越流畅、越省电；auto = 按加速状态选 720x1280 / 540x960
+    renderSize: 'auto',
+    // 网络加速：给模拟器指定国内公共 DNS。安卓默认的 10.0.2.3 要走主机 DNS，
+    // VPN / 公司网 / 某些运营商下解析会拖到几百毫秒，视频类应用首屏会明显发卡。
+    fastDns: true,
+    // 快照：quickboot 内存快照让二次启动只要几秒，代价是磁盘上多一份约 2~3GB 的
+    // ram.bin。磁盘紧张时可以关掉（只影响启动速度，不影响应用数据）。
+    keepSnapshot: true,
+    // 日志上限（KB）：超过就滚动备份一份，避免长期使用把磁盘写满
+    logLimitKB: 2048,
     // 鼠标键位：左键由模拟器原生映射为「确认/点击」，无需开关。
     // 右键返回与平滑滚轮需要低级钩子，但只在应用窗口前台时装，失焦即卸载。
     mouseRightBack: true,    // 右键 = 安卓返回（拦下 Qt 默认的「右键也当点击」误触）
@@ -117,6 +134,26 @@ function deepMerge(base, patch) {
   return out;
 }
 
+/**
+ * 资源策略 → 具体开关。
+ *   save     ：2 vCPU + 低优先级 + 540x960，老笔记本 / 挂机用；
+ *   balanced ：vCPU 取物理核的一半（2~4）+ 让出前台 + 720x1280；
+ *   smooth   ：不限制 vCPU + 与前台同优先级 + 720x1280，视频与游戏优先。
+ * 分辨率先不动 1080p：quickboot 快照指纹与它绑定，改一次就要重冷启动，而 720p
+ * 在手机比例的窗口里已经看不出区别，性能却差一档。
+ */
+function resourcePreset(mode) {
+  switch (String(mode || '')) {
+    case 'save':
+      return { resourceMode: 'save', liteMode: true, priorityMode: 'balanced', renderSize: '540x960' };
+    case 'smooth':
+      return { resourceMode: 'smooth', liteMode: false, priorityMode: 'performance', renderSize: '720x1280' };
+    case 'balanced':
+    default:
+      return { resourceMode: 'balanced', liteMode: true, priorityMode: 'balanced', renderSize: 'auto' };
+  }
+}
+
 const store = {
   DATA_DIR, ICON_DIR, APK_DIR,
 
@@ -135,6 +172,10 @@ const store = {
 
   saveSettings(patch) {
     const next = deepMerge(this.getSettings(), patch);
+    // 只改了「资源策略」时，把它翻译成具体的三个开关，避免两套配置各说各话
+    if (patch && patch.engine && patch.engine.resourceMode) {
+      Object.assign(next.engine, resourcePreset(next.engine.resourceMode));
+    }
     writeJson(SETTINGS_FILE, next);
     return next;
   },
