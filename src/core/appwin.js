@@ -204,17 +204,25 @@ class AppWindow {
 
   setIcon(p) { this.iconUrl = iconUrl(p); this._push(); }
 
-  /** 把模拟器窗口嵌进当前窗口，并铺满标题栏以下的区域 */
+  /**
+   * 把模拟器窗口嵌进当前窗口，并铺满标题栏以下的区域。
+   * 常驻压制不关闭：它会跳过「已经嵌进我们窗口」的那一个，其余窗口（含 qemu /
+   * netsimd 的控制台黑窗）继续压住 —— 关了反而会给它们再露一次脸的机会。
+   * 模拟器窗口偶尔还没创建好（快照恢复太快的机器上），这里重试两次。
+   */
   async embed() {
     if (!this.isOpen) return false;
-    const hwnd = this._hwnd();
-    if (!hwnd) return false;
-    const r = await this.agent.embed(hwnd, this._rect()).catch(() => null);
-    if (r && r.ok) {
-      // 嵌入完成后停止「开机隐藏」，让画面显出来（同时把 qemu 控制台黑窗永久藏好）
-      await this.agent.bootShow().catch(() => {});
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (!this.isOpen) return false;
+      const hwnd = this._hwnd();
+      if (!hwnd) return false;
+      // eslint-disable-next-line no-await-in-loop
+      const r = await this.agent.embed(hwnd, this._rect()).catch(() => null);
+      if (r && r.ok) return true;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((res) => setTimeout(res, 300));
     }
-    return !!(r && r.ok);
+    return false;
   }
 
   async fitNow() {

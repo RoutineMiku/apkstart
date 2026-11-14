@@ -554,8 +554,8 @@ async function runLaunch(pkg) {
   try {
     // 1) 先把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
     openAppWindow(pkg, '正在启动安卓运行时…');
-    // 开机阶段把模拟器主窗 + qemu 控制台黑窗藏起来，避免任何闪现（embed 完成后由
-    // appWin.embed() 调用 bootShow 解除隐藏）。失败（非 Windows/代理不可用）静默降级。
+    // 开机阶段把模拟器主窗 + qemu / netsimd 的控制台黑窗藏起来，避免任何闪现。
+    // 压制是常驻的（embed 后它会自动跳过被嵌入的那一个窗口，见 appwin.embed）。
     // 这里必须 await：不等压制生效就往下走，黑窗会在启动瞬间露出来。
     if (winAgent) { try { await winAgent.bootHide(); } catch (_) { /* ignore */ } }
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
@@ -589,8 +589,9 @@ async function runLaunch(pkg) {
   } catch (e) {
     appLog(`launch failed ${pkg}: ${e && (e.stack || e.message)}`);
     try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
-    // 启动失败也要解除开机隐藏，避免模拟器被永久藏住（下次还能用）
-    if (winAgent) winAgent.bootShow().catch(() => {});
+    // 启动失败也把模拟器窗口继续压住（不要让它以「独立的模拟器窗口」形式露出来），
+    // 下次点应用还是走同一条隐藏 → embed 的路径。
+    if (winAgent) winAgent.bootHide().catch(() => {});
     showWindow();
     send('toast', { type: 'error', message: `启动失败：${e.message}` });
     return { ok: false, error: e.message };
@@ -1481,7 +1482,9 @@ if (!gotLock) {
           if (r && r.ok) appLog(`prewarm ready in ${Date.now() - t0}ms`);
           else {
             appLog(`prewarm failed: ${r && (r.error || r.skipped)}`);
-            if (winAgent) winAgent.bootShow().catch(() => {});
+            // 预热失败也继续压住模拟器窗口：它可能只是慢，过一会儿就起来了，
+            // 用户不该因为「预热失败」在桌面上看到一台模拟器。
+            if (winAgent) winAgent.bootHide().catch(() => {});
           }
         } catch (e) { appLog(`prewarm error: ${e && e.message}`); /* 预热失败不影响后续正常打开 */ }
       }, 1200).unref?.();
