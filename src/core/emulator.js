@@ -10,12 +10,13 @@
  *
  * probe 回调由上层（Runtime）提供，用于判断 Android 是否真正就绪。
  */
-const { spawn, execFile } = require('child_process');
+const { spawn, spawnSync, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
 const { Provisioner } = require('./provision');
 const doctor = require('./doctor');
+const userdata = require('./userdata');
 
 const AVD_NAME = 'apkstart';
 const SNAPSHOT_NAME = 'apkstart';
@@ -109,9 +110,13 @@ class EmulatorEngine {
   hasSnapshot() {
     const base = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`, 'snapshots', SNAPSHOT_NAME);
     const size = (p) => { try { return fs.statSync(p).size; } catch (_) { return 0; } };
-    const ok = size(path.join(base, 'snapshot.pb')) > 1024
-      && size(path.join(base, 'ram.img')) > 1024 * 1024;
-    if (ok) return true;
+    const pb = size(path.join(base, 'snapshot.pb'));
+    // 新版 emulator（37.x）写的是 ram.bin，老版本写 ram.img。
+    // 只认 ram.img 的后果非常严重：刚存好的 3GB 快照会被当成空壳删掉，
+    // 于是每次都带 -no-snapshot-load，永远冷启动 —— 这是「打开很慢」的一半原因。
+    const ram = Math.max(size(path.join(base, 'ram.bin')), size(path.join(base, 'ram.img')));
+    if (pb > 1024 && ram > 1024 * 1024) return true;
+    if (pb === 0 && ram === 0) return false;   // 目录本来就没有，别白删
     try { fs.rmSync(base, { recursive: true, force: true }); } catch (_) { /* ignore */ }
     this._cleanLegacySnapshots();
     return false;
@@ -311,10 +316,90 @@ class EmulatorEngine {
     ].join('\n') + '\n';
     fs.writeFileSync(cfgPath, cfg);
 
+    // /data 分区必须先「真的能用」，否则后面一切都是白等（见 ensureDataPartition 注释）
+    const data = this.ensureDataPartition(avdDir, dataMB);
+
     return {
       home, avdDir, ini: path.join(home, `${AVD_NAME}.ini`), image: choice,
-      wipePending: this.wipePending, screen,
+      wipePending: this.wipePending, screen, data,
     };
+  }
+
+  /**
+   * 保证 userdata 分区是一个**真正可用**的 ext4 —— 这是「点开应用 30 秒进桌面」的地基。
+   *
+   * 为什么必须自己做（三条都是实测踩出来的）：
+   *  1. 系统镜像包里的 userdata.img 是 1MB 全零占位，真正格式化靠 avdmanager 调 SDK 的
+   *     mke2fs。ApkStart 直接写 config.ini 拉 emulator，跳过那一步 → /data 全零 →
+   *     内核 "Invalid ext4 superblock on /dev/block/vdc" → guest 掉进 recovery 重启循环 →
+   *     adbd 永远不上线 → 上层 probe 一直 pending，最后 240s 超时。原表现：点开要等好几分钟。
+   *  2. emulator 自带的 e2fsck/resize2fs 是 cygwin 版 e2fsprogs 1.42.12，**不认识 encrypt
+   *     特性**，带这个位它直接 exit 8 拒绝干活，所以「扩文件系统」必须排在补位之前。
+   *  3. 文件系统必须 ≥ 分区大小：只给 64MB 的话，APEX 解压 + dexopt 立刻写满，
+   *     之后所有 setxattr 返回 ENOSPC → SELinux 标签写不进去 → netd/media/tombstoned
+   *     一起 exit 1 → 开机卡在启动动画，adb 永远 offline。
+   */
+  ensureDataPartition(avdDir, dataMB = 4096) {
+    const emulatorExe = this.locate().emulatorExe;
+    if (!emulatorExe || !fs.existsSync(emulatorExe)) return { ok: false, reason: 'no-emulator' };
+    const emuDir = path.dirname(emulatorExe);
+    const img = path.join(avdDir, 'userdata-qemu.img');
+    const wantBytes = Math.max(1024, Math.round(dataMB || 4096)) * 1024 * 1024;
+    let size = 0;
+    try { size = fs.statSync(img).size; } catch (_) { /* 不存在 */ }
+
+    if (size > 0 && userdata.hasExt4Superblock(img)) {
+      if (size >= wantBytes) return { ok: true, created: false, size };
+      // 容量配置变大了：就地扩容（不重建，保留已装应用）
+      try {
+        userdata.clearEncryptFlag(img);
+        this._qemuImg('resize', img, wantBytes);
+        this._resize2fs(img);
+        userdata.setEncryptFlag(img);
+        return { ok: true, created: false, grown: true, size: wantBytes };
+      } catch (e) {
+        this.log(`扩容 userdata 失败（继续用现有分区）：${e.message}`);
+        return { ok: true, created: false, size, error: e.message };
+      }
+    }
+
+    // 首次 / 旧版留下的全零占位 / 镜像损坏：全新造一个
+    try {
+      fs.rmSync(img, { force: true });
+      fs.rmSync(`${img}.qcow2`, { force: true });
+      // 先不带 encrypt 位（老 e2fsck/resize2fs 才肯干活）
+      fs.writeFileSync(img, userdata.buildEmptyExt4({ sizeMB: 64, encrypt: false }));
+      this._qemuImg('resize', img, wantBytes);
+      this._resize2fs(img);
+      userdata.setEncryptFlag(img);
+      this.log(`已重建 userdata：${(wantBytes / 1024 / 1024 / 1024).toFixed(1)}GB ext4（4K block，支持 FBE）`);
+      return { ok: true, created: true, size: wantBytes };
+    } catch (e) {
+      // 尽力而为：哪怕扩容失败，也要把 encrypt 位补回去，让 FBE 能初始化（分区会偏小）
+      try { userdata.setEncryptFlag(img); } catch (_) { /* ignore */ }
+      this.log(`重建 userdata 失败：${e.message}`);
+      return { ok: false, created: true, error: e.message };
+    }
+  }
+
+  /** emulator 自带 qemu-img.exe：把原始镜像文件撑到目标大小（稀疏，瞬间完成） */
+  _qemuImg(...args) {
+    const exe = path.join(path.dirname(this.locate().emulatorExe), 'qemu-img.exe');
+    const r = spawnSync(exe, ['-f', 'raw', ...args], {
+      cwd: path.dirname(exe), windowsHide: true, encoding: 'utf8',
+    });
+    if (r.status !== 0) throw new Error(`qemu-img ${args[0]} 失败: ${(r.stderr || '').trim() || r.status}`);
+  }
+
+  /** emulator 自带 resize2fs.exe（cygwin 版，必须在 bin64 目录下跑才能找到 DLL） */
+  _resize2fs(img) {
+    const bin = path.join(path.dirname(this.locate().emulatorExe), 'bin64');
+    const exe = path.join(bin, 'resize2fs.exe');
+    if (!fs.existsSync(exe)) throw new Error('缺少 resize2fs.exe');
+    const r = spawnSync(exe, [img], {
+      cwd: bin, windowsHide: true, encoding: 'utf8', timeout: 180000,
+    });
+    if (r.status !== 0) throw new Error(`resize2fs 失败: ${(r.stderr || '').trim() || r.status}`);
   }
 
   /** emulator 依赖这些环境变量定位 SDK / AVD；中文路径一律转 8.3 短路径 */
@@ -373,8 +458,19 @@ class EmulatorEngine {
     // qemu 会一直等一份不存在的内存状态，进程活着但永远不开机——
     // 上层只看到「开机超时」，接着换参数重试，反而被 AVD 锁挡成
     // "Running multiple emulators with the same AVD"。
-    if (snapshot && !wipe && this.hasSnapshot()) args.push('-snapshot', SNAPSHOT_NAME);
-    else args.push('-no-snapshot');
+    // 快照参数决定「下次开机是 8 秒还是 90 秒」，这里是第二个致命点：
+    // 老实现「没有快照就传 -no-snapshot」，而 -no-snapshot 同时禁掉了**退出时保存**，
+    // 于是第一次冷启动结束后永远产生不了快照，用户每次点开都是全量引导。
+    // 正确做法是 -no-snapshot-load：这次不加载（避免等一个不存在的快照），
+    // 但退出时照常把内存状态写成 apkstart，下次就直接恢复。
+    if (wipe) {
+      args.push('-no-snapshot');
+    } else if (snapshot !== false) {
+      args.push('-snapshot', SNAPSHOT_NAME);
+      if (!this.hasSnapshot()) args.push('-no-snapshot-load');
+    } else {
+      args.push('-no-snapshot');
+    }
     if (wipe) args.push('-wipe-data');
     if (accel === 'off') args.push('-accel', 'off');
     return args;
@@ -478,18 +574,53 @@ class EmulatorEngine {
     await this.killOrphanProcesses().catch(() => {});
   }
 
-  /** 清掉本专用端口上的 adb server（旧设备记录会把新模拟器挤成 offline） */
-  _resetAdbServer(adbPort) {
-    return new Promise((resolve) => {
-      let adb = 'adb';
-      try { adb = this.provisioner.adbVersionPath() || 'adb'; } catch (_) { /* 用 PATH 里的 */ }
+  /**
+   * 重建本专用端口上的 adb server。
+   *
+   * 这里是「打开应用要等两分钟」最主要的元凶，历史实现只 kill-server 就返回了：
+   * emulator 在启动瞬间会去连 ANDROID_ADB_SERVER_PORT 上的 adb daemon，
+   * 连不上就**再也不注册这台设备** —— adb devices 里要么没有 emulator-5554，
+   * 要么永远停在 offline（日志里就是那句 "Unable to connect to adb daemon on port: 5044"）。
+   * 于是上层 probe 一直拿不到 sys.boot_completed，白等 3 分钟超时后重试，
+   * 每次重试都是全量冷启动，快照也因为「设备不在线」保存不了，形成死循环。
+   *
+   * 所以必须先 kill（清掉旧设备记录）再 start，并等到端口真的在监听才返回。
+   */
+  /** 供上层在 adb 传输卡住（offline / unauthorized）时主动重启一次 server */
+  async resetAdbServer() {
+    const port = Number(process.env.ANDROID_ADB_SERVER_PORT) || this.adbPort || 5044;
+    return this._resetAdbServer(port);
+  }
+
+  async _resetAdbServer(adbPort) {
+    let adb = 'adb';
+    try { adb = this.provisioner.adbVersionPath() || 'adb'; } catch (_) { /* 用 PATH 里的 */ }
+    const env = { ...process.env, ANDROID_ADB_SERVER_PORT: String(adbPort) };
+    const run = (args, timeout) => new Promise((resolve) => {
       try {
-        execFile(adb, ['kill-server'], {
-          timeout: 6000, windowsHide: true,
-          env: { ...process.env, ANDROID_ADB_SERVER_PORT: String(adbPort) },
-        }, () => resolve());
+        execFile(adb, args, { timeout, windowsHide: true, env }, () => resolve());
       } catch (_) { resolve(); }
     });
+    await run(['kill-server'], 6000);
+    await run(['start-server'], 12000);
+    // adb start-server 在部分机器上同步返回得很快，但端口还没真正 listen，
+    // 这里等到能连上为止（最多 ~3 秒，正常几十毫秒）。
+    const net = require('net');
+    for (let i = 0; i < 25; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const alive = await new Promise((resolve) => {
+        const sock = net.connect({ host: '127.0.0.1', port: Number(adbPort) });
+        let done = false;
+        const fin = (v) => { if (done) return; done = true; try { sock.destroy(); } catch (_) { /* ignore */ } resolve(v); };
+        sock.setTimeout(150, () => fin(false));
+        sock.once('connect', () => fin(true));
+        sock.once('error', () => fin(false));
+      });
+      if (alive) return true;
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(120);
+    }
+    return false;
   }
 
   /**
@@ -497,7 +628,7 @@ class EmulatorEngine {
    * 参数错误/DLL 缺失时 emulator 通常 1 秒内就退；进程还在则立刻返回，
    * 不必再干等固定 2.5 秒 —— 快照恢复时这段时间足够开机跑完一半。
    */
-  _waitSpawnSettled(ms = 2200) {
+  _waitSpawnSettled(ms = 900) {
     const proc = this.proc;
     if (!proc) return Promise.resolve(true);
     return new Promise((resolve) => {
@@ -559,6 +690,21 @@ class EmulatorEngine {
     this.profile = profile;
     const variants = doctor.planVariants(profile).slice(0, maxAttempts);
 
+    // 记住「上次拉起就崩」的 GPU 后端，下次把它排到最后。
+    // 实测：AMD Radeon 780M 上 `-gpu host` 能通过 emulator 自己的硬件检查，
+    // 但 VM 起来十几秒后进程直接 exit 1（日志里只有 "AEHD is operational"），
+    // 每次都要白等 20 多秒再退到 swangle。key 里带上 emulator 版本，
+    // 升级运行时后自动重新给它一次机会。
+    const badGpuKey = this.settings.engine.badGpu || '';
+    const [badVer, badGpu] = badGpuKey.includes('|') ? badGpuKey.split('|') : ['', ''];
+    if (badGpu && badVer === emuVersion) {
+      const rank = (v) => (v.gpu === badGpu ? 1 : 0);
+      variants.sort((a, b) => rank(a) - rank(b));
+      if (variants[0] && variants[0].gpu === badGpu && variants.length > 1) {
+        onLog(`上次 ${badGpu} 渲染后端启动即崩溃，本次改用 ${variants[1].gpu} 先试`);
+      }
+    }
+
     const logFile = path.join(store.DATA_DIR, 'logs', 'emulator.log');
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
     fs.appendFileSync(logFile, `\n\n=== ${new Date().toISOString()} START ${doctor.describeProfile(profile)} ===\n`);
@@ -588,6 +734,13 @@ class EmulatorEngine {
         ...plan,
         wipe: plan.wipe || !!this.wipePending,
       });
+      // 埋点：上层（main）用它在拉起模拟器**之前**打开黑窗压制。
+      // 控制台窗口在 spawn 之后几十毫秒就冒出来，事后再补一次扫描必然闪一下，
+      // 所以这里必须先把它打开、再拉起进程。
+      if (this.onBeforeSpawn) {
+        // eslint-disable-next-line no-await-in-loop
+        try { await this.onBeforeSpawn(); } catch (_) { /* ignore */ }
+      }
       // eslint-disable-next-line no-await-in-loop
       this.spawnOnce({ ...plan, wipe: plan.wipe || avd.wipePending }, { headless, onLog, logFile });
 
@@ -604,6 +757,7 @@ class EmulatorEngine {
           try { this.provisioner.invalidateEnvCache(); } catch (_) { /* ignore */ }
         }
         onLog(`${d.title}，自动换一组参数重试…`);
+        this._noteGpuFailure(plan);
         continue;
       }
 
@@ -616,10 +770,10 @@ class EmulatorEngine {
       let ok = false;
       let fatal = false;
       let sawBooting = false;
-      // 自适应探测间隔：快照恢复往往几秒内就能起，固定 3 秒一次意味着
-      // 平均要多等 1.5 秒才「发现」它已经好了。这里从 350ms 起步逐步放宽到 1.5 秒，
-      // 开机早期能立刻抓到，长引导过程也不会把 CPU 花在轮询上。
-      let interval = 350;
+      // 快照恢复往往几秒内就能起，固定 3 秒一次意味着平均要多等 1.5 秒才「发现」
+      // 它已经好了。这里从 200ms 起步逐步放宽到 1.2 秒：开机早期能立刻抓到，
+      // 长引导过程也不会把 CPU 花在轮询上。
+      let interval = 200;
       let lastNotice = 0;
       // eslint-disable-next-line no-await-in-loop
       while (Date.now() - started < timeout) {
@@ -650,7 +804,7 @@ class EmulatorEngine {
         }
         // eslint-disable-next-line no-await-in-loop
         await sleep(interval);
-        interval = Math.min(1500, Math.round(interval * 1.6));
+        interval = Math.min(1200, Math.round(interval * 1.6));
       }
 
       if (ok) {
@@ -671,6 +825,7 @@ class EmulatorEngine {
       this.lastDiagnosis = d;
       lastError = fatal ? `${d.title}：${d.hint}` : '开机超时（可能是首次引导较慢或硬件加速未生效）';
       onLog(`${lastError}，自动换一组参数重试…`);
+      this._noteGpuFailure(plan);
       // eslint-disable-next-line no-await-in-loop
       await this.killAttempt();
     }
@@ -702,10 +857,11 @@ class EmulatorEngine {
    */
   async saveSnapshotNow(adbPath, { timeout = 45000 } = {}) {
     if (!adbPath) return false;
-    return new Promise((resolve) => {
-      execFile(adbPath, ['-s', this.serial, 'emu', 'avd', 'snapshot', 'save', SNAPSHOT_NAME],
-        { timeout, windowsHide: true }, (err) => resolve(!err));
-    });
+    const ok = await this._saveViaAdb(adbPath, { timeout });
+    // emulator 的 save 命令可能在写盘中途就回 OK，这里按文件完整性再确认一次，
+    // 只有 snapshot.pb 真正落盘才算数（否则下次加载会失败并白等几秒）。
+    if (!ok) return false;
+    return this.hasSnapshot();
   }
 
   /**
@@ -735,29 +891,72 @@ class EmulatorEngine {
 
   /** 优雅停止：慢机器先保存 quickboot 快照，再走控制台关机，最后强杀进程树 */
   async stop({ adbPath } = {}) {
-    if (!this.proc) return true;
+    if (!this.proc) {
+      // 接管来的实例没有 proc 句柄，但端口上确实有机器在跑，不能直接返回 true 走人
+      if (!(await this._anyEmulatorPortAlive())) return true;
+    }
     this.cancelSnapshotSave();
     const serial = this.serial;
     if (adbPath && this.snapshotWorthSaving !== false) {
       // 关机前补存一次：空闲路径没来得及存（比如用户装完应用马上退出）时，
       // 下一次开机仍然能走快照恢复，而不是重新冷启动。
-      await new Promise((resolve) => {
-        execFile(adbPath, ['-s', serial, 'emu', 'avd', 'snapshot', 'save', SNAPSHOT_NAME],
-          { timeout: 20000, windowsHide: true }, () => resolve());
-      });
+      // 3GB 内存写盘要几秒到二十几秒，超时给足，别让快照写一半就被 kill 掉。
+      await this._saveViaAdb(adbPath, { timeout: 60000 });
     }
     if (adbPath) {
       await new Promise((resolve) => {
         execFile(adbPath, ['-s', serial, 'emu', 'kill'],
-          { timeout: 8000, windowsHide: true }, () => resolve());
+          { timeout: 10000, windowsHide: true }, () => resolve());
       });
     }
-    for (let i = 0; i < 20 && this.proc; i += 1) {
+    // 等它自己走完「落盘 → 退出」的流程。以前固定等 6 秒就强杀，
+    // 正好把快照写盘掐断，留下一个只有 ram.img 没有 snapshot.pb 的空壳。
+    //
+    // 注意不能等 this.proc：emulator.exe 只是个启动器，spawn 完 qemu 自己就退了，
+    // 拿它的 exit 当「关机完成」会立刻进入强杀分支。这里以控制台端口为准。
+    for (let i = 0; i < 100 && (await this._consoleAlive()); i += 1) {
       // eslint-disable-next-line no-await-in-loop
       await sleep(300);
     }
     await this.killAttempt();
     return true;
+  }
+
+  /**
+   * 记下「拉起就崩」的 GPU 后端，下次启动把它排到最后。
+   * 只对 auto 模式生效：用户显式指定后端时尊重用户选择，不偷偷改。
+   */
+  _noteGpuFailure(plan) {
+    try {
+      const gpu = plan && plan.gpu;
+      if (!gpu) return;
+      // 软件渲染是兜底项，它已经是最慢/最稳的选择，没有更差的替代品可退
+      if (/software|swiftshader|swangle/.test(gpu)) return;
+      if ((this.settings.engine.gpuMode || 'auto') !== 'auto') return;
+      store.saveSettings({ engine: { badGpu: `${this._emuVersion || ''}|${gpu}` } });
+    } catch (_) { /* ignore */ }
+  }
+
+  /** 本实例的控制台端口（5554）上是否还有机器在跑 —— 判断「到底关干净了没有」 */
+  _consoleAlive() {
+    const net = require('net');
+    const port = this.port || 5554;
+    return new Promise((resolve) => {
+      const sock = net.connect({ host: '127.0.0.1', port });
+      let done = false;
+      const fin = (v) => { if (done) return; done = true; try { sock.destroy(); } catch (_) { /* ignore */ } resolve(v); };
+      sock.setTimeout(200, () => fin(false));
+      sock.once('connect', () => fin(true));
+      sock.once('error', () => fin(false));
+    });
+  }
+
+  /** 用 adb 触发一次快照保存（失败返回 false，调用方决定要不要再试） */
+  _saveViaAdb(adbPath, { timeout = 45000 } = {}) {
+    return new Promise((resolve) => {
+      execFile(adbPath, ['-s', this.serial, 'emu', 'avd', 'snapshot', 'save', SNAPSHOT_NAME],
+        { timeout, windowsHide: true }, (err) => resolve(!err));
+    });
   }
 
   recentLog(n = 40) { return this._log.slice(-n).map((x) => x.line); }

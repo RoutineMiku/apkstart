@@ -281,8 +281,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!/swiftshader_indirect/.test(fresh));
     assert(/-memory 2048/.test(fresh) && /-cores 2/.test(fresh));
     if (!emu.hasSnapshot()) {
-      assert(/-no-snapshot/.test(fresh), '没有快照时必须是 -no-snapshot');
-      assert(!/-snapshot apkstart/.test(fresh), '没有快照时不能传 -snapshot');
+      // 没有快照时必须「只禁加载、不禁保存」：-no-snapshot 会连退出自动保存一起关掉，
+      // 那样第一次冷启动结束后永远产生不了快照，用户每次点开都是全量引导。
+      assert(/-no-snapshot-load/.test(fresh), '没有快照时应用 -no-snapshot-load（只跳过加载）');
+      assert(!/ -no-snapshot( |$)/.test(fresh), '没有快照时不能用 -no-snapshot（会禁掉退出保存）');
     }
     // 快照确实存在时才走 quickboot。注意要真的「像一个完整快照」：
     // 保存中断会留下只有几十字节 snapshot.pb 的空壳，那种必须判定为没有快照，
@@ -296,7 +298,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     fs.writeFileSync(path.join(snapDir, 'apkstart', 'snapshot.pb'), 'x'.repeat(12));
     assert(!emu.hasSnapshot(), '不完整的快照不能被当成可用快照');
     const broken = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
-    assert(/-no-snapshot/.test(broken) && !/-snapshot apkstart/.test(broken), '空壳快照必须回退冷启动');
+    assert(/-no-snapshot-load/.test(broken), '空壳快照必须回退冷启动（跳过加载）');
 
     // 完整快照：pb 有内容 + ram.img 有数据（上一步的空壳会被 hasSnapshot 顺手清掉）
     fs.mkdirSync(path.join(snapDir, 'apkstart'), { recursive: true });
@@ -304,14 +306,54 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     fs.writeFileSync(path.join(snapDir, 'apkstart', 'ram.img'), Buffer.alloc(2 * 1024 * 1024));
     const withSnap = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
     assert(/-snapshot apkstart/.test(withSnap), '有快照时应使用 quickboot 快照');
+    assert(!/-no-snapshot-load/.test(withSnap), '有完整快照时不该跳过加载');
     if (created) fs.rmSync(snapDir, { recursive: true, force: true });
 
     const cold = emu.buildArgs({ wipe: true }).join(' ');
-    assert(/-wipe-data/.test(cold) && /-no-snapshot/.test(cold), 'wipe 时不能同时加载快照');
+    assert(/-wipe-data/.test(cold), 'wipe 时必须带 -wipe-data');
+    assert(/ -no-snapshot( |$)/.test(cold), 'wipe 时不能加载也不能保存快照');
+  });
+
+  await test('新版 emulator 写的 ram.bin 必须被认作完整快照（否则刚存好的 3GB 会被当空壳删掉）', () => {
+    const { EmulatorEngine } = require('../src/core/emulator');
+    const emu = new EmulatorEngine(path.join(__dirname, '..'));
+    const avdDir = path.join(emu.provisioner.paths().avdHome, 'apkstart.avd');
+    const snapDir = path.join(avdDir, 'snapshots', 'apkstart');
+    fs.rmSync(path.join(avdDir, 'snapshots'), { recursive: true, force: true });
+    fs.mkdirSync(snapDir, { recursive: true });
+    fs.writeFileSync(path.join(snapDir, 'snapshot.pb'), 'x'.repeat(2048));
+    fs.writeFileSync(path.join(snapDir, 'ram.bin'), Buffer.alloc(2 * 1024 * 1024));
+    assert(emu.hasSnapshot(), 'ram.bin 应被认作完整快照');
+    const args = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
+    assert(/-snapshot apkstart/.test(args), '有快照时应走 quickboot');
+    assert(!/-no-snapshot-load/.test(args), '有完整快照时不该跳过加载');
+    fs.rmSync(path.join(avdDir, 'snapshots'), { recursive: true, force: true });
+  });
+
+  await test('userdata 种子镜像：4K block + ENCRYPT + 记账自洽', () => {
+    const { buildEmptyExt4 } = require('../src/core/userdata');
+    const sb = 1024;
+    const img = buildEmptyExt4({ sizeMB: 64, encrypt: false });
+    assert(img.readUInt16LE(sb + 0x38) === 0xEF53, 'superblock 魔数必须是 0xEF53');
+    // dm-default-key（Android 13 的 /data 元数据加密）逻辑块大小是 4096，
+    // fs block 小于它会让 mount() 返回 EINVAL —— 这是「挂不上 /data」的真凶。
+    assert(img.readUInt32LE(sb + 0x18) === 2, 's_log_block_size 必须是 2（4096 字节）');
+    assert(img.readUInt32LE(sb + 0x1C) === 2, 's_log_cluster_size 必须等于 block size');
+    // 没有 ext_attr 时 setxattr 返回 EOPNOTSUPP，SELinux 标签写不进去，
+    // netd / media / tombstoned 会一起 exit 1，开机卡在动画上。
+    assert((img.readUInt32LE(sb + 0x5C) & 0x8) !== 0, '必须带 ext_attr');
+    const total = img.readUInt32LE(sb + 0x04);
+    const free = img.readUInt32LE(sb + 0x0C);
+    const inodes = img.readUInt32LE(sb + 0x00);
+    const freeInodes = img.readUInt32LE(sb + 0x10);
+    assert(free > 0 && free < total, '空闲块数必须落在 (0, total) 之间');
+    assert(freeInodes === inodes - 10, '空闲 inode 必须扣掉 1~10 号保留（e2fsck 会核对）');
+    const withEnc = buildEmptyExt4({ sizeMB: 64 });
+    assert((withEnc.readUInt32LE(sb + 0x60) & 0x10000) !== 0, '默认必须带 ENCRYPT（FBE 必需）');
+    assert((img.readUInt32LE(sb + 0x60) & 0x10000) === 0, 'encrypt:false 时要能摘掉该位');
   });
 
   console.log('\n[显示 / 快捷方式 / 零操作]');
-
   await test('窗口模式必须真的开窗口（否则应用进程活着但屏幕上看不见）', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));

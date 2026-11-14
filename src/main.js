@@ -483,7 +483,8 @@ async function runLaunch(pkg) {
     openAppWindow(pkg, '正在启动安卓运行时…');
     // 开机阶段把模拟器主窗 + qemu 控制台黑窗藏起来，避免任何闪现（embed 完成后由
     // appWin.embed() 调用 bootShow 解除隐藏）。失败（非 Windows/代理不可用）静默降级。
-    if (winAgent) winAgent.bootHide().catch(() => {});
+    // 这里必须 await：不等压制生效就往下走，黑窗会在启动瞬间露出来。
+    if (winAgent) { try { await winAgent.bootHide(); } catch (_) { /* ignore */ } }
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
 
     const r = await installer.launch(pkg, {
@@ -1158,6 +1159,9 @@ function registerIpc() {
         return { ok: true, portable: true, dataDir: store.DATA_DIR, exeDir };
       }
       const { spawn } = require('child_process');
+      // 卸载前先收掉常驻的模拟器：qemu 会锁住 resources\runtime 里的 exe/dll，
+      // NSIS 删不掉就会留下半个安装目录。这里只针对「真的在卸载」，不影响日常退出。
+      try { await runtime?.emulator?.killOrphanProcesses(); } catch (_) { /* ignore */ }
       // 先让本程序退出，再由一个独立进程延迟 2 秒拉起卸载器：
       // 运行中的 exe 会锁住安装目录里的文件，直接拉起卸载器容易删不干净。
       const cmd = `ping 127.0.0.1 -n 3 >nul & start "" "${uninstaller}"`;
@@ -1313,6 +1317,17 @@ if (!gotLock) {
     };
     attachAgentEvents(winAgent);
 
+    // 命令窗压制的「闸门」必须在模拟器进程创建之前打开。
+    // 旧实现是「等 ApkStart 起来 4 秒后再藏」，而模拟器在这之前就已经把
+    // qemu 控制台窗口创建出来了 —— 用户看到的就是一次一闪而过的黑框。
+    runtime.emulator.onBeforeSpawn = async () => {
+      if (!winAgent) return;
+      await winAgent.bootHide();
+    };
+    // 窗口代理是个 PowerShell 常驻进程，冷启动约 300~600ms。
+    // 提前拉起，别等到真正要藏窗口的那一刻才开始等。
+    winAgent.ensure().then(() => winAgent.bootHide()).catch(() => {});
+
     registerIpc();
     createWindow({ show: !parseArgs(process.argv).silent });
     buildTray();
@@ -1340,6 +1355,8 @@ if (!gotLock) {
     // 只有「已经装过应用 + 有可用运行时」才预热，避免第一次使用/纯管理场景白占内存。
     const prewarmEnabled = store.getSettings().engine.prewarm !== false;
     if (prewarmEnabled && !args.launch && store.getApps().length > 0) {
+      // 1.2 秒就够窗口画完第一帧了。以前等 4 秒，用户这时已经点了应用，
+      // 结果「点开」和「预热」抢同一个 AVD 锁，反而更慢。
       setTimeout(async () => {
         try {
           const env = await runtime.provisioner.checkEnv();
@@ -1348,7 +1365,8 @@ if (!gotLock) {
             return;
           }
           // 开机阶段把模拟器窗口与 qemu 控制台藏起来，用户不该看到任何窗
-          if (winAgent) winAgent.bootHide().catch(() => {});
+          // 注意要 await：不等它生效就去 spawn，黑窗一定会露出来。
+          if (winAgent) { try { await winAgent.bootHide(); } catch (_) { /* ignore */ } }
           const t0 = Date.now();
           appLog('prewarm start');
           const r = await runtime.prewarm({ onLog: (m) => appLog(`prewarm ${m}`) });
@@ -1358,7 +1376,7 @@ if (!gotLock) {
             if (winAgent) winAgent.bootShow().catch(() => {});
           }
         } catch (e) { appLog(`prewarm error: ${e && e.message}`); /* 预热失败不影响后续正常打开 */ }
-      }, 4000).unref?.();
+      }, 1200).unref?.();
     } else {
       appLog(`prewarm off (enabled=${prewarmEnabled} launch=${!!args.launch} apps=${store.getApps().length})`);
     }

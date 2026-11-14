@@ -1,4 +1,4 @@
-# ApkStart window agent (ASCII only).
+﻿# ApkStart window agent (ASCII only).
 # A single long-lived helper that owns every Win32 trick we need:
 #   * re-parents the Android emulator Qt window into an ApkStart BrowserWindow (one clean window,
 #     no emulator sidebar, no emulator title bar);
@@ -103,6 +103,10 @@ public class ApkAgent
     // 开机隐藏：把模拟器主窗口 + 工具栏 + qemu 控制台黑窗一起压住，直到 embed 完成
     static volatile bool _bootHide = false;
     static long _bootHideSweep = 0;
+    // 兜底超时：万一 embed 没来（用户只是打开了 ApkStart 没点应用），
+    // 不能让 100ms 一轮的扫描永远跑下去白烧 CPU。每次真藏到窗口就续期。
+    static long _bootHideUntil = 0;
+    static long _bootHideStart = 0;
 
     // Hook options. All three default to OFF: an "hook on" without options must
     // never swallow anybody's clicks. JS sends the real config on every enable.
@@ -170,33 +174,112 @@ public class ApkAgent
 
     // 开机阶段：把 qemu / emulator 的黑色控制台窗口藏起来，避免「命令窗口」闪现。
     // 它们是 console 子系统进程，Node 的 windowsHide 覆盖不到子进程，只能靠 Win32 周期压住。
+    //
+    // 关键坑：Windows 10 以后控制台窗口真正属于 conhost.exe，GetWindowThreadProcessId
+    // 拿到的是 conhost 的 pid，不是 emulator 的 pid —— 老实现按 pid 白名单匹配，
+    // 于是这些黑窗一个都藏不住（"点了没反应，先弹个 cmd 黑框"就是这么来的）。
+    // 现在改成「pid 命中 或 窗口标题命中（标题就是被启动的 exe 路径）」，两条路任一生效即隐藏。
     static void HideConsoleWindows()
     {
         var pids = new System.Collections.Generic.HashSet<uint>();
         try {
             foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64-headless")) pids.Add((uint)p.Id);
             foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("emulator-headless")) pids.Add((uint)p.Id);
         } catch { }
-        if (pids.Count == 0) return;
         EnumWindows(delegate(IntPtr h, IntPtr p)
         {
+            if (!IsWindowVisible(h)) return true;
+            string cls = ClassOf(h);
+            bool isConsole = cls.IndexOf("ConsoleWindowClass", StringComparison.Ordinal) >= 0
+                || cls.IndexOf("CASCADIA_HOSTING_WINDOW_CLASS", StringComparison.Ordinal) >= 0;
+            if (!isConsole) return true;   // 绝不动 Qt 画面窗口（QWindowIcon）
             uint pid;
             GetWindowThreadProcessId(h, out pid);
-            if (!pids.Contains(pid)) return true;
-            // 只藏控制台窗口（ConsoleWindowClass），绝不动 Qt 画面窗口（QWindowIcon）
-            if (ClassOf(h).IndexOf("ConsoleWindowClass", StringComparison.Ordinal) >= 0)
-                ShowWindow(h, 0);
+            string title = TitleOf(h);
+            bool ours = pids.Contains(pid)
+                || title.IndexOf("emulator", StringComparison.OrdinalIgnoreCase) >= 0
+                || title.IndexOf("qemu", StringComparison.OrdinalIgnoreCase) >= 0
+                || title.IndexOf("apkstart", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (ours) ShowWindow(h, 0);
             return true;
         }, IntPtr.Zero);
+    }
+
+    // 诊断用：列出当前「可见」的控制台窗口（黑窗）及其归属，供 tools 里的验证脚本使用。
+    // ours=true 表示这就是 emulator/qemu 的控制台窗口。
+    static string ListConsoles()
+    {
+        var sb = new StringBuilder();
+        var pids = new System.Collections.Generic.HashSet<uint>();
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64-headless")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
+        }
+        catch { }
+        EnumWindows(delegate(IntPtr h, IntPtr p)
+        {
+            if (!IsWindowVisible(h)) return true;
+            string cls = ClassOf(h);
+            bool isConsole = cls.IndexOf("ConsoleWindowClass", StringComparison.Ordinal) >= 0
+                || cls.IndexOf("CASCADIA_HOSTING_WINDOW_CLASS", StringComparison.Ordinal) >= 0;
+            if (!isConsole) return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            string title = TitleOf(h);
+            bool ours = pids.Contains(pid)
+                || title.IndexOf("emulator", StringComparison.OrdinalIgnoreCase) >= 0
+                || title.IndexOf("qemu", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (sb.Length > 0) sb.Append(",");
+            sb.Append("{\"ours\":").Append(ours ? "true" : "false")
+              .Append(",\"pid\":").Append(pid)
+              .Append(",\"cls\":").Append(JsonStr(cls))
+              .Append(",\"title\":").Append(JsonStr(title))
+              .Append("}");
+            return true;
+        }, IntPtr.Zero);
+        return sb.ToString();
+    }
+
+    static string JsonStr(string s)
+    {
+        var b = new StringBuilder("\"");
+        foreach (char c in s == null ? "" : s)
+        {
+            if (c == '"' || c == '\\') b.Append('\\').Append(c);
+            else if (c >= ' ') b.Append(c);
+        }
+        b.Append("\"");
+        return b.ToString();
     }
 
     // 开机隐藏扫描：周期性把模拟器主窗口 + 工具栏 + 控制台黑窗一起压住
     static void BootHideSweep()
     {
         IntPtr e = _emu != IntPtr.Zero ? _emu : FindEmulator();
+        bool sawProc = AnyEmulatorProcess();
         if (e != IntPtr.Zero && IsWindowVisible(e)) ShowWindow(e, 0);
         HideToolWindows();
         HideConsoleWindows();
+        // 只要模拟器还在（启动中/待 embed），就持续压制；进程没了就不再续期，
+        // 由主循环的超时检查自动收工。
+        if (e != IntPtr.Zero || sawProc) _bootHideUntil = Environment.TickCount + 5000;
+    }
+
+    static bool AnyEmulatorProcess()
+    {
+        try
+        {
+            if (Process.GetProcessesByName("qemu-system-x86_64").Length > 0) return true;
+            if (Process.GetProcessesByName("qemu-system-x86_64-headless").Length > 0) return true;
+            if (Process.GetProcessesByName("emulator").Length > 0) return true;
+            if (Process.GetProcessesByName("emulator-headless").Length > 0) return true;
+        }
+        catch { }
+        return false;
     }
 
     // ------------------------------------------------------------------ embed / detach
@@ -539,11 +622,19 @@ public class ApkAgent
             }
             if (_embedAt != 0 && now - _embedAt >= 8000) _embedAt = 0;
 
-            // 开机阶段周期性隐藏模拟器主窗 + 工具栏 + qemu 控制台黑窗，避免任何闪现
-            if (_bootHide && now - _bootHideSweep > 300)
+            // 开机阶段周期性隐藏模拟器主窗 + 工具栏 + qemu 控制台黑窗，避免任何闪现。
+            // 前 60 秒用 100ms 一轮：控制台窗口从创建到可见只有几十毫秒，300ms 的间隔
+            // 足够让人眼看到一次黑框闪动。稳定之后放慢到 800ms，避免常驻空转。
+            long sweepGap = (now - _bootHideStart < 60000) ? 100 : 800;
+            if (_bootHide && now - _bootHideSweep > sweepGap)
             {
                 _bootHideSweep = now;
                 BootHideSweep();
+            }
+            // 没人点应用、也没有进程需要藏了就自动收工，避免常驻空转
+            if (_bootHide && _bootHideUntil > 0 && now > _bootHideUntil)
+            {
+                _bootHide = false;
             }
 
             try
@@ -622,12 +713,18 @@ public class ApkAgent
                         if (e != IntPtr.Zero) GetWindowRect(e, out r);
                         Reply(sock, "{\"ok\":true,\"emu\":" + e.ToInt64() + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T) + "}");
                     }
+                    else if (cmd == "consoles")
+                    {
+                        Reply(sock, "{\"ok\":true,\"list\":[" + ListConsoles() + "]}");
+                    }
                     else if (cmd == "boothide")
                     {
                         if (L(line, "on") == 1)
                         {
                             _bootHide = true;
                             _bootHideSweep = 0;
+                            _bootHideStart = Environment.TickCount;
+                            _bootHideUntil = Environment.TickCount + 4000;
                             BootHideSweep();
                         }
                         else

@@ -167,9 +167,18 @@ class WinAgent extends EventEmitter {
    * qemu 控制台子进程，Node 的 windowsHide 覆盖不到它；只能由窗口代理周期性
    * 用 ShowWindow(SW_HIDE) 压住。启动即调用，boot 期间每帧都压一次，
    * 避免任何闪现。失败（非 Windows / 代理不可用）时静默降级，不阻断启动。
+   *
+   * maxWaitMs：代理本身要现编译启动（几百毫秒，异常时可能十几秒）。调用点是在
+   * 「拉起模拟器之前」，绝不能因为代理起不来把开机拖住，所以这里给个硬上限。
+   * @param {number} maxWaitMs
    */
-  async bootHide() {
-    return this.call({ cmd: 'boothide', on: 1 }, 4000).catch(() => ({ ok: false }));
+  async bootHide(maxWaitMs = 3000) {
+    const call = this.call({ cmd: 'boothide', on: 1 }, 4000).catch(() => ({ ok: false }));
+    if (!maxWaitMs) return call;
+    return Promise.race([
+      call,
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, timeout: true }), maxWaitMs)),
+    ]);
   }
 
   /** 开机完成：停止隐藏，并让模拟器窗口显示出来（随后会被 embed 重新父化） */

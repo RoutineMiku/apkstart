@@ -29,6 +29,9 @@ const DEFAULT_SETTINGS = {
     // 带窗口的模拟器是原生 60fps + 原生鼠标键盘，ApkStart 只负责把它打扮成应用窗口。
     headless: false,
     gpuMode: 'auto',         // auto = 按 emulator 版本自动挑后端并逐级降级
+    // 上次「拉起就崩」的渲染后端（格式 `<emulator版本>|<gpu>`）；auto 模式下下次把它排到最后，
+    // 免得每次开机都先白等 20 多秒再退到软件渲染。升级运行时会自动失效。
+    badGpu: '',
     forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
     audio: true,             // 安卓应用的声音（提示音/视频）。关闭可省一点 CPU
     // ---- 轻量容器（默认全开省资源，用户可逐项关掉）----

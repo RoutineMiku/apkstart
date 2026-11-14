@@ -271,6 +271,9 @@ class Runtime {
       // probe 交给 EmulatorEngine 的开机循环：进程退出/致命日志时它会换一组参数重试
       // 每轮只发一次 adb 命令：以前是 get-state + getprop + pm path 三次进程拉起，
       // 快照恢复时一轮就差 300~500ms，正好卡在「点开应用」的观感上。
+      let probeStart = Date.now();
+      let errStreak = 0;
+      let lastHeal = 0;
       const probe = async ({ serial }) => {
         if (!this.emulator.running()) return 'fatal';
         if (!this._probeClient || this._probeClient.serial !== serial) {
@@ -282,9 +285,21 @@ class Runtime {
           const lines = out.split(/\r?\n/).map((l) => l.trim());
           const booted = lines[0] === '1' || /^1$/.test(lines[0] || '');
           const pmReady = lines.some((l) => /^package:/.test(l));
+          errStreak = 0;
           if (booted && pmReady) return 'ok';
           return booted ? 'pending' : 'booting';
         } catch (_) {
+          errStreak += 1;
+          // adb 传输会偶发地卡在 offline / unauthorized（另一个 adb server 抢了端口、
+          // 或者握手被打断），这时每一轮 shell 都报错，probe 永远 pending ——
+          // 上层只会看到「开机超时」，白白等到 240 秒。连错 6 轮就重启一次 server 自愈。
+          const now = Date.now();
+          if (errStreak >= 6 && now - probeStart > 25000 && now - lastHeal > 30000) {
+            lastHeal = now;
+            onLog('adb 连接异常，重启 adb server 后继续等待…');
+            await this.emulator.resetAdbServer().catch(() => {});
+            this._probeClient = null;
+          }
           return 'pending';
         }
       };
@@ -504,16 +519,24 @@ class Runtime {
 
   /** 优雅停止：emulator 走控制台关机，QEMU 走 monitor */
   async stop({ graceful = true } = {}) {
+    const adbPath = this.adbPath();
     if (this.emulator.running()) {
-      await this.emulator.stop({ adbPath: this.adbPath() });
+      await this.emulator.stop({ adbPath });
       return true;
     }
     // 接管来的模拟器（adoptExisting）在本进程里没有 proc 句柄，旧逻辑会直接
     // return false —— 结果空闲看门狗永远关不掉它，容器一直占着 CPU/内存。
     // 这条路径改用 adb 控制台关机，必要时再按端口强杀兜底。
+    //
+    // 注意：emulator.exe 只是个启动器，spawn 完 qemu 自己就退了，所以「自己拉起来的」
+    // 机器也常常落到这条分支。关机前必须补一次 saveSnapshotNow，否则快照永远存不下来，
+    // 用户每次点开都是全量冷启动（25 秒 vs 8 秒的差别就在这一步）。
     let online = false;
     try { online = await this.client().isOnline(); } catch (_) { /* ignore */ }
     if (online && this.emuSerial) {
+      if (adbPath && this.emulator.snapshotWorthSaving !== false) {
+        await this.emulator.saveSnapshotNow(adbPath, { timeout: 60000 }).catch(() => false);
+      }
       await this.client().exec(['emu', 'kill'], { timeout: 8000 }).catch(() => {});
       for (let i = 0; i < 10; i += 1) {
         // eslint-disable-next-line no-await-in-loop
@@ -992,17 +1015,15 @@ class Runtime {
     if (this._watchdog) clearInterval(this._watchdog);
     if (this._client && this._client.disposeInput) this._client.disposeInput();
     this.emulator.cancelSnapshotSave();
-    if (this.emulator.running()) {
-      try { this.emulator.proc.kill(); } catch (_) { /* ignore */ }
-    }
+    // 这里【绝对不能】强杀 qemu：
+    //  1) 强杀会把正在写盘的 quickboot 快照截断，只留下几 GB 的 ram.img 空壳，
+    //     下次开机加载失败 → 全量冷启动，这就是「每次打开都要等两分钟」的直接原因；
+    //  2) 留着它，下次打开 ApkStart 可以直接接管，点应用秒开（WSA / 应用宝电脑版同款行为）。
+    // 卸载时另走一条路（app:removeSelf 会显式清理进程）。
     if (this.vmProc) {
       try { this.vmProc.kill(); } catch (_) { /* ignore */ }
       this.vmProc = null;
     }
-    // 退出时务必清掉 detached 的 qemu 进程：它独立于 ApkStart 存活（为了下次秒开），
-    // 不在此强杀会一直锁住安装目录里的文件，导致卸载不干净、第三方粉碎工具也删不掉。
-    // 仅在本进程真正退出时调用，不影响「关窗口→托盘常驻→下次秒开」的体验。
-    this.emulator.killOrphanProcesses().catch(() => {});
   }
 
   get bootLog() { return this._bootLog.slice(-60); }
