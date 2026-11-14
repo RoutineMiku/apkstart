@@ -86,7 +86,17 @@ class Updater {
       notes: merged.notes,
       htmlUrl: merged.htmlUrl,
       publishedAt: merged.publishedAt,
-      asset: asset ? { name: asset.name, size: asset.size, url: asset.url, source: asset.source } : null,
+      // 注意带上 parts：Gitee 的分片包没有单一 url，丢掉 parts 就变成「有资产但没地址」
+      asset: asset
+        ? {
+          name: asset.name,
+          size: asset.size,
+          url: asset.url,
+          source: asset.source,
+          parts: asset.parts,
+          partial: asset.partial,
+        }
+        : null,
       assets: merged.assets,
       // 两个源各自的最新版本 / 谁不可达，界面上可以如实显示「这次走的哪个源」
       sources: merged.sources,
@@ -94,7 +104,7 @@ class Updater {
       flavor: this.flavor,
       hasUpdate: cmpVer(merged.tag, this.current) > 0,
       current: this.current,
-      canAutoApply: !!asset,
+      canAutoApply: !!asset && (!!asset.url || !!(asset.parts && asset.parts.length)),
     };
     this._last = this.latest;
     return this.latest;

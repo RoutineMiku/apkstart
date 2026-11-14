@@ -898,6 +898,54 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       `只应保留 ApkStart* 资产，实际 ${JSON.stringify(m.assets.map((a) => a.name))}`);
   });
 
+  await test('Gitee 的资产没有 size 字段：分片组仍要成立（否则整包被丢掉）', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: {} }));
+    s.fetchReleases = async () => [{
+      source: 'gitee',
+      name: 'Gitee',
+      web: 'e',
+      rel: {
+        tag_name: 'v0.3.3',
+        // Gitee 发行版资产只有 name + url，没有 size（实测）
+        assets: [
+          { name: 'ApkStart-v0.3.3-win64-portable.zip.part1', browser_download_url: 'ge://p1' },
+          { name: 'ApkStart-v0.3.3-win64-portable.zip.part2', browser_download_url: 'ge://p2' },
+        ],
+      },
+    }];
+    const m = await s.latest();
+    assert(m.assets.length === 1, `应合并成 1 个资产，实际 ${m.assets.length}`);
+    const a = m.assets[0];
+    assert(a.name === 'ApkStart-v0.3.3-win64-portable.zip', `资产名应为整包名，实际 ${a.name}`);
+    assert(a.parts && a.parts.length === 2, '必须保留两片');
+    assert(a.parts[0].urls[0] === 'ge://p1' && a.parts[1].urls[0] === 'ge://p2', '分片地址顺序/内容要对');
+    assert(a.size === 0, '大小未知时应为 0（界面按已收字节显示进度）');
+  });
+
+  await test('分片资产必须一路传到 updater.asset，否则 prepare 会报「没有可用的下载地址」', async () => {
+    const { Updater } = require('../src/core/updater');
+    const u = new Updater({
+      currentVersion: '0.0.1', exePath: path.join(TMP, 'A.exe'), isPackaged: true, dataDir: TMP,
+      settings: () => ({}),
+    });
+    u.sources.latest = async () => ({
+      version: '9.9.9',
+      tag: 'v9.9.9',
+      assets: [{
+        name: 'ApkStart-v9.9.9-win64-portable.zip',
+        size: 0,
+        partial: true,
+        parts: [{ index: 1, size: 0, urls: ['https://gitee.com/x/p1'] }, { index: 2, size: 0, urls: ['https://gitee.com/x/p2'] }],
+      }],
+      sources: [{ source: 'gitee', name: 'Gitee', tag: 'v9.9.9' }],
+      unreachable: [],
+    });
+    const info = await u.check({ force: true });
+    assert(info.asset && info.asset.parts && info.asset.parts.length === 2, 'parts 必须保留到 asset 上');
+    assert(info.canAutoApply === true, '有分片就应判定为可自动更新');
+  });
+
   await test('双源：合并版本时只认同版本的资产，不拿旧包冒充新包', async () => {
     const { Sources } = require('../src/core/sources');
     const s = new Sources(() => ({ runtime: {} }));

@@ -194,8 +194,11 @@ function groupParts(assets) {
   for (const g of groups.values()) {
     g.parts.sort((x, y) => x.index - y.index);
     const contiguous = g.parts.every((p, i) => p.index === i + 1);
-    g.size = g.parts.reduce((n, p) => n + p.size, 0);
-    if (!contiguous || !g.parts.every((p) => p.size > 0 && p.urls.length)) g.broken = true;
+    g.size = g.parts.reduce((n, p) => n + (Number(p.size) || 0), 0);
+    // 注意：Gitee 的发行版资产条目只有 name/url，**没有 size**。
+    // 以「size>0」作为完整性条件会把整组分片判成残缺而丢弃（实测踩过），
+    // 所以这里只要求「分片连续 + 每个分片有地址」；大小未知时进度按已收字节显示。
+    if (!contiguous || !g.parts.every((p) => p.urls.length)) g.broken = true;
   }
   return { list: out.filter((a) => !a.broken), broken: [...groups.values()].filter((g) => g.broken).map((g) => g.name) };
 }
