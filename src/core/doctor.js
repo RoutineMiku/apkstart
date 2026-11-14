@@ -412,6 +412,15 @@ function writeReport({ dataDir, profile, logLines = [], extra = {} }) {
  */
 function vcRedistOk() {
   if (process.platform !== 'win32') return true;
+  // 先看 DLL：msvcp140 / vcruntime140 正是 Qt6 与 qemu 真正依赖的两个文件。
+  // 用文件判断既不用起 reg.exe（部分安全软件会拦、也会拖慢每 60s 的自检），
+  // 也不会因为注册表项被清理工具删掉而误报「没装」。
+  const sys = path.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32');
+  try {
+    if (fs.existsSync(path.join(sys, 'msvcp140.dll'))
+      && fs.existsSync(path.join(sys, 'vcruntime140.dll'))) return true;
+  } catch (_) { /* 走注册表兜底 */ }
+
   const key = 'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64';
   for (const k of [key, key.replace('SOFTWARE\\', 'SOFTWARE\\WOW6432Node\\')]) {
     try {

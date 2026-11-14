@@ -10,7 +10,6 @@ const state = {
   filter: '',
   installing: false,
   setupBusy: null,
-  setupDismissed: false,
   menuPkg: null,
 };
 
@@ -109,7 +108,7 @@ function renderGrid() {
   if (!hasAny) {
     const s = state.status;
     $('emptyHint').textContent = s && s.adbOk === false
-      ? '首次使用：请先在设置里指定 adb 位置或系统镜像，然后回来安装应用。'
+      ? '首次使用：打开右上角设置 → 运行时 → 一键完成，再回来安装应用即可。'
       : '提示：所有应用共享同一个 Android 运行时，所以第二个应用的启动几乎是瞬时的。';
     grid.innerHTML = '';
     return;
@@ -158,7 +157,7 @@ async function refreshStatus() {
 
     if (!s.adbOk) {
       dot.className = 'dot err';
-      text.textContent = '运行时未部署 —— 点击右上角「运行时」开始一键部署';
+      text.textContent = '运行时未部署 —— 打开设置 → 运行时，一键完成';
       tag.textContent = '需要部署';
       tag.className = 'brand-tag';
     } else if (s.deviceOnline) {
@@ -178,17 +177,17 @@ async function refreshStatus() {
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'sysimg') {
       dot.className = 'dot err';
-      text.textContent = '缺少 Android 14 通用系统镜像 —— 点击右上角「运行时」下载（约 1.5GB，只下一次）';
+      text.textContent = '缺少 Android 14 通用系统镜像 —— 设置 → 运行时里下载（约 1.5GB，只下一次）';
       tag.textContent = '待下载镜像';
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'emulator') {
       dot.className = 'dot err';
-      text.textContent = '运行时引擎未安装 —— 点击右上角「运行时」一键部署';
+      text.textContent = '运行时引擎未安装 —— 打开设置 → 运行时一键完成';
       tag.textContent = '需要部署';
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'boot') {
       dot.className = 'dot warn';
-      text.textContent = '运行时已就绪 —— 点「运行时」里的「启动运行时」开机，或直接安装一个 APK';
+      text.textContent = '运行时已就绪 —— 安装 APK 或双击桌面图标会自动开机';
       tag.textContent = '待开机';
       tag.className = 'brand-tag';
     } else if (s.installing) {
@@ -200,7 +199,7 @@ async function refreshStatus() {
       dot.className = 'dot';
       text.textContent = s.installed
         ? '运行时待机（安装或打开应用时会自动拉起）'
-        : '运行时尚未安装 Android 系统 —— 点击右上角「运行时」继续';
+        : '运行时尚未安装 Android 系统 —— 打开设置 → 运行时继续';
       tag.textContent = s.installed ? '待机' : '待安装';
       tag.className = 'brand-tag';
     }
@@ -212,12 +211,18 @@ async function refreshStatus() {
   }
 }
 
-/* ---------------- 运行时部署向导 ---------------- */
+/* ---------------- 运行时部署（固定在设置里） ---------------- */
 
+/**
+ * 运行时/部署/自检面板现在都收在「设置」里，主界面只留已安装应用。
+ * 保留 showSetup 给托盘菜单与 ui:navigate 复用，语义改为「打开设置并定位到运行时」。
+ */
 function showSetup(on) {
-  $('setupView').hidden = !on;
-  $('content').hidden = !!on;
-  if (!on) $('setupGuide').hidden = true;
+  if (!on) { $('setupGuide').hidden = true; return; }
+  openSettings().then(() => {
+    const box = $('runtimeGroup');
+    if (box) box.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }).catch(() => {});
 }
 
 function fmtGB(n) { return n ? `${(n / 1073741824).toFixed(2)} GB` : ''; }
@@ -243,17 +248,29 @@ function renderSetup(s) {
   const env = s.env || {};
   const hv = env.hypervisor || {};
   const accel = env.accel || s.accel || {};
-  const needSetup = !!s.needsSetup;
 
-  // 自动进入部署页：还没装过应用、且运行时未就绪
-  if (needSetup && !s.ready && !state.setupDismissed && state.apps.length === 0 && !state.setupBusy) {
-    showSetup(true);
-  }
-
+  // 启动即见已安装应用：不再用部署向导整屏接管主界面，
+  // 状态只在设置里的运行时面板 + 底部状态条上体现。
   const accelOk = accel.ok || hv.whpx;
-  $('setupHv').textContent = `自适应已启用 · ${accelOk ? '硬件加速' : '软件模拟（自动回退）'}`;
-  $('setupHv').className = 'setup-hv ok';
-  $('setupHv').title = s.autoProfile || accel.note || hv.note || '';
+  const adbDone = !!(env.adb && env.adb.ok);
+  const emuDone0 = !!(env.emulator && env.emulator.ok);
+  const imgDone0 = !!(env.sysimg && env.sysimg.ok);
+  const allDone0 = adbDone && emuDone0 && imgDone0;
+  const stateText = $('setupStateText');
+  if (stateText) {
+    const missing = [];
+    if (!adbDone) missing.push('adb');
+    if (!emuDone0) missing.push('引擎');
+    if (!imgDone0) missing.push('系统镜像');
+    stateText.textContent = s.deviceOnline
+      ? `已就绪 · Android ${s.android || ''}`
+      : s.phase === 'booting' || s.vmStarting
+        ? '正在引导 Android…'
+        : allDone0
+          ? '组件齐全 · 待开机（打开应用时自动拉起）'
+          : `缺少 ${missing.join('、')}${accelOk ? '' : '（无硬件加速，将回退软件模拟）'}`;
+    stateText.title = s.autoProfile || accel.note || hv.note || '';
+  }
 
   const emuDone = !!(env.emulator && env.emulator.ok);
   const imgDone = !!(env.sysimg && env.sysimg.ok);
@@ -947,24 +964,6 @@ function bindSettings() {
 /* ---------------- 事件绑定 ---------------- */
 
 function bindEvents() {
-  // VC++ 运行库：一键提权安装（内置安装包优先，否则提示去官网）
-  const btnVc = document.getElementById('btnInstallVcRedist');
-  if (btnVc) btnVc.addEventListener('click', async () => {
-    btnVc.disabled = true;
-    const r = await api.installVcRedist().catch(() => ({ ok: false }));
-    if (r && r.ok) {
-      document.getElementById('vcRedistWarn').hidden = true;
-      toast({ title: 'VC++ 运行库已安装', body: '现在可以启动运行时了', type: 'ok' });
-    } else if (r && r.reason === 'no-installer') {
-      api.openExternal('https://learn.microsoft.com/zh-CN/cpp/windows/latest-supported-vc-redist?view=msvc-170#visual-studio-2015-2017-2019-and-2022');
-      toast({ title: '未找到内置安装包', body: '已打开微软官方下载页，请下载 x64 版本', type: 'info' });
-      btnVc.disabled = false;
-    } else {
-      toast({ title: '安装未完成', body: '可能被取消或需要管理员权限，请重试', type: 'error' });
-      btnVc.disabled = false;
-    }
-  });
-
   // 链接统一走系统浏览器
   document.addEventListener('click', (e) => {
     const a = e.target.closest && e.target.closest('a[href^="http"]');
@@ -974,22 +973,34 @@ function bindEvents() {
   });
 
   $('btnSettings').addEventListener('click', openSettings);
+  // 状态标签也当入口：点「需要部署 / 引导中 / Android 14」直接进设置的运行时面板
+  $('engineTag').addEventListener('click', () => showSetup(true));
   $('btnCloseSettings').addEventListener('click', closeSettings);
   $('btnDoneSettings').addEventListener('click', closeSettings);
   $('settingsMask').addEventListener('click', (e) => {
     if (e.target === $('settingsMask')) closeSettings();
   });
 
-  // 运行时部署
-  $('btnRuntime').addEventListener('click', async () => {
-    state.setupDismissed = false;
-    showSetup(true);
-    await refreshStatus();
-  });
+  // 运行时部署：入口已收进设置，这里只处理面板内的按钮
   $('btnDeployAll').addEventListener('click', deployAll);
   $('btnMarkInstalled').addEventListener('click', markInstalled);
   $('btnGuideClose').addEventListener('click', () => { $('setupGuide').hidden = true; });
-  $('btnSetupAdvanced').addEventListener('click', () => openSettings());
+  $('btnSetupAdvanced').addEventListener('click', () => {
+    const adv = document.querySelector('.advanced-group');
+    if (adv) {
+      adv.open = true;
+      adv.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  });
+
+  // 状态条上的自检计数：点开就是设置里的运行时面板
+  $('envChip').addEventListener('click', () => {
+    openSettings().then(() => {
+      const box = $('envCheck');
+      if (box && !box.hidden) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      else $('runtimeGroup').scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }).catch(() => {});
+  });
 
   $('setupSteps').addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-act]');
@@ -1035,9 +1046,18 @@ function bindEvents() {
   };
   $('btnInstall').addEventListener('click', pick);
   $('btnInstall2').addEventListener('click', pick);
-  $('btnShare').addEventListener('click', async () => {
-    await api.syncShared();
-    api.openSharedDir();
+  // 共享目录入口移到设置里：同步 + 打开都在「文件互通」组内
+  const btnSync = $('btnSyncShared');
+  if (btnSync) btnSync.addEventListener('click', async () => {
+    btnSync.disabled = true;
+    try {
+      await api.syncShared();
+      toast({ title: '已同步共享目录', type: 'ok' });
+    } catch (_) {
+      toast({ title: '同步失败', body: '运行时未就绪时会跳过同步', type: 'error' });
+    } finally {
+      btnSync.disabled = false;
+    }
   });
 
   $('search').addEventListener('input', (e) => {
@@ -1114,7 +1134,7 @@ function bindEvents() {
   api.on('runtime:log', (m) => console.log('[runtime]', m));
   api.on('ui:navigate', (v) => {
     if (v === 'settings') openSettings();
-    if (v === 'setup') { state.setupDismissed = false; showSetup(true); refreshStatus(); }
+    if (v === 'setup') { showSetup(true); refreshStatus(); }
   });
   api.on('provision:progress', (p) => updateStepProgress(p.component, p));
 }
@@ -1129,31 +1149,17 @@ async function init() {
   await refreshStatus();
   await refreshApps();
   refreshAndroid();
-  checkVcRedist();
   selfCheck();
   setInterval(refreshStatus, 6000);
   setInterval(refreshApps, 15000);
   setInterval(selfCheck, 60000);
 }
 
-// VC++ 运行库检测：缺失时显示横幅，提供一键提权安装
-async function checkVcRedist() {
-  const warn = document.getElementById('vcRedistWarn');
-  if (!warn) return;
-  try {
-    const r = await api.vcRedist();
-    if (r && r.ok) { warn.hidden = true; return; }
-    warn.hidden = false;
-    warn._hasInstaller = !!r.path;
-    document.getElementById('btnInstallVcRedist').disabled = !r.path;
-  } catch (_) { /* 检测失败不阻断主流程 */ }
-}
-
 /* ---------------- 环境自检 ---------------- */
 
 let envBusy = false;
 
-/** 拉取 doctor:selfCheck 并渲染横幅；VC++ 由独立横幅负责，这里不再重复列出 */
+/** 拉取 doctor:selfCheck：把问题渲染到设置里的自检面板，并在状态条上留一个计数 */
 async function selfCheck() {
   if (envBusy) return;
   envBusy = true;
@@ -1167,12 +1173,21 @@ async function selfCheck() {
 function renderEnvCheck(r) {
   const box = $('envCheck');
   if (!box) return;
-  // 首次部署向导本身已在补齐组件，此时不再重复列出「组件缺失」类问题
-  const setupVisible = !$('setupView').hidden;
-  const issues = (r.issues || []).filter((i) =>
-    i.code !== 'vcRedist' && !(setupVisible && i.fix === 'deploy'));
+  // 「组件缺失」在同一个面板的一键完成里已经覆盖，不再重复列出
+  const needDeploy = !!(state.status && state.status.needsSetup);
+  const issues = (r.issues || []).filter((i) => !(needDeploy && i.fix === 'deploy'));
+
+  // 主界面不再放横幅：只在底部状态条上留一个可点的计数，点开就是设置里的自检面板
+  const chip = $('envChip');
+  if (chip) {
+    const errs = issues.filter((i) => i.severity === 'error').length;
+    chip.hidden = issues.length === 0;
+    chip.textContent = errs ? `${errs} 项待修复` : `${issues.length} 项提示`;
+    chip.className = `status-chip${errs ? ' err' : ''}`;
+    chip.title = issues.map((i) => i.title).join('；');
+  }
+
   if (!issues.length) {
-    if (setupVisible) { box.hidden = true; return; }
     box.hidden = false;
     box.innerHTML = `
       <div class="env-check-ok">
@@ -1224,9 +1239,14 @@ async function fixIssue(issue) {
   switch (issue.fix) {
     case 'vcRedist': {
       const r = await api.installVcRedist().catch(() => ({ ok: false }));
+      if (!r.ok && r.reason === 'no-installer') {
+        api.openExternal('https://learn.microsoft.com/zh-CN/cpp/windows/latest-supported-vc-redist?view=msvc-170#visual-studio-2015-2017-2019-and-2022');
+        toast({ title: '未找到内置安装包', body: '已打开微软官方下载页，请下载 x64 版本', type: 'info' });
+        break;
+      }
       toast(r.ok
         ? { title: 'VC++ 运行库已安装', type: 'ok' }
-        : { title: '安装未完成', body: r.error || (r.reason === 'no-installer' ? '安装包缺失，请重新部署后再试' : '请重试'), type: 'error' });
+        : { title: '安装未完成', body: r.error || '请重试', type: 'error' });
       break;
     }
     case 'virtualization': {

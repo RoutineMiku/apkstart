@@ -1351,8 +1351,9 @@ if (!gotLock) {
         setTimeout(async () => {
           try {
             if (process.argv.includes('--setup')) {
+              // 运行时面板已并入设置：--setup 与 --settings 等价，直接打开设置截图
               await mainWindow.webContents.executeJavaScript(
-                "document.getElementById('btnRuntime').click(); true;",
+                "document.getElementById('btnSettings').click(); true;",
               );
               await new Promise((r) => setTimeout(r, 2500));
             }

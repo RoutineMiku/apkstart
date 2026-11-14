@@ -73,6 +73,9 @@ body {
   line-height: 16px;
 }
 .brand-tag.ok { color: var(--brand-dark); background: var(--brand-soft); }
+/* 状态标签兼作入口：点它进设置里的运行时面板 */
+.brand-tag { cursor: pointer; user-select: none; }
+.brand-tag:hover { filter: brightness(.97); }
 
 .titlebar-spacer { flex: 1; }
 .titlebar-actions { display: flex; gap: 4px; -webkit-app-region: no-drag; }
@@ -472,6 +475,18 @@ body {
 .runtime-actions { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
 .inline-note { font-size: 11.5px; color: var(--faint); }
 
+/* 状态条上的自检计数：主界面不再放大横幅，问题只在底部提示，点开进设置 */
+.status-chip {
+  height: 19px; padding: 0 8px; margin-left: 2px;
+  font-size: 11px; line-height: 17px;
+  border-radius: 999px;
+  border: 1px solid #f0d9a8; background: #fff8e6; color: #a16207;
+  cursor: pointer; white-space: nowrap;
+}
+.status-chip.err { border-color: #f3c6c6; background: #fdeeee; color: #b91c1c; }
+.status-chip:hover { filter: brightness(.97); }
+.status-chip[hidden] { display: none; }
+
 /* ---------------- 环境自检横幅 ---------------- */
 
 .env-check {
@@ -521,6 +536,12 @@ body {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px; color: var(--brand-dark); font-size: 12.5px;
 }
+
+/* 设置里的运行时面板：自检块与旧向导样式内嵌化（不再整屏、不需要投影） */
+.modal-body .env-check { margin: 6px 0 12px; box-shadow: none; }
+.modal-body .env-check-ok { padding: 10px 12px; }
+.modal-body .setup-guide { max-width: none; padding: 14px 16px; margin: 6px 0 4px; }
+.modal-body .steps .step { padding: 10px 12px; }
 
 
 .modal-foot {

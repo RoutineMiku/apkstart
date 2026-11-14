@@ -31,17 +31,12 @@
       <input id="search" type="text" placeholder="搜索已安装应用" autocomplete="off" />
     </div>
     <div class="toolbar-right">
-      <button class="btn ghost" id="btnRuntime">运行时</button>
-      <button class="btn ghost" id="btnShare" title="打开与安卓互通的共享目录">共享目录</button>
       <button class="btn primary" id="btnInstall">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v10"/><path d="m7 12 5 5 5-5"/><path d="M5 20h14"/></svg>
         安装 APK
       </button>
     </div>
   </section>
-
-  <!-- 环境自检横幅：自动检测常见问题并给出一键修复 -->
-  <div id="envCheck" class="env-check" hidden></div>
 
   <section class="content" id="content">
     <div class="grid" id="grid"></div>
@@ -63,50 +58,11 @@
     </div>
   </section>
 
-  <section class="setup" id="setupView" hidden>
-    <div class="setup-card">
-      <header class="setup-head">
-        <div>
-          <h1>一次就好</h1>
-          <p><b>开机自启、自动部署、零参数</b>：首次启动会在后台自动准备运行时，按这台电脑的内存、CPU、显卡和加速状态自适应，失败自动换方案重试。这里只有一个步骤，通常不用点任何按钮，<b>也不需要安装任何第三方模拟器</b>。</p>
-        </div>
-        <div class="setup-hv" id="setupHv"></div>
-      </header>
-
-      <div class="steps" id="setupSteps"></div>
-
-      <div class="setup-foot">
-        <button class="btn primary lg" id="btnDeployAll">一键部署</button>
-        <button class="btn ghost" id="btnSetupAdvanced">高级：连接已有运行时</button>
-        <span class="inline-note" id="setupNote"></span>
-      </div>
-    </div>
-
-    <div class="setup-guide" id="setupGuide" hidden>
-      <h2>安装 Android 到虚拟磁盘</h2>
-      <p class="guide-sub">虚拟机窗口已打开。按下面 6 步操作一次，之后 ApkStart 会直接从磁盘启动，不再需要镜像。</p>
-      <ol class="guide-list">
-        <li><b>启动菜单</b>：用 <kbd>↓</kbd> 选到 <code>Installation - Install Android-x86 to harddisk</code>，回车</li>
-        <li><b>Choose Partition</b>：选 <code>Create/Modify partitions</code>；询问是否使用 GPT 时选 <code>No</code></li>
-        <li><b>cfdisk 分区</b>：<code>New</code> → <code>Primary</code> → 容量直接回车 → <code>Bootable</code> → <code>Write</code> → 输入 <code>yes</code> → <code>Quit</code></li>
-        <li><b>格式化</b>：选 <code>vda1</code> → 提示格式化时选 <code>ext4</code> → <code>Yes</code></li>
-        <li><b>引导与系统</b>：<code>Install GRUB</code> 选 <code>Yes</code>；<code>Install /system as read-write</code> 选 <code>Yes</code></li>
-        <li><b>完成</b>：进度到 100% 后点下面的「我已安装完成」（ApkStart 会自动重启并接管）</li>
-      </ol>
-      <p class="guide-tip">如果之后提示 adb 未连接：在虚拟机窗口按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F1</kbd> 进入终端，执行
-        <code>setprop service.adb.tcp.port 5555</code>、<code>stop adbd</code>、<code>start adbd</code>，
-        再按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F7</kbd> 回到图形界面。</p>
-      <div class="guide-foot">
-        <button class="btn primary" id="btnMarkInstalled">我已安装完成</button>
-        <button class="btn ghost" id="btnGuideClose">稍后再说</button>
-      </div>
-    </div>
-  </section>
-
   <footer class="statusbar">
     <div class="status-left">
       <span class="dot" id="statusDot"></span>
       <span id="statusText">正在检查运行时…</span>
+      <button class="status-chip" id="envChip" hidden></button>
     </div>
     <div class="status-right">
       <span class="status-item" id="statusDevice"></span>
@@ -116,14 +72,6 @@
       <a class="status-item powered-link" href="https://github.com/RoutineMiku/apkstart" target="_blank" rel="noopener">Powered by RoutineMiku</a>
     </div>
   </footer>
-
-  <div id="vcRedistWarn" hidden style="display:flex;align-items:center;gap:12px;margin:10px 14px;padding:10px 14px;border-radius:10px;background:#3a1d1d;color:#ffd9d9;border:1px solid #6b2b2b;">
-    <div style="flex:1;">
-      <strong style="display:block;">缺少 VC++ 运行库（x64）</strong>
-      <span style="font-size:12px;opacity:.9;">安卓运行时依赖微软 VC++ 2015-2022。未安装会导致模拟器无法启动——这是「其他电脑装不上/起不来」最常见的原因。</span>
-    </div>
-    <button class="btn small" id="btnInstallVcRedist">一键安装（需管理员）</button>
-  </div>
 </main>
 
 <!-- 安装进度 -->
@@ -151,6 +99,44 @@
       </button>
     </header>
     <div class="modal-body">
+      <div class="group" id="runtimeGroup">
+        <div class="group-title">运行时与环境</div>
+        <div class="field">
+          <label>运行状态</label>
+          <div class="row" style="align-items:center;">
+            <span class="inline-note" id="setupStateText">正在检查…</span>
+            <span style="flex:1"></span>
+            <button class="btn primary sm" id="btnDeployAll">一键完成</button>
+            <button class="btn ghost sm" id="btnSetupAdvanced">高级：连接已有运行时</button>
+          </div>
+          <span class="sub" id="setupNote">全自动：无需选择镜像、无需启用加速、无需调内存</span>
+        </div>
+        <div class="field">
+          <div class="steps" id="setupSteps"></div>
+        </div>
+        <div id="envCheck" class="env-check" hidden></div>
+
+        <div class="setup-guide" id="setupGuide" hidden>
+          <h2>安装 Android 到虚拟磁盘</h2>
+          <p class="guide-sub">虚拟机窗口已打开。按下面 6 步操作一次，之后 ApkStart 会直接从磁盘启动，不再需要镜像。</p>
+          <ol class="guide-list">
+            <li><b>启动菜单</b>：用 <kbd>↓</kbd> 选到 <code>Installation - Install Android-x86 to harddisk</code>，回车</li>
+            <li><b>Choose Partition</b>：选 <code>Create/Modify partitions</code>；询问是否使用 GPT 时选 <code>No</code></li>
+            <li><b>cfdisk 分区</b>：<code>New</code> → <code>Primary</code> → 容量直接回车 → <code>Bootable</code> → <code>Write</code> → 输入 <code>yes</code> → <code>Quit</code></li>
+            <li><b>格式化</b>：选 <code>vda1</code> → 提示格式化时选 <code>ext4</code> → <code>Yes</code></li>
+            <li><b>引导与系统</b>：<code>Install GRUB</code> 选 <code>Yes</code>；<code>Install /system as read-write</code> 选 <code>Yes</code></li>
+            <li><b>完成</b>：进度到 100% 后点下面的「我已安装完成」（ApkStart 会自动重启并接管）</li>
+          </ol>
+          <p class="guide-tip">如果之后提示 adb 未连接：在虚拟机窗口按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F1</kbd> 进入终端，执行
+            <code>setprop service.adb.tcp.port 5555</code>、<code>stop adbd</code>、<code>start adbd</code>，
+            再按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F7</kbd> 回到图形界面。</p>
+          <div class="guide-foot">
+            <button class="btn primary" id="btnMarkInstalled">我已安装完成</button>
+            <button class="btn ghost" id="btnGuideClose">稍后再说</button>
+          </div>
+        </div>
+      </div>
+
       <div class="group">
         <div class="group-title">自动模式（默认，无需设置）</div>
         <div class="field">
@@ -436,6 +422,7 @@
             <input id="setSharedDir" type="text" />
             <button class="btn ghost sm" id="btnBrowseShared">浏览</button>
             <button class="btn ghost sm" id="btnOpenShared">打开</button>
+            <button class="btn ghost sm" id="btnSyncShared">立即同步</button>
             <button class="btn primary sm" id="btnSaveShared">保存并迁移</button>
           </div>
           <span class="sub">修改后旧目录里已有的文件会自动搬到新目录；正在运行的文件互通不受影响。</span>
