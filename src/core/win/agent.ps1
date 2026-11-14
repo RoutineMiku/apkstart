@@ -140,6 +140,21 @@ public class ApkAgent
         return sb.ToString();
     }
 
+    // 微信 / Free Download Manager 等同样基于 Qt 的程序，窗口类名也是 QWindowIcon，
+    // 只按类名找窗口会把它们误判成模拟器画面。真正的画面窗口只可能属于
+    // emulator(.exe) 或 qemu-system-x86_64，这里按归属进程再确认一次。
+    static bool IsEmulatorWindow(IntPtr h)
+    {
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        string name = "";
+        try { name = Process.GetProcessById((int)pid).ProcessName; } catch { }
+        return name.Equals("emulator", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("emulator-headless", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("qemu-system-x86_64", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("qemu-system-x86_64-headless", StringComparison.OrdinalIgnoreCase);
+    }
+
     // The emulator draws its framebuffer in a "QWindowIcon" top level window titled
     // "Android Emulator - <avd>:<port>"; the volume/rotate rail lives in a separate
     // small "QWindowTool*" window we hide.
@@ -158,6 +173,12 @@ public class ApkAgent
             if (cls.IndexOf("QWindowIcon", StringComparison.Ordinal) < 0) return true;
             string title = TitleOf(h);
             bool named = title.IndexOf("Android Emulator", StringComparison.OrdinalIgnoreCase) >= 0;
+            // Qt 只是渲染框架：微信（Qt51514QWindowIcon）、Free Download Manager 等
+            // 第三方程序用的是同一个窗口类名，窗口往往还比模拟器更大。只按类名 +
+            // 可见性打分的话，可见的第三方窗口会赢过被藏起来的模拟器窗口，随后
+            // 被当成模拟器隐藏 / 重新父化（用户看到的就是微信被强制最小化）。
+            // 所以先按归属进程排除第三方窗口，标题命中的保留为兜底。
+            if (!named && !IsEmulatorWindow(h)) return true;
             if (!named && !IsWindowVisible(h)) return true;
             RECT r;
             if (!GetWindowRect(h, out r)) return true;
