@@ -88,7 +88,14 @@ jobs:
           if (-not $env:GITEE_TOKEN) { Write-Output "未配置 GITEE_TOKEN，跳过 Gitee 同步"; exit 0 }
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
-          node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip"
+          # 发布说明与 GitHub 用同一份，别让 Gitee 那边只剩一句「便携版安装包」
+          $notes = ".github/release-notes-$tag.md"
+          if (Test-Path $notes) {
+            node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip" --notes $notes
+          } else {
+            node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   full:
     name: 构建完整版（内置运行时，离线开箱即用）

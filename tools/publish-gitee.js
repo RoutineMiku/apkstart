@@ -133,7 +133,7 @@ async function upload(releaseId, file, attempts = 3) {
   const notesFile = arg('--notes', '');
   const body = notesFile && fs.existsSync(notesFile)
     ? fs.readFileSync(notesFile, 'utf8')
-    : `便携版安装包（分片，应用内自动更新会自己拼装）。完整安装版与运行时整包在 GitHub Releases。`;
+    : `便携版安装包（单个 zip，解压即用；应用内也能自动更新）。完整安装版与运行时整包在 GitHub Releases。`;
 
   console.log('1) 查找/创建发行版', tag);
   const list = await api('GET', `/releases?per_page=50`);
