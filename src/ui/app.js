@@ -806,7 +806,12 @@ function renderUpdate(info) {
 
   if (info.ok === false) {
     st.textContent = `检查失败：${info.error || '网络不可用'}`;
-    showUpdateBtn(false);
+    // 检查失败也要给一条出路：直接把发布页打开，用户至少能手动下载。
+    // 以前这里是「什么都不显示」，用户只会觉得「更新功能坏了」。
+    showUpdateBtn(true);
+    btn.textContent = '打开下载页';
+    btn.dataset.mode = 'manual';
+    lastUpdate = { htmlUrl: info.htmlUrl || '' };
     if (bar) bar.hidden = true;
     return;
   }
@@ -1183,6 +1188,55 @@ function bindSettings() {
     }
   });
 
+  // 清理旧版本残留：扫描旧程序目录 / 失效卸载项 / 更新临时文件，确认后一次性清掉。
+  $('btnLeftovers').addEventListener('click', async () => {
+    const btn = $('btnLeftovers');
+    btn.disabled = true;
+    try {
+      const r = await api.leftoversScan();
+      if (!r || !r.ok) {
+        toast({ title: '扫描失败', body: (r && r.error) || '请重试', type: 'error' });
+        return;
+      }
+      const items = r.items || [];
+      if (!items.length) {
+        toast({ title: '很干净', body: '没有发现旧版本残留。', type: 'ok' });
+        return;
+      }
+      const mb = Math.round((r.totalBytes || 0) / 1048576);
+      const lines = items.slice(0, 8).map((x) => `• ${x.note}：${x.path}`);
+      if (items.length > 8) lines.push(`…另有 ${items.length - 8} 项`);
+      const ok = await api.confirm({
+        type: 'warning',
+        title: '清理旧版本残留？',
+        message: `找到 ${items.length} 项残留，约 ${mb} MB：`,
+        detail: `${lines.join('\n')}\n\n只删除「旧版本程序目录 / 已失效的卸载项 / 更新临时文件」，`
+          + '当前正在运行的版本和你的应用数据都不会动。',
+        buttons: ['取消', '开始清理'],
+        defaultId: 1,
+        cancelId: 0,
+      });
+      if (!ok || ok.response !== 1) return;
+      const c = await api.leftoversClean(items);
+      if (!c || !c.ok) {
+        toast({ title: '清理失败', body: (c && c.error) || '请重试', type: 'error' });
+        return;
+      }
+      const failNote = (c.failed && c.failed.length) ? `，${c.failed.length} 项被占用未删` : '';
+      toast({
+        title: '已清理旧版本残留',
+        body: `删除 ${c.removed.length} 项，释放 ${c.freedMB || 0} MB${failNote}。`,
+        type: 'ok',
+      });
+      const u = await api.runtimeUsage();
+      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+    } catch (e) {
+      toast({ title: '清理失败', body: e.message, type: 'error' });
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $('btnOpenShared').addEventListener('click', () => api.openSharedDir());
 
   // 重建快捷方式：桌面图标被误删 / 被安全软件拦掉时的兜底入口
@@ -1554,7 +1608,13 @@ function bindEvents() {
     if (v === 'setup') { showSetup(true); refreshStatus(); }
   });
   api.on('provision:progress', (p) => updateStepProgress(p.component, p));
-  api.on('update:state', (info) => { if (info) renderUpdate(info); });
+  api.on('update:state', (info) => {
+    if (!info) return;
+    renderUpdate(info);
+    // 启动 8 秒后才拿到更新信息：欢迎卡若还开着，把「发现新版本」这条补进去
+    const wm = $('welcomeMask');
+    if (wm && !wm.hidden) renderWelcomeTips();
+  });
   api.on('update:progress', (p) => renderUpdateProgress(p));
 }
 
@@ -1565,14 +1625,98 @@ async function init() {
   bindSettings();
   bindUpdate();
   bindAndroid();
+  bindWelcome();
   state.settings = await api.getSettings();
   await refreshStatus();
   await refreshApps();
   refreshAndroid();
   selfCheck();
+  maybeShowWelcome();
   setInterval(refreshStatus, 6000);
   setInterval(refreshApps, 15000);
   setInterval(selfCheck, 60000);
+}
+
+/* ---------------- 启动欢迎卡 ---------------- */
+
+let startupInfo = null;
+
+function greetingOf(h) {
+  if (h < 5) return '夜深了';
+  if (h < 11) return '早上好';
+  if (h < 13) return '中午好';
+  if (h < 18) return '下午好';
+  return '晚上好';
+}
+
+function bindWelcome() {
+  const mask = $('welcomeMask');
+  if (!mask) return;
+  const close = () => { mask.hidden = true; };
+  const never = $('welcomeNever');
+  $('welcomeOk').addEventListener('click', () => {
+    if (never && never.checked) api.setSettings({ welcome: { disabled: true } }).catch(() => {});
+    close();
+  });
+  $('welcomeSettings').addEventListener('click', () => { close(); openSettings(); });
+  mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !mask.hidden) close(); });
+}
+
+/** 决定要不要弹：开机自启必弹；手动打开则每天最多一次，且用户可永久关闭 */
+async function maybeShowWelcome() {
+  const mask = $('welcomeMask');
+  if (!mask) return;
+  // 冒烟截图时不要弹欢迎卡：否则每次自动截图都被它挡住主界面
+  try { if ((await api.startupInfo()).smoke) return; } catch (_) { /* ignore */ }
+  try { startupInfo = await api.startupInfo(); } catch (_) { startupInfo = null; }
+  const cfg = (state.settings && state.settings.welcome) || {};
+  if (cfg.disabled) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (!(startupInfo && startupInfo.autostart) && cfg.lastDate === today) return;
+
+  const h = new Date().getHours();
+  $('welcomeHi').textContent = `${greetingOf(h)}，欢迎回来`;
+  const ver = (startupInfo && startupInfo.version) || (state.status && state.status.version) || '';
+  const ready = state.status && state.status.ready;
+  $('welcomeSub').textContent = `ApkStart${ver ? ` v${ver}` : ''} · ${ready ? '运行时就绪，点开即用' : '运行时会按需自动准备'}`;
+
+  const apps = (state.apps || []).length;
+  const dev = $('statusDevice') ? $('statusDevice').textContent.trim() : '';
+  const chips = [
+    { k: String(apps), v: '已装应用' },
+    { k: ready ? '就绪' : '待命', v: '安卓运行时' },
+    { k: dev ? dev.replace(/^.*?(\d+)/, '$1') : '—', v: '设备 / 端口' },
+  ];
+  $('welcomeStats').innerHTML = chips
+    .map((c) => `<div class="welcome-stat"><b>${esc(c.k)}</b><span>${esc(c.v)}</span></div>`)
+    .join('');
+
+  const tips = [];
+  $('welcomeTips').innerHTML = '';
+  mask.hidden = false;
+  renderWelcomeTips();
+  api.setSettings({ welcome: { lastDate: today } }).catch(() => {});
+}
+
+/** 提示区单独渲染：启动 8 秒后才拿到更新信息，那时卡片可能还开着，需要补一次 */
+function renderWelcomeTips() {
+  const box = $('welcomeTips');
+  if (!box) return;
+  const apps = (state.apps || []).length;
+  const tips = [];
+  if (lastUpdate && lastUpdate.hasUpdate) {
+    tips.push(`发现新版本 <b>${esc(lastUpdate.tag || '')}</b>，可在「设置 → 软件更新」一键更新`);
+  }
+  if (!apps) {
+    tips.push('把 APK 拖进窗口就能安装，装完会自动生成桌面图标');
+  } else {
+    tips.push('双击应用卡片即可在独立窗口中运行，右上角可旋转 / 缩放 / 关闭');
+  }
+  tips.push('关窗口只是退出那个应用，安卓环境会留着，下次点开更快');
+  box.innerHTML = tips
+    .map((t, i) => `<div class="welcome-tip"><i>${i + 1}</i><span>${t}</span></div>`)
+    .join('');
 }
 
 /* ---------------- 环境自检 ---------------- */

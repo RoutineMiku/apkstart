@@ -51,7 +51,7 @@ const KNOWN_MIRRORS = [
  */
 const SAMPLE_BYTES = 256 * 1024;
 
-function openUrl(url, { timeout = 10000, headers = {}, redirects = 0 } = {}) {
+function openUrl(url, { timeout = 10000, headers = {}, redirects = 0, followRedirect = true } = {}) {
   return new Promise((resolve, reject) => {
     if (redirects > 6) return reject(new Error('重定向次数过多'));
     let u;
@@ -66,10 +66,10 @@ function openUrl(url, { timeout = 10000, headers = {}, redirects = 0 } = {}) {
         ...headers,
       },
     }, (res) => {
-      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && followRedirect) {
         res.resume();
         const next = new URL(res.headers.location, url).href;
-        openUrl(next, { timeout, headers, redirects: redirects + 1 }).then(resolve, reject);
+        openUrl(next, { timeout, headers, redirects: redirects + 1, followRedirect }).then(resolve, reject);
         return;
       }
       resolve(res);
@@ -234,6 +234,56 @@ class Sources {
   }
 
   /** 各源的最新 release（并发，任何一个失败都不影响另一个） */
+  /**
+   * 不依赖 API 的兜底：直接跟随 `/releases/latest` 的 302 拿到 tag。
+   *
+   * 为什么必须有这一条：GitHub 的匿名 API 每个 IP 每小时只有 60 次，
+   * Gitee 的匿名 API 更紧（实测连点几次就 403 Rate Limit Exceeded）。
+   * 公司/校园网、运营商 NAT 出口下，用户很容易「检查更新失败」——
+   * 而 `releases/latest` 这个网页跳转是走 CDN 的，不消耗 API 额度。
+   *
+   * 拿到 tag 之后资产名可以按发布约定拼出来：
+   *   ApkStart-<tag>-win64-portable.zip / ApkStart-<version>-Setup.exe / ApkStart-runtime-<tag>.zip
+   */
+  async _releaseTagViaRedirect(id) {
+    const s = SOURCES[id];
+    const page = `${s.web}/releases/latest`;
+    const res = await openUrl(page, { timeout: 9000, followRedirect: false });
+    const loc = String(res.headers.location || '');
+    try { res.resume(); } catch (_) { /* ignore */ }
+    const m = /\/releases\/tag\/([^/?#]+)/i.exec(loc);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  /** 用 tag 拼一份「最小可用」的 release（没有 API 时用） */
+  _syntheticRelease(id, tag) {
+    const s = SOURCES[id];
+    const ver = String(tag).replace(/^v/i, '');
+    const names = [
+      `ApkStart-${tag}-win64-portable.zip`,
+      `ApkStart-${ver}-Setup.exe`,
+      `ApkStart-runtime-${tag}.zip`,
+    ];
+    // GitHub 和 Gitee 都支持 /releases/download/<tag>/<文件名> 这种规范地址
+    // （实测 Gitee 会 302 到 foruda.gitee.com 的附件地址，能正常下到完整字节），
+    // 所以没有 API 时也能拼出可用的下载地址。Gitee 上没有的资产会 404，
+    // 后面的测速排序会自动跳过它。
+    const assets = names.map((n) => ({
+      name: n,
+      size: 0,
+      browser_download_url: `${s.web}/releases/download/${tag}/${n}`,
+    }));
+    return {
+      tag_name: tag,
+      name: tag,
+      body: '',
+      html_url: `${s.web}/releases/tag/${tag}`,
+      published_at: '',
+      assets,
+      synthetic: true,
+    };
+  }
+
   async fetchReleases() {
     const prefs = String((this.settings().runtime || {}).sourcePreference || 'auto');
     const ids = prefs === 'github' || prefs === 'gitee' ? [prefs] : ['github', 'gitee'];
@@ -258,7 +308,14 @@ class Sources {
           const list = await getJson(withToken(id, `${s.api}/releases?per_page=10`), 9000);
           const first = (Array.isArray(list) ? list : []).find((r) => r && !r.draft);
           if (first) return { source: id, name: s.name, web: s.web, rel: first };
-        } catch (_) { /* 这个源彻底不可用 */ }
+        } catch (_) { /* 继续尝试不依赖 API 的兜底 */ }
+        // API 被限流/被墙时的兜底：网页跳转拿 tag，资产名按约定拼
+        try {
+          const tag = await this._releaseTagViaRedirect(id);
+          if (tag) {
+            return { source: id, name: s.name, web: s.web, rel: this._syntheticRelease(id, tag), degraded: true };
+          }
+        } catch (_) { /* 兜底也不行 */ }
         const limited = /\b(403|429)\b/.test(e.message);
         if (limited) this._blocked.set(id, Date.now() + this._blockMs);
         const hint = limited

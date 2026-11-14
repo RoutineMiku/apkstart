@@ -5,13 +5,30 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
 <title>ApkStart</title>
 <link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="theme.css" />
 </head>
 <body>
+
+<!-- 品牌标记：小尺寸下也要认得出来，所以用矢量而不是 1024 的位图缩到 22px -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2ee6a6"/>
+      <stop offset="55%" stop-color="#12b886"/>
+      <stop offset="100%" stop-color="#0a6f47"/>
+    </linearGradient>
+  </defs>
+  <symbol id="brandMark" viewBox="0 0 48 48">
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" fill="url(#brandGrad)"/>
+    <rect x="1.5" y="1.5" width="45" height="45" rx="13.5" fill="none" stroke="rgba(255,255,255,.34)" stroke-width="1.4"/>
+    <path d="M18.5 14.5 35 24 18.5 33.5z" fill="#fff"/>
+  </symbol>
+</svg>
 
 <header class="titlebar">
   <div class="brand">
     <div class="logo" aria-hidden="true">
-      <img src="assets/logo.png" alt="" draggable="false" />
+      <svg viewBox="0 0 48 48" width="22" height="22"><use href="#brandMark"/></svg>
     </div>
     <span class="brand-name">ApkStart</span>
     <span class="brand-tag" id="engineTag">未连接运行时</span>
@@ -73,6 +90,30 @@
     </div>
   </footer>
 </main>
+
+<!-- 启动欢迎卡：替代原来散落的各种启动小提示 -->
+<div class="modal-mask welcome-mask" id="welcomeMask" hidden>
+  <div class="welcome" role="dialog" aria-modal="true" aria-labelledby="welcomeHi">
+    <div class="welcome-hero">
+      <div class="welcome-halo"></div>
+      <div class="welcome-badge"><svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true"><use href="#brandMark"/></svg></div>
+      <div class="welcome-hi" id="welcomeHi">你好</div>
+      <div class="welcome-sub" id="welcomeSub">ApkStart 已就绪</div>
+    </div>
+    <div class="welcome-body">
+      <div class="welcome-stats" id="welcomeStats"></div>
+      <div class="welcome-tips" id="welcomeTips"></div>
+      <label class="welcome-opt">
+        <input type="checkbox" id="welcomeNever" />
+        <span>下次启动不再自动弹出</span>
+      </label>
+    </div>
+    <div class="welcome-actions">
+      <button class="btn ghost" id="welcomeSettings">打开设置</button>
+      <button class="btn primary" id="welcomeOk">开始使用</button>
+    </div>
+  </div>
+</div>
 
 <!-- 安装进度 -->
 <div class="toast-wrap" id="toastWrap"></div>
@@ -149,6 +190,7 @@
           <div class="row">
             <span class="inline-note" id="usageText">正在统计…</span>
             <button class="btn ghost sm" id="btnCleanup">清理可回收文件</button>
+            <button class="btn ghost sm" id="btnLeftovers" title="扫描并清掉旧版本留下的程序目录、失效的卸载项和更新临时文件">清理旧版本残留</button>
             <button class="btn ghost sm" id="btnRepairNetwork" title="安卓虚拟机没有网络时（应用里联网页面一直黑屏/转圈），用这个把安卓数据重置掉来修网络。应用清单会保留，点开应用会自动重装">修复网络</button>
             <button class="btn ghost sm danger" id="btnResetData" title="清空安卓 /data 用户数据 + 已装应用 + 快速启动快照，还原成刚装好系统的干净状态">重置安卓数据</button>
           </div>

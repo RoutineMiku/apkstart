@@ -36,6 +36,7 @@ const { AppWindow, TITLEBAR_H } = require('./core/appwin');
 const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
 const { Updater } = require('./core/updater');
+const leftovers = require('./core/leftovers');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -711,8 +712,7 @@ function startNotifier() {
 // ---------------- IPC ----------------
 
 function registerIpc() {
-  ipcMain.handle('app:info', () => ({
-    version: app.getVersion(),
+  ipcMain.handle('app:info', () => ({    version: app.getVersion(),
     isDev: IS_DEV,
     dataDir: store.DATA_DIR,
     runtimeDir: runtime.provisioner.paths().root,
@@ -722,6 +722,18 @@ function registerIpc() {
     exe: process.execPath,
     packaged: app.isPackaged,
   }));
+
+  // 启动方式（开机自启 / 双击打开）：欢迎卡据此决定是否自动弹出
+  ipcMain.handle('app:startupInfo', () => {
+    const a = parseArgs(process.argv);
+    return {
+      autostart: process.argv.includes('--autostart') || !!a.silent,
+      launch: a.launch || null,
+      smoke: process.argv.includes('--smoke'),
+      version: app.getVersion(),
+      isPackaged: app.isPackaged,
+    };
+  });
 
   // 选文件夹（用于把运行时/镜像/已装应用挪到非系统盘）
   ipcMain.handle('dialog:openDir', async (_e, defaultPath) => {
@@ -1124,6 +1136,30 @@ function registerIpc() {
     }
   });
 
+  // ---------------- 旧版本残留 ----------------
+
+  /** 只扫描、不删除：先把「能找到什么」原样给界面，由用户决定 */
+  ipcMain.handle('leftovers:scan', () => {
+    try {
+      const installDir = path.dirname(app.getPath('exe'));
+      const dataDir = store.DATA_DIR;
+      return { ok: true, ...leftovers.scan({ installDir, dataDir }) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('leftovers:clean', (_e, items) => {
+    try {
+      const installDir = path.dirname(app.getPath('exe'));
+      const r = leftovers.clean(Array.isArray(items) ? items : [], { installDir });
+      appLog(`leftovers cleaned: ${r.removed.length} removed, ${r.failed.length} failed`);
+      return { ok: true, ...r, freedMB: Math.round(r.freedBytes / 1048576) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   // ---------------- 运行时自举 ----------------
 
   ipcMain.handle('provision:installEmulator', async () => {
@@ -1512,9 +1548,13 @@ function registerIpc() {
   });
 
   ipcMain.handle('app:updateOpen', (_e, url) => {
-    const target = /^https:\/\/github\.com\//i.test(String(url || '')) ? url : Updater.repoUrl();
+    // GitHub 和 Gitee 的发布页都允许直接打开：检查更新失败时界面就是靠这个
+    // 让用户手动去下载，只放行 github.com 会把国内用户挡在门外。
+    const raw = String(url || '');
+    const ok = /^https:\/\/(github\.com|gitee\.com)\//i.test(raw);
+    const target = ok ? raw : Updater.repoUrl();
     shell.openExternal(target).catch(() => {});
-    return { ok: true };
+    return { ok: true, target };
   });
 
   ipcMain.handle('app:updateApply', () => runUpdate());
@@ -1728,7 +1768,8 @@ if (!gotLock) {
           send('update:state', info);
           if (info.hasUpdate) {
             appLog(`update available ${info.tag} (current v${app.getVersion()}, asset=${info.asset ? info.asset.name : 'none'})`);
-            notify('发现新版本', `ApkStart ${info.tag} 已发布，可在「设置 → 软件更新」里一键更新`);
+            // 不再单独弹系统通知：启动时的提醒统一收到应用内的「欢迎卡」里，
+            // 避免开机自启时又冒一个右下角气泡（用户反馈的「小弹窗」之一）。
           }
         }).catch((e) => appLog(`update check failed: ${e.message}`));
       }, 8000).unref?.();
