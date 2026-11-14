@@ -119,6 +119,8 @@
 | 真机 APK 解析 | 红果短剧 7.4.3.32 / `res/b/a3.webp` / arm64-v8a 正确 |
 | 2.15GB APK 解析 | 18ms 完成，进程 RSS 47MB（旧版需把整个 2.2GB 读进内存） |
 | 全新安装 + 桌面图标启动 | 重装红果后点图标：`mCurrentFocus` = `com.phoenix.read/...SplashActivity`，窗口内是应用界面（修复前是安卓桌面） |
+| 运行时自检 `npm run selftest -- --apk` | **13 项全过**：adb / 引擎 / 镜像 / AEHD、Android 14 API34、freeform、共享目录双向同步、解析→安装→独立窗口启动→截图 |
+| `tools/check-launch-clean.js` | 安装 + 打开全程：应用窗口 **0.5 秒出现**，模拟器/控制台窗口累计出现 **0 次** |
 | 安装链路 | 打包版拖入 153MB APK：22s 完成解析/安装/图标/快捷方式；桌面 + 开始菜单 .lnk 的 Target/Args/Icon 均正确 |
 | 窗口不泄漏 | `check-quit-clean`：开机全程 + 退出后 8 秒，可见的模拟器/控制台窗口 **0 个** |
 | 注册表关联 | 本机原关联 `MuMuPlayer.apk`，注册→取消后原样还原 |
