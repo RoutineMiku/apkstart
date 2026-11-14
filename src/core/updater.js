@@ -279,10 +279,14 @@ class Updater {
     // -EncodedCommand 走 UTF-16LE base64：脚本里出现中文路径也不会被 GBK 解码搞坏
     const b64 = Buffer.from(script, 'utf16le').toString('base64');
     const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    // 这里**不能**用 detached：某些安全软件 / 沙箱策略会直接拦掉「分离的控制台进程」，
+    // 表现为脚本一声不响地根本没跑（更新界面卡在「正在替换程序并重启」）。
+    // Windows 上父进程退出并不会杀掉普通子进程，所以用「普通子进程 + unref」同样能在
+    // 我们退出之后继续干活，兼容性还更好。
     const child = spawn(ps, [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-WindowStyle', 'Hidden', '-EncodedCommand', b64,
-    ], { detached: true, stdio: 'ignore', windowsHide: true });
+    ], { stdio: 'ignore', windowsHide: true });
     child.unref();
     return true;
   }

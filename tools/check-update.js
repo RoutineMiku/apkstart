@@ -91,7 +91,35 @@ const ok = (c, m) => console.log(`${c ? '✓' : '✗'} ${m}`);
   check(newExe === 'new-exe', '安装目录里的 ApkStart.exe 已被替换');
   check(newMain === 'new-main', '子目录里的文件也替换成功');
 
+  // ---- 4. apply() 真的起一个进程去替换（异步链路，不走网络）----
+  const install2 = path.join(sandbox, 'install2');
+  const payload2 = path.join(sandbox, 'payload2');
+  fs.mkdirSync(install2, { recursive: true });
+  fs.mkdirSync(payload2, { recursive: true });
+  fs.writeFileSync(path.join(install2, 'ApkStart.exe'), 'old-exe');
+  fs.writeFileSync(path.join(install2, 'marker.txt'), 'old');
+  fs.writeFileSync(path.join(payload2, 'ApkStart.exe'), 'new-exe');
+  fs.writeFileSync(path.join(payload2, 'marker.txt'), 'new');
+
+  const u3 = new Updater({
+    currentVersion: '0.0.0',
+    exePath: path.join(install2, 'ApkStart.exe'),
+    isPackaged: true,
+    dataDir: sandbox,
+  });
+  const decoy2 = spawn(process.execPath, ['-e', 'setTimeout(()=>{},600)'], { stdio: 'ignore' });
+  u3.apply({ mode: 'zip', payload: payload2, version: '9.9.8' }, { waitPid: decoy2.pid });
+  let asyncOk = false;
+  for (let i = 0; i < 40; i += 1) {
+    await sleep(500);
+    try {
+      if (fs.readFileSync(path.join(install2, 'marker.txt'), 'utf8') === 'new') { asyncOk = true; break; }
+    } catch (_) { /* 还在替换 */ }
+  }
+  check(asyncOk, 'apply() 在后台进程里完成了替换（异步链路可用）');
+
   try { decoy.kill(); } catch (_) { /* ignore */ }
+  try { decoy2.kill(); } catch (_) { /* ignore */ }
   fs.rmSync(sandbox, { recursive: true, force: true });
 
   console.log('');
