@@ -67,8 +67,15 @@ function gpuCandidates(emulatorVersion) {
   const [major, minor, patch] = versionNumbers(emulatorVersion);
   const modern = major > 36 || (major === 36 && (minor > 4 || (minor === 4 && patch >= 9)));
   return modern
-    // host 直接用显卡渲染，最省 CPU 也最跟手；失败会自动降到软件渲染重试
-    ? ['host', 'software', 'swangle', 'swiftshader']
+    // 顺序即「自动模式的尝试优先级」：
+    // 1) host        —— 用真实显卡渲染，最省 CPU、最跟手；
+    // 2) swangle     —— ANGLE 跑在 SwiftShader 之上的软件渲染。比裸 software/swiftshader
+    //                  对 Android WebView 的合成层友好得多（红果/抖音这类「点同意后进主界面
+    //                  黑屏」就是裸软件渲染过不了 WebView 合成导致的），因此排在第二顺位；
+    // 3) software    —— 纯 SwiftShader 兜底，兼容性OK但 WebView 合成易黑屏，仅最后才用；
+    // 4) swiftshader —— 旧名兜底。
+    // 注意 safeGpu（关闭加速的 TCG 兜底）仍取 software，保证「慢但最兼容」。
+    ? ['host', 'swangle', 'software', 'swiftshader']
     : ['host', 'swiftshader_indirect', 'swiftshader'];
 }
 
