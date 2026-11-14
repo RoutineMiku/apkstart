@@ -59,6 +59,10 @@ const DEFAULT_SETTINGS = {
     emulatorUrl: '',         // 手动指定 emulator 包地址（空 = 自动从 SDK 索引解析最新版）
     sysimgUrl: '',           // 手动指定系统镜像包地址
     compatImage: false,      // ARM 兼容模式：改用 Google Play 镜像（内置 native bridge，可装 ARM-only 应用）
+    // 轻量版的运行时整包：默认从本项目 GitHub Release 下载（与「软件更新」同源），
+    // 拿不到时自动退回 dl.google.com 分组件下载。可在这里换成自建镜像地址。
+    preferGithubRuntime: true,
+    runtimePackUrl: '',
   },
   sharedDir: path.join(os.homedir(), 'ApkStartShared'),
   deviceSharedDir: '/sdcard/ApkStartShared',

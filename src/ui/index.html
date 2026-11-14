@@ -467,6 +467,24 @@
           </div>
         </div>
       </div>
+      <div class="group" id="updateGroup">
+        <div class="group-title">软件更新</div>
+        <div class="field">
+          <label>当前版本 <span class="inline-note" id="updateCurrent">—</span></label>
+          <div class="row">
+            <span class="inline-note" id="updateState">尚未检查</span>
+            <span style="flex:1"></span>
+            <button class="btn ghost sm" id="btnCheckUpdate">检查更新</button>
+            <button class="btn primary sm" id="btnDoUpdate" style="display:none" hidden>立即更新</button>
+          </div>
+          <div class="update-bar" id="updateBar" hidden><i id="updateBarFill"></i></div>
+          <span class="sub" id="updateNote">
+            从 GitHub（RoutineMiku/apkstart）获取最新版本；轻量版会下载便携包并自动替换程序文件，
+            运行时、已装应用与快照都不受影响。
+          </span>
+        </div>
+      </div>
+
       <div class="group" id="aboutGroup">
         <div class="group-title">关于</div>
         <div class="about-box">

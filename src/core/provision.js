@@ -45,6 +45,12 @@ const SOURCES = {
     'https://downloads.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso',
   ],
   isoSizeHint: 900 * 1024 * 1024,
+  // 轻量版（不带运行时）从这里拿「运行时整包」：本项目自己的 GitHub Release。
+  // 以前轻量版要从 dl.google.com 分别下 emulator / 系统镜像，国内网络经常
+  // 卡在几十 KB/s 甚至直接 404；改成整包 + 本项目 GitHub 之后，下载源和更新源
+  // 是同一个地方，出了问题也只需要在一个地方修。
+  ghReleaseApi: 'https://api.github.com/repos/RoutineMiku/apkstart/releases',
+  ghReleasePage: 'https://github.com/RoutineMiku/apkstart/releases',
 };
 
 /**
@@ -426,6 +432,91 @@ class Provisioner {
    * 用自带的 ZIP 解析器解压（避免依赖系统解压工具）
    * 大条目（GB 级 system.img）走流式，小条目整块读，避免撞 Node 的单 Buffer 上限。
    */
+  // ---------------- 本项目 GitHub 的运行时整包（轻量版） ----------------
+
+  async _fetchJson(url) {
+    const text = await this._fetchText(url).catch(() => '');
+    try { return JSON.parse(text); } catch (_) { return null; }
+  }
+
+  /**
+   * 解析「运行时整包」的下载地址。
+   * 资产名约定：ApkStart-runtime-<tag>.zip（由 .github/workflows/release.yml 产出，
+   * 内容就是 build/runtime 的那一套：emulator/ + platform-tools/ + aehd/ + system-images/）。
+   * 找最新的、且带这个资产的 release；找不到就抛错，让上层退回 Google 官方分组件下载。
+   */
+  async resolveRuntimePack() {
+    const custom = String(store.getSettings().runtime.runtimePackUrl || '').trim();
+    if (custom) return { url: absUrl(custom), name: path.basename(custom.split('?')[0]), size: 0, tag: 'custom' };
+    if (this._cache.pack) return this._cache.pack;
+
+    const list = await this._fetchJson(`${SOURCES.ghReleaseApi}?per_page=15`);
+    if (!Array.isArray(list)) throw new Error('无法读取 GitHub 发布列表（网络或限流）');
+    for (const rel of list) {
+      if (!rel || rel.draft) continue;
+      const hit = (rel.assets || []).find((a) => /^ApkStart-runtime-.*\.zip$/i.test(a.name || ''));
+      if (!hit) continue;
+      this._cache.pack = {
+        url: hit.browser_download_url,
+        name: hit.name,
+        size: hit.size || 0,
+        tag: String(rel.tag_name || '').replace(/^v/i, ''),
+        page: rel.html_url || SOURCES.ghReleasePage,
+      };
+      return this._cache.pack;
+    }
+    throw new Error('GitHub 上还没有运行时整包');
+  }
+
+  /**
+   * 轻量版一键部署：从本项目 GitHub 下载运行时整包并解压。
+   * 系统镜像在包里是 .xz，首次开机时由 materializeImages() 展开（只做一次）。
+   */
+  async installRuntimePack(onProgress = () => {}) {
+    const p = this.ensureDirs();
+    const pack = await this.resolveRuntimePack();
+    await this.guardDisk('runtime', p.root);
+    const zip = path.join(p.tmp, 'runtime-pack.zip');
+    const total = pack.size || 0;
+
+    onProgress({ stage: 'download', message: '从 GitHub 下载运行时（约 1.5 GB，只需一次）…', percent: 1 });
+    await download(pack.url, zip, {
+      onProgress: (pr) => {
+        const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
+        onProgress({
+          stage: 'download',
+          message: `下载运行时 ${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`,
+          percent: Math.max(1, Math.min(90, Math.round(pct * 0.9))),
+          speed: pr.speed,
+        });
+      },
+    });
+    if (fileSize(zip) < 200 * 1024 * 1024) throw new Error('运行时整包下载不完整，可重试续传');
+
+    onProgress({ stage: 'extract', message: '解压运行时（约 1 分钟）…', percent: 91 });
+    await this.extractZip(zip, p.root, {
+      onEntry: (name, done, all) => {
+        if (done % 50 === 0) {
+          onProgress({ stage: 'extract', percent: Math.min(99, 91 + Math.round((done / all) * 8)), message: `解压 ${done}/${all}` });
+        }
+      },
+    });
+    try {
+      fs.writeFileSync(path.join(p.root, '.runtime-pack.json'), JSON.stringify({
+        name: pack.name, tag: pack.tag, at: new Date().toISOString(), from: pack.url,
+      }));
+      fs.rmSync(zip, { force: true });
+    } catch (_) { /* 标记写不进去不影响使用 */ }
+
+    // 整包里的 system.img 是 .xz 压缩的（和完整版安装包一致）。这里立刻展开，
+    // 否则紧接着 checkEnv() 会认为「没装系统镜像」，又去 Google 下一套 1.4 GB。
+    onProgress({ stage: 'extract', message: '展开系统镜像（约 1 分钟，只需一次）…', percent: 99 });
+    await this.materializeImages((m) => onProgress({ stage: 'extract', message: m, percent: 99 })).catch(() => 0);
+
+    onProgress({ stage: 'done', message: '运行时已就绪', percent: 100 });
+    return { ok: true, name: pack.name, tag: pack.tag };
+  }
+
   async extractZip(zipPath, destDir, opts = {}) {
     // 大包（emulator / 系统镜像）走文件版：不把 1.5GB zip 整包读进内存，
     // 低内存机器也能稳定解压；小包沿用内存版，速度更快。

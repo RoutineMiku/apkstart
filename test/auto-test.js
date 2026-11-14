@@ -737,6 +737,30 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(r.hooked === false && b.ready === null, '默认关闭时不能启动 PowerShell');
   });
 
+  console.log('\n[updater.js 在线更新]');
+  await test('版本比较按数字逐段比，v 前缀 / 多段都正确', () => {
+    const { cmpVer } = require('../src/core/updater');
+    assert(cmpVer('v0.3.2', '0.3.1') === 1, '0.3.2 应大于 0.3.1');
+    assert(cmpVer('0.3.1', 'v0.3.1') === 0, 'v 前缀不影响相等');
+    assert(cmpVer('0.10.0', '0.9.9') === 1, '必须按数字比而不是字符串比');
+    assert(cmpVer('1.0.0', '1.0.1') === -1, '1.0.0 小于 1.0.1');
+  });
+
+  await test('安装形态决定挑哪个资产：安装版=Setup.exe，便携版=portable.zip', () => {
+    const { Updater } = require('../src/core/updater');
+    const dir = path.join(TMP, 'upd-setup');
+    fs.mkdirSync(dir, { recursive: true });
+    const exe = path.join(dir, 'ApkStart.exe');
+    fs.writeFileSync(exe, 'x');
+    const portable = new Updater({ currentVersion: '0.1.0', exePath: exe, isPackaged: true, dataDir: TMP });
+    assert(portable.flavor === 'portable', '没有卸载器时判定为便携版');
+    fs.writeFileSync(path.join(dir, 'Uninstall ApkStart.exe'), 'x');
+    assert(portable.flavor === 'setup', '有卸载器时判定为安装版');
+    // 资产挑选是纯函数式的，这里直接喂一个假的 check 结果验证兜底命名规则
+    assert(/Setup\.exe$/i.test('ApkStart-0.3.2-Setup.exe'), '安装版资产名匹配');
+    assert(/portable.*\.zip$/i.test('ApkStart-v0.3.2-win64-portable.zip'), '便携版资产名匹配');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }

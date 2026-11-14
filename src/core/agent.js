@@ -159,14 +159,30 @@ class WinAgent extends EventEmitter {
   async show() { return this.call({ cmd: 'show' }, 3000); }
   async detach() { return this.call({ cmd: 'detach' }, 5000); }
   async probe() { return this.call({ cmd: 'probe' }, 4000); }
+  /** 列出当前可见的顶层窗口（用于验证「只有软件界面 / 只有安卓应用窗口」） */
+  async windows() { return this.call({ cmd: 'windows' }, 4000); }
 
   /**
-   * 开机阶段把模拟器窗口（QWindowIcon 主帧缓冲）+ 它的工具栏（QWindowTool）
-   * + qemu 的黑色控制台窗口全部藏起来，直到 embed 完成才显示。
-   * 这是「彻底隐藏命令窗口 / 模拟器浮窗」的关键：emulator 拉起 detached 的
-   * qemu 控制台子进程，Node 的 windowsHide 覆盖不到它；只能由窗口代理周期性
-   * 用 ShowWindow(SW_HIDE) 压住。启动即调用，boot 期间每帧都压一次，
-   * 避免任何闪现。失败（非 Windows / 代理不可用）时静默降级，不阻断启动。
+   * 把头号可疑窗口「摘下 + 藏好」。
+   * 宿主窗口销毁前必须调用：Windows 会在父窗口销毁时把跨进程的子窗口重新挂到桌面，
+   * 并保持它原来的可见状态 —— 桌面上凭空多出来的 Android Emulator 黑窗就是这么来的。
+   * 代理很忙（可能在编译 C#）时也不能拖着不关窗，所以这里给 700ms 硬上限。
+   */
+  async park(maxWaitMs = 700) {
+    const call = this.call({ cmd: 'park' }, 2000).catch(() => ({ ok: false }));
+    if (!maxWaitMs) return call;
+    return Promise.race([
+      call,
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, timeout: true }), maxWaitMs)),
+    ]);
+  }
+
+  /**
+   * 开启「常驻压制」：模拟器主窗（QWindowIcon）+ 工具栏 + qemu / netsimd 的控制台黑窗
+   * 一律不允许露面，只有被 embed 进我们窗口的那一个除外。
+   * 这是「打开软件只看到软件界面」的关键：emulator 拉起 detached 的 qemu / netsimd
+   * 控制台子进程，Node 的 windowsHide 覆盖不到它们，只能由窗口代理周期性压住。
+   * 现在模拟器还带 -qt-hide-window（窗口创建即隐藏），双保险，连第一帧都不会闪。
    *
    * maxWaitMs：代理本身要现编译启动（几百毫秒，异常时可能十几秒）。调用点是在
    * 「拉起模拟器之前」，绝不能因为代理起不来把开机拖住，所以这里给个硬上限。
@@ -181,7 +197,7 @@ class WinAgent extends EventEmitter {
     ]);
   }
 
-  /** 开机完成：停止隐藏，并让模拟器窗口显示出来（随后会被 embed 重新父化） */
+  /** 关掉常驻压制（正常情况下不再需要：嵌入后压制会自动跳过被嵌入的那个窗口） */
   async bootShow() {
     return this.call({ cmd: 'boothide', on: 0 }, 4000).catch(() => ({ ok: false }));
   }
@@ -228,7 +244,10 @@ class WinAgent extends EventEmitter {
     this.hookConf = null;
     try { this.sock?.end(); } catch (_) { /* ignore */ }
     try { this.sock?.destroy(); } catch (_) { /* ignore */ }
-    try { this.proc?.kill(); } catch (_) { /* ignore */ }
+    // 故意不 kill 代理进程：断开连接后它会自己进入「守卫」状态（见 agent.ps1 的
+    // _lingerUntil）。模拟器可能还在开机，几十秒后才把窗口显示出来；那时如果
+    // 代理已经死了，桌面上就会留一个 Android Emulator 黑窗。模拟器进程消失后
+    // 代理会自行退出，最多守 3 分钟。
     this.sock = null;
     this.proc = null;
     this.ready = null;

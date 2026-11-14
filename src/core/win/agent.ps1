@@ -100,13 +100,17 @@ public class ApkAgent
     static readonly ConcurrentQueue<string> _events = new ConcurrentQueue<string>();
     static long _lastToolSweep = 0;
     static long _embedAt = 0;
-    // 开机隐藏：把模拟器主窗口 + 工具栏 + qemu 控制台黑窗一起压住，直到 embed 完成
-    static volatile bool _bootHide = false;
+    // 常驻压制：默认一开机就开，把模拟器主窗 + 工具栏 + 控制台黑窗压住。
+    // 与「embed 完成就关掉」的旧逻辑不同，它是**常驻**的 —— sweep 会跳过已经嵌进
+    // 我们窗口的那一个窗口，其余一律藏起来（含 ApkStart 退出后回到桌面的那个黑窗）。
+    static volatile bool _quiet = true;
     static long _bootHideSweep = 0;
     // 兜底超时：万一 embed 没来（用户只是打开了 ApkStart 没点应用），
-    // 不能让 100ms 一轮的扫描永远跑下去白烧 CPU。每次真藏到窗口就续期。
+    // 不能让 120ms 一轮的扫描永远跑下去白烧 CPU。每次真藏到窗口就续期。
     static long _bootHideUntil = 0;
-    static long _bootHideStart = 0;
+    static long _bootHideStart = Environment.TickCount;
+    // 断线后的「守卫」截止时间（TickCount）。见 Serve() 里 sock == null 的分支。
+    static long _lingerUntil = 0;
 
     // Hook options. All three default to OFF: an "hook on" without options must
     // never swallow anybody's clicks. JS sends the real config on every enable.
@@ -139,22 +143,65 @@ public class ApkAgent
     // The emulator draws its framebuffer in a "QWindowIcon" top level window titled
     // "Android Emulator - <avd>:<port>"; the volume/rotate rail lives in a separate
     // small "QWindowTool*" window we hide.
+    //
+    // 注意：模拟器开机阶段（以及被常驻压制藏起来之后）这个窗口是**不可见**的，
+    // 所以这里不能再按 IsWindowVisible 过滤 —— 否则永远找不到可嵌入的窗口，
+    // 用户看到的是一个全黑的应用窗口。改为「标题是 Android Emulator 就认，
+    // 可见的大窗口优先」。工具栏 / 提示窗（QWindowTool）尺寸太小，被面积阈值挡掉。
     static IntPtr FindEmulator()
     {
         IntPtr best = IntPtr.Zero;
-        long bestArea = 0;
+        long bestScore = long.MinValue;
         EnumWindows(delegate(IntPtr h, IntPtr p)
         {
-            if (!IsWindowVisible(h)) return true;
             string cls = ClassOf(h);
             if (cls.IndexOf("QWindowIcon", StringComparison.Ordinal) < 0) return true;
+            string title = TitleOf(h);
+            bool named = title.IndexOf("Android Emulator", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!named && !IsWindowVisible(h)) return true;
             RECT r;
             if (!GetWindowRect(h, out r)) return true;
             long area = (long)(r.R - r.L) * (r.B - r.T);
-            if (area > bestArea) { bestArea = area; best = h; }
+            if (area < 200 * 200) return true;   // 工具栏 / 提示窗不是画面窗口
+            // 可见的大窗口优先，其次才是隐藏的
+            long score = area + (IsWindowVisible(h) ? 1000000000L : 0);
+            if (score > bestScore) { bestScore = score; best = h; }
             return true;
         }, IntPtr.Zero);
         return best;
+    }
+
+    // 诊断用：列出顶层窗口（类别 / 标题 / pid / 尺寸 / 是否可见）。
+    // 用于验证「打开软件只看到软件界面」——模拟器主窗、netsim 控制台都必须不在其中。
+    static string ListWindows(bool includeHidden)
+    {
+        var sb = new StringBuilder();
+        EnumWindows(delegate(IntPtr h, IntPtr p)
+        {
+            bool vis = IsWindowVisible(h);
+            if (!vis && !includeHidden) return true;
+            string cls = ClassOf(h);
+            string title = TitleOf(h);
+            // 隐藏窗口太多（系统里有成百上千个），只看跟模拟器/Qt 有关的
+            if (!vis && cls.IndexOf("QWindow", StringComparison.Ordinal) < 0
+                && title.IndexOf("Android Emulator", StringComparison.OrdinalIgnoreCase) < 0) return true;
+            RECT r;
+            if (!GetWindowRect(h, out r)) return true;
+            int w = r.R - r.L, hh = r.B - r.T;
+            if (vis && (w < 40 || hh < 40)) return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (sb.Length > 0) sb.Append(",");
+            sb.Append("{\"cls\":").Append(JsonStr(cls))
+              .Append(",\"title\":").Append(JsonStr(title))
+              .Append(",\"pid\":").Append(pid)
+              .Append(",\"w\":").Append(w)
+              .Append(",\"h\":").Append(hh)
+              .Append(",\"vis\":").Append(vis ? "true" : "false")
+              .Append("}");
+            return true;
+        }, IntPtr.Zero);
+        return sb.ToString();
     }
 
     static void HideToolWindows()
@@ -181,30 +228,41 @@ public class ApkAgent
     // 现在改成「pid 命中 或 窗口标题命中（标题就是被启动的 exe 路径）」，两条路任一生效即隐藏。
     static void HideConsoleWindows()
     {
-        var pids = new System.Collections.Generic.HashSet<uint>();
-        try {
-            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64-headless")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("emulator-headless")) pids.Add((uint)p.Id);
-        } catch { }
+        // 先扫一遍有哪些控制台窗口；一个都没有就别去枚举进程（GetProcessesByName 不便宜）
+        var consoles = new System.Collections.Generic.List<IntPtr>();
         EnumWindows(delegate(IntPtr h, IntPtr p)
         {
             if (!IsWindowVisible(h)) return true;
             string cls = ClassOf(h);
-            bool isConsole = cls.IndexOf("ConsoleWindowClass", StringComparison.Ordinal) >= 0
-                || cls.IndexOf("CASCADIA_HOSTING_WINDOW_CLASS", StringComparison.Ordinal) >= 0;
-            if (!isConsole) return true;   // 绝不动 Qt 画面窗口（QWindowIcon）
+            if (cls.IndexOf("ConsoleWindowClass", StringComparison.Ordinal) >= 0
+                || cls.IndexOf("CASCADIA_HOSTING_WINDOW_CLASS", StringComparison.Ordinal) >= 0)
+                consoles.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        if (consoles.Count == 0) return;
+
+        var pids = new System.Collections.Generic.HashSet<uint>();
+        try {
+            // netsimd 是模拟器的「网络模拟器」守护进程（wifi / 蓝牙通路），
+            // 它自己是个控制台程序，被拉起时会弹一个黑窗，窗口里全是 netsim 日志。
+            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64-headless")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("emulator-headless")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("netsimd")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("crashpad_handler")) pids.Add((uint)p.Id);
+        } catch { }
+        foreach (IntPtr h in consoles)
+        {
             uint pid;
             GetWindowThreadProcessId(h, out pid);
             string title = TitleOf(h);
             bool ours = pids.Contains(pid)
                 || title.IndexOf("emulator", StringComparison.OrdinalIgnoreCase) >= 0
                 || title.IndexOf("qemu", StringComparison.OrdinalIgnoreCase) >= 0
-                || title.IndexOf("apkstart", StringComparison.OrdinalIgnoreCase) >= 0;
+                || title.IndexOf("netsim", StringComparison.OrdinalIgnoreCase) >= 0;
             if (ours) ShowWindow(h, 0);
-            return true;
-        }, IntPtr.Zero);
+        }
     }
 
     // 诊断用：列出当前「可见」的控制台窗口（黑窗）及其归属，供 tools 里的验证脚本使用。
@@ -256,17 +314,18 @@ public class ApkAgent
         return b.ToString();
     }
 
-    // 开机隐藏扫描：周期性把模拟器主窗口 + 工具栏 + 控制台黑窗一起压住
-    static void BootHideSweep()
+    // 常驻压制扫描：只要模拟器窗口还不是「我们某个窗口的子窗口」，就把它藏起来。
+    // 这样无论模拟器是在开机、预热，还是 ApkStart 已经退出（窗口被系统重新挂到桌面，
+    // 恢复成顶层窗口），用户都不会看到那个叫 "Android Emulator - apkstart5554" 的黑窗。
+    // 同时把工具栏（QWindowTool）与所有控制台窗口（qemu / netsimd / emulator）压住。
+    static void QuietSweep()
     {
-        IntPtr e = _emu != IntPtr.Zero ? _emu : FindEmulator();
-        bool sawProc = AnyEmulatorProcess();
-        if (e != IntPtr.Zero && IsWindowVisible(e)) ShowWindow(e, 0);
+        bool embedded = _emu != IntPtr.Zero && _host != IntPtr.Zero && GetParent(_emu) == _host;
+        IntPtr e = embedded ? _emu : FindEmulator();
+        if (!embedded && e != IntPtr.Zero && IsWindowVisible(e)) ShowWindow(e, 0);
         HideToolWindows();
         HideConsoleWindows();
-        // 只要模拟器还在（启动中/待 embed），就持续压制；进程没了就不再续期，
-        // 由主循环的超时检查自动收工。
-        if (e != IntPtr.Zero || sawProc) _bootHideUntil = Environment.TickCount + 5000;
+        if (!embedded && e != IntPtr.Zero) _bootHideUntil = Environment.TickCount + 5000;
     }
 
     static bool AnyEmulatorProcess()
@@ -333,6 +392,28 @@ public class ApkAgent
         SetWindowLong(_emu, GWL_EXSTYLE, ex);
         SetWindowPos(_emu, IntPtr.Zero, 60, 40, 480, 853, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         _emu = IntPtr.Zero;
+    }
+
+    // 与 Detach 相同，但**不显示**窗口：宿主窗口即将销毁时调用。
+    // 不先摘下来，Windows 会在宿主销毁时把子窗口重新挂到桌面并设成可见，
+    // 于是就凭空多出一个 "Android Emulator - apkstart5554" 的黑窗。
+    static void ParkEmulator()
+    {
+        if (_emu == IntPtr.Zero) _emu = FindEmulator();
+        IntPtr e = _emu;
+        if (e == IntPtr.Zero) { _host = IntPtr.Zero; return; }
+        ShowWindow(e, 0);
+        SetParent(e, IntPtr.Zero);
+        uint style = (uint)GetWindowLong(e, GWL_STYLE);
+        style &= ~WS_CHILD;
+        style |= (uint)(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+        SetWindowLong(e, GWL_STYLE, (int)style);
+        int ex = GetWindowLong(e, GWL_EXSTYLE);
+        ex |= WS_EX_APPWINDOW;
+        SetWindowLong(e, GWL_EXSTYLE, ex);
+        SetWindowPos(e, IntPtr.Zero, 40, 40, 480, 853, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        _emu = IntPtr.Zero;
+        _host = IntPtr.Zero;
     }
 
     // ------------------------------------------------------------------ rotation
@@ -622,28 +703,41 @@ public class ApkAgent
             }
             if (_embedAt != 0 && now - _embedAt >= 8000) _embedAt = 0;
 
-            // 开机阶段周期性隐藏模拟器主窗 + 工具栏 + qemu 控制台黑窗，避免任何闪现。
-            // 前 60 秒用 100ms 一轮：控制台窗口从创建到可见只有几十毫秒，300ms 的间隔
-            // 足够让人眼看到一次黑框闪动。稳定之后放慢到 800ms，避免常驻空转。
-            long sweepGap = (now - _bootHideStart < 60000) ? 100 : 800;
-            if (_bootHide && now - _bootHideSweep > sweepGap)
+            // 常驻压制：模拟器主窗 / 工具栏 / qemu·netsimd 控制台黑窗，一律不允许露面。
+            // 前 90 秒 120ms 一轮（开机阶段窗口是「刚创建就可见」，慢了就会闪一下），
+            // 之后放慢到 400ms —— 仍然能兜住「ApkStart 退出后窗口被重挂到桌面」这类情况。
+            long sweepGap = (now - _bootHideStart < 90000) ? 120 : 400;
+            if (_quiet && now - _bootHideSweep > sweepGap)
             {
                 _bootHideSweep = now;
-                BootHideSweep();
-            }
-            // 没人点应用、也没有进程需要藏了就自动收工，避免常驻空转
-            if (_bootHide && _bootHideUntil > 0 && now > _bootHideUntil)
-            {
-                _bootHide = false;
+                QuietSweep();
             }
 
             try
             {
+                // 连接已经断了（ApkStart 退出 / 异常崩溃）：不立刻收工。
+                // 模拟器可能还在开机，几十秒后 Qt 才把窗口显示出来 —— 那时如果
+                // 已经没有代理在盯着，桌面上就会留一个 Android Emulator 黑窗。
+                // 所以断线后继续「守」一会儿，直到最后一段时间没有模拟器进程。
+                if (sock == null)
+                {
+                    if (Environment.TickCount > _lingerUntil) break;
+                    // 模拟器都退干净了就不用再守
+                    if (!AnyEmulatorProcess() && FindEmulator() == IntPtr.Zero) break;
+                    Thread.Sleep(120);
+                    continue;
+                }
                 // Short poll: keep the message pump responsive even when no command
                 // arrives. Never block for seconds while owning window hooks.
                 if (!sock.Poll(50, SelectMode.SelectRead)) continue;
                 int n = sock.Receive(buf);
-                if (n <= 0) break;
+                if (n <= 0)
+                {
+                    try { sock.Close(); } catch { }
+                    sock = null;
+                    if (_quiet) { _lingerUntil = Environment.TickCount + 180000; continue; }
+                    break;
+                }
                 rx.Append(Encoding.UTF8.GetString(buf, 0, n));
                 while (true)
                 {
@@ -657,10 +751,9 @@ public class ApkAgent
                     string cmd = S(line, "cmd");
                     if (cmd == "embed")
                     {
-                        // 嵌入即代表「用户要看画面了」：立刻关掉开机隐藏。
-                        // 否则周期扫描可能在 embed 之后、bootShow 之前又把窗口藏起来，
-                        // 表现就是一个全黑的应用窗口（预热场景下更容易碰上）。
-                        _bootHide = false;
+                        // 嵌入即代表「用户要看画面了」。压制不关（它只藏非嵌入窗口
+                        // 与控制台黑窗），但要先把窗口从隐藏状态正确地交给 SetParent，
+                        // 再由 Fit 的 SWP_SHOWWINDOW 显示出来。
                         _host = new IntPtr(L(line, "host"));
                         _emu = FindEmulator();
                         bool ok = Embed(_host, _emu);
@@ -717,23 +810,37 @@ public class ApkAgent
                     {
                         Reply(sock, "{\"ok\":true,\"list\":[" + ListConsoles() + "]}");
                     }
+                    else if (cmd == "windows")
+                    {
+                        Reply(sock, "{\"ok\":true,\"list\":[" + ListWindows(L(line, "all") == 1) + "]}");
+                    }
                     else if (cmd == "boothide")
                     {
                         if (L(line, "on") == 1)
                         {
-                            _bootHide = true;
+                            _quiet = true;
                             _bootHideSweep = 0;
                             _bootHideStart = Environment.TickCount;
-                            _bootHideUntil = Environment.TickCount + 4000;
-                            BootHideSweep();
+                            QuietSweep();
                         }
                         else
                         {
-                            _bootHide = false;
-                            // embed 完成后 _emu 已经就位，Fit 已把它显示出来；
-                            // 这里只确保 qemu 控制台黑窗被永久藏好（不再闪现命令窗口）
+                            // 保留窗口不动，只把控制台黑窗再压一遍（关掉 quiet 一般是因为
+                            // 用户想自己看一眼模拟器窗口，见设置 startVisible）。
+                            _quiet = false;
                             HideConsoleWindows();
                         }
+                        Reply(sock, "{\"ok\":true}");
+                    }
+                    else if (cmd == "park")
+                    {
+                        // 应用窗口要关了：先把模拟器窗口从宿主上摘下来并藏好，
+                        // 避免宿主销毁时 Windows 把它重新挂到桌面、恢复成顶层可见窗口
+                        // （用户看到的「凭空冒出一个 Android Emulator 黑窗」就是这么来的）。
+                        _quiet = true;
+                        _bootHideStart = Environment.TickCount;
+                        _bootHideSweep = 0;
+                        ParkEmulator();
                         Reply(sock, "{\"ok\":true}");
                     }
                     else if (cmd == "quit")
@@ -748,7 +855,13 @@ public class ApkAgent
                     }
                 }
             }
-            catch (SocketException) { break; }
+            catch (SocketException)
+            {
+                try { sock.Close(); } catch { }
+                sock = null;
+                if (_quiet) { _lingerUntil = Environment.TickCount + 180000; continue; }
+                break;
+            }
             catch (Exception) { }
         }
         HookOff();

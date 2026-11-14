@@ -134,3 +134,34 @@ jobs:
           }
           if (-not $ok) { Write-Error "上传失败: $($setup.Name)"; exit 1 }
           gh release view $tag --json assets --jq '.assets[] | "\(.name) \(.size)"'
+
+      # 轻量版（不带运行时）不再去 dl.google.com 逐个下 emulator / 系统镜像，
+      # 而是直接下这一个整包 —— 下载源与「软件更新」同为本项目 GitHub Release，
+      # 国内网络稳定性、出问题后的排障都只在一个地方。
+      # 内容已经是 .xz 压缩过的镜像，这里用 bsdtar 直接打 zip（不再二次压缩，省几十分钟）。
+      - name: 打包运行时整包（轻量版下载源）
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          $zip = "ApkStart-runtime-$tag.zip"
+          if (-not (Test-Path "build\runtime\emulator\emulator.exe")) { Write-Error "build\runtime 不完整"; exit 1 }
+          tar.exe -a -cf $zip -C "build\runtime" .
+          if ($LASTEXITCODE -ne 0) { Write-Error "打包运行时失败"; exit 1 }
+          Get-Item $zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 上传运行时整包到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          $zip = "ApkStart-runtime-$tag.zip"
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 20 }
+          }
+          if (-not $ok) { Write-Error "上传失败: $zip"; exit 1 }
+          gh release view $tag --json assets --jq '.assets[] | "\(.name) \(.size)"'

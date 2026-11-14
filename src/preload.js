@@ -64,6 +64,13 @@ contextBridge.exposeInMainWorld('apkstart', {
   removeSelf: () => invoke('app:removeSelf'),
   setSharedDir: (dir) => invoke('settings:setSharedDir', dir),
 
+  // 在线更新（GitHub Releases）
+  updateCheck: (opts) => invoke('app:updateCheck', opts || {}),
+  updateApply: () => invoke('app:updateApply'),
+  updateCancel: () => invoke('app:updateCancel'),
+  updateOpenRelease: (url) => invoke('app:updateOpen', url),
+  restartApp: () => invoke('app:restart'),
+
   assocStatus: () => invoke('assoc:status'),
   assocRegister: () => invoke('assoc:register'),
   assocUnregister: () => invoke('assoc:unregister'),
@@ -110,6 +117,7 @@ contextBridge.exposeInMainWorld('apkstart', {
     const allowed = [
       'install:start', 'install:progress', 'install:done', 'install:error',
       'app:launched', 'runtime:log', 'toast', 'ui:navigate', 'provision:progress',
+      'update:progress', 'update:state',
     ];
     if (!allowed.includes(channel)) return () => {};
     const handler = (_e, payload) => cb(payload);

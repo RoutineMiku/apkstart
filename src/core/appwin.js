@@ -144,6 +144,7 @@ class AppWindow {
     this.win.on('minimize', () => { this.agent.hide().catch(() => {}); });
     this.win.on('close', () => { this._closing = true; });
     this.win.on('closed', () => {
+      if (this._selfClose) return;   // close() 自己在 park 完成后收尾
       this.win = null;
       const pkg = this.pkg;
       this.pkg = null;
@@ -296,15 +297,27 @@ class AppWindow {
 
   /**
    * 关闭窗口。默认同时停掉这个安卓应用（省内存），但保留引擎，下次点开是秒开。
+   *
+   * 顺序很重要：必须先把模拟器窗口从宿主窗口上「摘下并藏好」，再销毁宿主。
+   * 反过来的话 Windows 会把跨进程的子窗口重新挂到桌面、并保持它原来的可见状态，
+   * 用户桌面上就会凭空多出一个 "Android Emulator - apkstart5554" 的黑窗。
    */
   close({ keepApp = false } = {}) {
     if (!this.isOpen) return;
+    const win = this.win;
     const pkg = this.pkg;
     this._syncHook(false);
-    this.agent.hide().catch(() => {});
-    try { this.win.destroy(); } catch (_) { /* ignore */ }
-    this.win = null;
     if (!keepApp && pkg && this._onCloseApp) this._onCloseApp(pkg);
+    this._selfClose = true;
+    this.win = null;
+    this.pkg = null;
+    const done = () => {
+      try { win.destroy(); } catch (_) { /* ignore */ }
+      this._selfClose = false;
+      this._closing = false;
+      if (this._closedCb) this._closedCb(pkg);
+    };
+    Promise.resolve(this.agent && this.agent.park()).catch(() => {}).then(done, done);
   }
 
   onCloseApp(cb) { this._onCloseApp = cb; }

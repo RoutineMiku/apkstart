@@ -35,6 +35,7 @@ const pointer = require('./core/pointer');
 const { AppWindow, TITLEBAR_H } = require('./core/appwin');
 const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
+const { Updater } = require('./core/updater');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -161,6 +162,9 @@ let winAgent = null;
 let appWin = null;
 let notifier = null;
 let androidSet = null;
+let updater = null;
+let updateBusy = false;
+let updateInfo = null;
 
 // ---------------- 命令行解析 ----------------
 
@@ -288,6 +292,21 @@ async function autoDeploy() {
   const progress = (p) => send('provision:progress', { ...p, component: p.component || 'all' });
   try {
     const env = await runtime.provisioner.checkEnv();
+    const needEngine = !env.emulator.ok || !env.sysimg.ok;
+    // 轻量版优先用「本项目 GitHub 的运行时整包」：一个文件搞定 emulator + 系统镜像，
+    // 下载源和更新源统一在 GitHub 上（国内比 dl.google.com 稳得多）。
+    // 整包拿不到（没网 / 还没发过该资产 / 被限流）再逐个从官方源装。
+    if (needEngine && store.getSettings().runtime.preferGithubRuntime !== false) {
+      try {
+        progress({ message: '正在从 GitHub 下载运行时…' });
+        await runtime.provisioner.installRuntimePack(progress);
+        const afterPack = await runtime.provisioner.checkEnv();
+        if (afterPack.emulator.ok && afterPack.sysimg.ok) return { ok: true, source: 'github' };
+        progress({ message: '运行时整包不完整，改用官方源补齐…' });
+      } catch (e) {
+        progress({ message: `GitHub 运行时不可用（${e.message}），改用官方源…` });
+      }
+    }
     if (!env.adb.ok) {
       progress({ message: '正在准备 adb…' });
       await runtime.provisioner.installAdb(progress);
@@ -436,6 +455,29 @@ function buildTray() {
       { label: '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
       { label: '同步共享目录', click: () => sharer.sync() },
       { label: '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
+      {
+        label: updateInfo && updateInfo.hasUpdate ? `发现新版本 ${updateInfo.tag}` : '检查更新',
+        click: async () => {
+          showWindow();
+          send('ui:navigate', 'settings');
+          const info = await updater.check().catch(() => null);
+          if (info) { updateInfo = info; send('update:state', info); }
+          if (info && info.hasUpdate && info.asset) {
+            const r = await dialog.showMessageBox(mainWindow || undefined, {
+              type: 'question',
+              title: '发现新版本',
+              message: `ApkStart ${info.tag} 已发布，当前版本 v${app.getVersion()}。现在更新吗？`,
+              detail: (info.notes || '').slice(0, 600),
+              buttons: ['立即更新', '稍后'],
+              defaultId: 0,
+              cancelId: 1,
+            });
+            if (r.response === 0) runUpdate();
+          } else if (info && !info.hasUpdate) {
+            notify('已是最新版本', `ApkStart v${app.getVersion()}`);
+          }
+        },
+      },
       { type: 'separator' },
       {
         label: '退出',
@@ -471,6 +513,37 @@ async function runInstall(filePath) {
     if (e.needsSetup) send('ui:navigate', 'setup');
     notify('安装失败', e.message.slice(0, 120));
     throw e;
+  }
+}
+
+/**
+ * 下载并安装新版本，然后由 update-apply 脚本接管「替换 + 重启」。
+ * 界面与托盘菜单共用这一条路径。
+ */
+async function runUpdate() {
+  if (updateBusy) return { ok: false, error: '正在更新中' };
+  updateBusy = true;
+  const sendProgress = (p) => send('update:progress', p);
+  try {
+    const info = updateInfo && updateInfo.hasUpdate ? updateInfo : await updater.check();
+    updateInfo = info;
+    if (!info.hasUpdate) return { ok: false, error: '已经是最新版本' };
+    if (!info.asset) {
+      shell.openExternal(info.htmlUrl || Updater.repoUrl()).catch(() => {});
+      return { ok: false, error: '该版本没有可直接安装的包，已打开 GitHub 发布页', manual: true };
+    }
+    sendProgress({ stage: 'download', percent: 0, message: '准备下载…' });
+    const job = await updater.prepare(info);
+    sendProgress({ stage: 'apply', percent: 100, message: '正在替换程序并重启…' });
+    updater.apply(job);
+    // 给界面一点时间显示「即将重启」，然后走正常退出流程（before-quit 会把模拟器窗口藏好）
+    setTimeout(() => { quitting = true; app.quit(); }, 900);
+    return { ok: true, version: info.version, mode: job.mode };
+  } catch (e) {
+    sendProgress({ stage: 'error', percent: 0, message: e.message });
+    return { ok: false, error: e.message };
+  } finally {
+    updateBusy = false;
   }
 }
 
@@ -1242,6 +1315,33 @@ function registerIpc() {
     if (appWin && appWin.isOpen) { appWin.win.show(); appWin.win.focus(); return true; }
     return false;
   });
+
+  // ---------------- 在线更新 ----------------
+
+  ipcMain.handle('app:updateCheck', async (_e, opts = {}) => {
+    try {
+      const info = await updater.check();
+      updateInfo = info;
+      return { ok: true, ...info };
+    } catch (e) {
+      return { ok: false, error: e.message, current: app.getVersion() };
+    }
+  });
+
+  ipcMain.handle('app:updateOpen', (_e, url) => {
+    const target = /^https:\/\/github\.com\//i.test(String(url || '')) ? url : Updater.repoUrl();
+    shell.openExternal(target).catch(() => {});
+    return { ok: true };
+  });
+
+  ipcMain.handle('app:updateApply', () => runUpdate());
+
+  ipcMain.handle('app:updateCancel', () => { updateBusy = false; return { ok: true }; });
+
+  ipcMain.handle('app:restart', () => {
+    setTimeout(() => { quitting = true; app.quit(); }, 200);
+    return { ok: true };
+  });
 }
 
 // ---------------- 生命周期 ----------------
@@ -1275,6 +1375,14 @@ if (!gotLock) {
     });
     sharer = new Sharer(runtime);
     androidSet = new AndroidSettings(runtime);
+
+    updater = new Updater({
+      currentVersion: app.getVersion(),
+      exePath: process.execPath,
+      isPackaged: app.isPackaged,
+      dataDir: store.DATA_DIR,
+      onProgress: (p) => send('update:progress', p),
+    });
 
     // 滚轮合并器：一个时间窗内的滚动只注入一条 input swipe，走常驻 adb shell。
     wheelRouter = new pointer.WheelRouter({
@@ -1389,6 +1497,21 @@ if (!gotLock) {
       }).catch(() => {});
     }, 20000).unref?.();
 
+    // 启动 8 秒后静默查一次新版本（打包后才有意义）。发现新版本只提示，
+    // 绝不自动下载 —— 更新是用户点「立即更新」才做的事。
+    if (app.isPackaged) {
+      setTimeout(() => {
+        updater.check().then((info) => {
+          updateInfo = info;
+          send('update:state', info);
+          if (info.hasUpdate) {
+            appLog(`update available ${info.tag} (current v${app.getVersion()}, asset=${info.asset ? info.asset.name : 'none'})`);
+            notify('发现新版本', `ApkStart ${info.tag} 已发布，可在「设置 → 软件更新」里一键更新`);
+          }
+        }).catch((e) => appLog(`update check failed: ${e.message}`));
+      }, 8000).unref?.();
+    }
+
     // 文件同步 / 通知轮询不再无条件常驻：只在容器里真的有应用窗口时才跑
     // （见 onContainerActive）。
 
@@ -1458,15 +1581,33 @@ if (!gotLock) {
     if (quitting) app.exit(0);
   });
 
-  app.on('before-quit', () => {
+  let quitReady = false;
+  app.on('before-quit', (e) => {
     quitting = true;
-    sharer?.stop();
-    notifier?.stop();
-    try { appWin?.close({ keepApp: false }); } catch (_) { /* ignore */ }
+    // 退出前必须先让窗口代理把模拟器窗口「摘下 + 藏好」。这一步是异步的
+    // （要等代理回包），所以第一次 before-quit 先拦下来，收尾完成再真正退出。
+    // 少了这一步，宿主窗口一销毁，Windows 会把模拟器子窗口重挂到桌面并显示出来——
+    // 表现就是「关掉 ApkStart 之后，桌面上还留着一个 Android Emulator 黑窗」。
+    if (!quitReady) {
+      e.preventDefault();
+      quitReady = true;
+      sharer?.stop();
+      notifier?.stop();
+      try { appWin?.close({ keepApp: true }); } catch (_) { /* ignore */ }
+      const finish = () => {
+        try { winAgent?.dispose(); } catch (_) { /* ignore */ }
+        try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
+        runtime?.dispose();
+        // 隐藏的图标解码窗口也算一个窗口，不关掉会让 window-all-closed 永远不触发
+        try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
+        app.quit();
+      };
+      setTimeout(finish, 400);
+      return;
+    }
     try { winAgent?.dispose(); } catch (_) { /* ignore */ }
     try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
     runtime?.dispose();
-    // 隐藏的图标解码窗口也算一个窗口，不关掉会让 window-all-closed 永远不触发
     try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
   });
 }

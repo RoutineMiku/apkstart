@@ -772,3 +772,33 @@ kbd {
 }
 .advanced-group[open] > summary::before { transform: rotate(90deg); }
 .advanced-group[open] > summary { color: var(--text, #2b3138); }
+
+/* ---------------- 软件更新 ---------------- */
+.update-bar {
+  margin-top: 9px;
+  height: 4px;
+  border-radius: 4px;
+  background: #e9edf1;
+  overflow: hidden;
+}
+.update-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 4px;
+  background: var(--brand);
+  transition: width .25s;
+}
+.update-notes {
+  margin-top: 8px;
+  max-height: 118px;
+  overflow: auto;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text-2, #556);
+}
