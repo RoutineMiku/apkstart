@@ -1121,10 +1121,20 @@ class Runtime {
     const t0 = Date.now();
     let last = null;
     let lastNotice = 0;
+    let offlineSince = 0;
     while (Date.now() - t0 < timeoutMs) {
-      // eslint-disable-next-line no-await-in-loop
-      last = await this.emulator.checkNetwork(adbPath || this.adbPath()).catch(() => null);
-      if (last && last.ok) return last;
+      const online = await this.client().isOnline().catch(() => false);
+      if (!online) {
+        // 刚重启的虚拟机会有一段时间连 adb 都还没上线，不能一看到 offline 就放弃
+        // （之前就是这样：重置数据后立刻返回 device-offline，判定「修复失败」）。
+        if (!offlineSince) offlineSince = Date.now();
+        if (Date.now() - offlineSince > 45000) return { ok: false, reason: 'device-offline' };
+      } else {
+        offlineSince = 0;
+        // eslint-disable-next-line no-await-in-loop
+        last = await this.emulator.checkNetwork(adbPath || this.adbPath()).catch(() => null);
+        if (last && last.ok) return last;
+      }
       if (Date.now() - lastNotice > 10000) {
         lastNotice = Date.now();
         onLog(`正在等待安卓虚拟机联网… ${Math.round((Date.now() - t0) / 1000)}s`);
@@ -1180,33 +1190,27 @@ class Runtime {
    */
   async repairNetwork({ onLog = () => {} } = {}) {
     try {
-      onLog('正在修复虚拟机网络：先冷启动重试…');
+      // 直接重置数据：这是实测唯一稳定能让这个镜像联网的办法。
+      // （先冷启动再等 3 分钟只是白等 —— 已有用户数据上的冷启动根本连不上 Wi-Fi。）
+      onLog('正在修复虚拟机网络：重置安卓数据并重新开机（应用清单会保留，点开时自动重装）…');
       if (this.vmRunning) await this.stop({ graceful: false }).catch(() => {});
-      this.emulator.forceColdBootOnNextStart();
-      let boot = await this.ensure({ onLog });
+      // 给上一次的 qemu / netsimd 一点时间退干净，否则 -wipe-data 会撞 AVD 锁
+      await new Promise((r) => setTimeout(r, 2500));
+      this.emulator.forceWipeOnNextStart();
+      const boot = await this.ensure({ onLog });
       if (!boot || !boot.ok) {
-        return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false };
+        return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false, wiped: true };
       }
-      let network = await this.waitForNetwork({ onLog, timeoutMs: 180000 });
-      let wiped = false;
-      if (!network || !network.ok) {
-        onLog('冷启动后仍然没有网络，改为重置安卓数据再试一次（应用清单会保留）…');
-        await this.stop({ graceful: false }).catch(() => {});
-        this.emulator.forceWipeOnNextStart();
-        boot = await this.ensure({ onLog });
-        if (!boot || !boot.ok) {
-          return { ok: false, error: (boot && boot.error) || '重置后虚拟机没能启动', boot: false, wiped: true };
-        }
-        network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
-        wiped = true;
-      }
+      const network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
       if (network && network.ok) {
+        // 立刻把「网络正常」的状态存成快照：下次恢复时网卡状态一起还原，
+        // 否则关掉再开又会回到没网状态。
         try { await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 }); } catch (_) { /* ignore */ }
-        onLog(`网络已恢复（${network.ip || ''} 网关 ${network.gateway || '可达'}）。`);
+        onLog(`网络已恢复（${network.ip || ''} 网关 ${network.gateway || '可达'}），已存好可用快照。`);
       } else {
-        onLog('等待超时，虚拟机仍没有网络。多半是宿主机网络/防火墙拦住了模拟器，请检查后重试。');
+        onLog('重置后仍未联网。请检查本机网络/防火墙是否拦截了模拟器（netsimd 走本机回环端口）。');
       }
-      return { ok: !!(network && network.ok), network, boot: true, wiped };
+      return { ok: !!(network && network.ok), network, boot: true, wiped: true };
     } catch (e) {
       return { ok: false, error: e.message };
     }

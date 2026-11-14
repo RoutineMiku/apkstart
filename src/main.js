@@ -542,6 +542,10 @@ function buildTray() {
     tray.setContextMenu(menu);
   };
   tray.setToolTip('ApkStart — 安卓应用运行器');
+  // Windows 托盘的惯例是单击就打开主窗口（双击当然也可以）。
+  // 之前只绑了 double-click，用户单击没反应，会以为托盘图标坏了。
+  // 右键才出菜单，所以这里单击直接 showWindow 不会和菜单冲突。
+  tray.on('click', () => showWindow());
   tray.on('double-click', () => showWindow());
   refresh();
   setInterval(refresh, 5000).unref?.();

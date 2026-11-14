@@ -422,6 +422,32 @@ public class ApkAgent
         return b.ToString();
     }
 
+    // 兜底：把「我们的运行时进程」创建的任何**多余的顶层可见窗口**都藏起来。
+    // 除了模拟器主窗口（要嵌进宿主）之外，emulator / qemu / netsimd / adb 都可能
+    // 弹出一些一闪而过的东西（Qt 提示框、崩溃对话框、音量条、日志窗…）。
+    // 以前只按类名逐个点名，漏一个就闪一次；这里改成按「进程属于我们的运行时目录」
+    // 判断，覆盖面更全。宿主窗口和模拟器窗口本身不在这个范围，绝不会误伤。
+    static void HideStrayWindows()
+    {
+        if (_scopeDirs.Count == 0) return;
+        IntPtr embeddedRoot = _emu;
+        EnumWindows(delegate(IntPtr h, IntPtr p)
+        {
+            if (!IsWindowVisible(h)) return true;
+            if (h == embeddedRoot) return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (!IsOurs(pid)) return true;
+            string cls = ClassOf(h);
+            // 控制台/工具栏已有专门处理，这里只管剩下的杂窗
+            RECT r;
+            if (!GetWindowRect(h, out r)) return true;
+            if ((r.R - r.L) < 8 && (r.B - r.T) < 8) return true;   // 8x8 以下当隐形
+            ShowWindow(h, 0);
+            return true;
+        }, IntPtr.Zero);
+    }
+
     // 常驻压制扫描：只要模拟器窗口还不是「我们某个窗口的子窗口」，就把它藏起来。
     // 这样无论模拟器是在开机、预热，还是 ApkStart 已经退出（窗口被系统重新挂到桌面，
     // 恢复成顶层窗口），用户都不会看到那个叫 "Android Emulator - apkstart5554" 的黑窗。
@@ -433,6 +459,7 @@ public class ApkAgent
         if (!embedded && e != IntPtr.Zero && IsWindowVisible(e)) ShowWindow(e, 0);
         HideToolWindows();
         HideConsoleWindows();
+        HideStrayWindows();
         if (!embedded && e != IntPtr.Zero) _bootHideUntil = Environment.TickCount + 5000;
     }
 

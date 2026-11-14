@@ -418,12 +418,16 @@ class Installer {
     // 关键修复：Wi-Fi 关联往往比 sys.boot_completed 晚几十秒，红果一进去就拉首页数据，
     // 没网时首页渲染成整块黑底 —— 这就是「点同意并继续后一直黑屏」的真正原因。
     // 所以拉起应用前先等网络就绪（最多 90 秒），宁可多等几秒也不要给用户一块黑屏。
+    // 拉起来之前先看一眼网络：**只等，不重启**。
+    // 之前这里调的是 ensureNetwork()，网络慢时会「停掉虚拟机 → 冷启动」，
+    // 结果 adb 设备在安装途中消失，直接变成「红果打不开」。
+    // 启动路径上绝不能做这种破坏性动作，等不到就先启动，大不了页面暂时加载慢。
     if (rt.engine === 'emulator' || rt.engine === 'builtin') {
-      const net = await this.runtime.ensureNetwork({ onLog }).catch(() => null);
+      const net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 20000 }).catch(() => null);
       if (net && net.ok) {
         onLog(`虚拟机网络就绪（${net.ip || ''}）`);
       } else {
-        onLog('⚠ 虚拟机联网超时：需要联网的页面可能暂时黑屏，可在「设置 → 修复网络」重试。');
+        onLog('虚拟机网络还没就绪，先启动应用（联网页面可能稍后才加载出来）');
       }
     }
     const settings = store.getSettings();

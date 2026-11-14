@@ -470,6 +470,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!/ -no-snapshot( |$)/.test(cold), 'wipe 时仍要允许保存新快照（修复网络依赖它）');
   });
 
+  // 窗口代理脚本里有大量中文注释。PowerShell 5.1 读「无 BOM 的 UTF-8」会按 ANSI 解码，
+  // 中文变成乱码后可能把 C# 注释和下一行代码并成一行 —— Add-Type 直接编译失败，
+  // 表现就是「窗口代理启动失败 / 应用窗口不嵌入」。这个坑踩过一次，用测试钉住。
+  await test('窗口代理脚本必须带 UTF-8 BOM（否则中文注释会让 Add-Type 编译失败）', () => {
+    const file = path.join(__dirname, '..', 'src', 'core', 'win', 'agent.ps1');
+    const buf = fs.readFileSync(file);
+    assert(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf, 'agent.ps1 缺少 UTF-8 BOM');
+  });
+
   await test('新版 emulator 写的 ram.bin 必须被认作完整快照（否则刚存好的 3GB 会被当空壳删掉）', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));
