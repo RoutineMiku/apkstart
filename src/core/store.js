@@ -92,6 +92,9 @@ const DEFAULT_SETTINGS = {
     // 自动尝试公共 GitHub 加速镜像（ghfast / gh-proxy）。关掉后只用直连 + 自定义前缀。
     // 这两个是第三方服务，只是转发公开的 release 文件，不涉及账号信息。
     autoMirror: true,
+    // Gitee 的 releases 接口对公开仓库也要求 access_token（无 token 直接 404），
+    // 想用 Gitee 作为更新源就在这里填一个只读 token；留空则只用 GitHub + 镜像。
+    giteeToken: '',
   },
   sharedDir: path.join(os.homedir(), 'ApkStartShared'),
   deviceSharedDir: '/sdcard/ApkStartShared',

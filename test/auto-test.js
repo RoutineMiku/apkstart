@@ -861,12 +861,35 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(s._rankCache.size === 0, 'reset 要清空测速缓存（换源/换网后必须重测）');
   });
 
+  await test('双源：Gitee 自动附带的源码包（v1.2.3.zip）绝不能被当成安装包', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s2 = new Sources(() => ({ runtime: {} }));
+    s2.fetchReleases = async () => [
+      {
+        source: 'gitee',
+        name: 'Gitee',
+        web: 'e',
+        rel: {
+          tag_name: 'v0.3.2',
+          assets: [
+            { name: 'v0.3.2.zip', size: 999, browser_download_url: 'ge://src' },
+            { name: 'v0.3.2.tar.gz', size: 999, browser_download_url: 'ge://src2' },
+            { name: 'ApkStart-v0.3.2-win64-portable.zip', size: 10, browser_download_url: 'ge://ok' },
+          ],
+        },
+      },
+    ];
+    const m = await s2.latest();
+    assert(m.assets.length === 1 && m.assets[0].url === 'ge://ok',
+      `只应保留 ApkStart* 资产，实际 ${JSON.stringify(m.assets.map((a) => a.name))}`);
+  });
+
   await test('双源：合并版本时只认同版本的资产，不拿旧包冒充新包', async () => {
     const { Sources } = require('../src/core/sources');
     const s = new Sources(() => ({ runtime: {} }));
     s.fetchReleases = async () => [
-      { source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v0.4.0', assets: [{ name: 'A-portable.zip', size: 10, browser_download_url: 'gh://a' }] } },
-      { source: 'gitee', name: 'Gitee', web: 'e', rel: { tag_name: 'v0.3.9', assets: [{ name: 'A-portable.zip', size: 10, browser_download_url: 'ge://a' }, { name: 'B.txt', size: 1, browser_download_url: 'ge://b' }] } },
+      { source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v0.4.0', assets: [{ name: 'ApkStart-A-portable.zip', size: 10, browser_download_url: 'gh://a' }] } },
+      { source: 'gitee', name: 'Gitee', web: 'e', rel: { tag_name: 'v0.3.9', assets: [{ name: 'ApkStart-A-portable.zip', size: 10, browser_download_url: 'ge://a' }, { name: 'ApkStart-B.txt', size: 1, browser_download_url: 'ge://b' }] } },
     ];
     const m = await s.latest();
     assert(m.version === '0.4.0', `应取更高版本，实际 ${m.version}`);

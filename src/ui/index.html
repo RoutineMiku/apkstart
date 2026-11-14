@@ -351,6 +351,16 @@
           <input id="setConnections" type="number" min="1" max="16" step="1" />
           <span class="sub">大文件按块并行下载。默认 8 线程已经能跑满大多数家宽；网络稳定时可以试 16。</span>
         </div>
+        <details class="mini-details">
+          <summary>Gitee 更新源（可选，需要 token）</summary>
+          <div class="field">
+            <label>Gitee 只读 token</label>
+            <input id="setGiteeToken" type="password" placeholder="留空 = 不使用 Gitee 作为更新源" />
+            <span class="sub">Gitee 的发行版接口即使公开仓库也要求 token，不填就只能走 GitHub + 镜像。
+              在 gitee.com → 设置 → 私人令牌 生成一个只勾「projects」的令牌填进来即可；
+              它只用于读取本项目的发行版列表，不会上传任何东西。</span>
+          </div>
+        </details>
       </div>
 
       <details class="advanced-group">

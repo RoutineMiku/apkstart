@@ -220,19 +220,27 @@ class Sources {
   async fetchReleases() {
     const prefs = String((this.settings().runtime || {}).sourcePreference || 'auto');
     const ids = prefs === 'github' || prefs === 'gitee' ? [prefs] : ['github', 'gitee'];
+    // Gitee 的 releases 接口即使对公开仓库也要求 access_token（无 token 直接 404
+    // "Not Found Project"）。所以调用方可以在设置里填一个只读 token，填了才走 Gitee。
+    const token = String((this.settings().runtime || {}).giteeToken || '').trim();
+    const withToken = (id, url) => (id === 'gitee' && token
+      ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}`
+      : url);
+
     const jobs = ids.map(async (id) => {
       const s = SOURCES[id];
       try {
-        const rel = await getJson(`${s.api}/releases/latest`, 9000);
+        const rel = await getJson(withToken(id, `${s.api}/releases/latest`), 9000);
         return { source: id, name: s.name, web: s.web, rel };
       } catch (e) {
         // Gitee 没有正式 release、或 GitHub 被墙，都退回列表取第一条
         try {
-          const list = await getJson(`${s.api}/releases?per_page=10`, 9000);
+          const list = await getJson(withToken(id, `${s.api}/releases?per_page=10`), 9000);
           const first = (Array.isArray(list) ? list : []).find((r) => r && !r.draft);
           if (first) return { source: id, name: s.name, web: s.web, rel: first };
         } catch (_) { /* 这个源彻底不可用 */ }
-        return { source: id, name: s.name, web: s.web, error: e.message };
+        const hint = id === 'gitee' && !token ? '（Gitee 需要 token，可在设置里填）' : '';
+        return { source: id, name: s.name, web: s.web, error: `${e.message}${hint}` };
       }
     });
     return Promise.all(jobs);
@@ -263,6 +271,10 @@ class Sources {
       for (const a of (item.rel.assets || [])) {
         const key = String(a.name || '');
         if (!key) continue;
+        // Gitee 会把「源码包」自动挂成资产（v0.3.2.zip / v0.3.2.tar.gz），
+        // 这些不是安装包，`\.zip$` 的匹配规则会把它当成更新包下载下来 —— 必须排除。
+        // 我们自己的发布资产统一以 ApkStart 开头，按这个前缀白名单更安全。
+        if (!/^ApkStart/i.test(key)) continue;
         raw.push({
           name: key,
           size: Number(a.size) || 0,
