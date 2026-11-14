@@ -44,10 +44,36 @@ function relTime(ts) {
 
 /**
  * 迷你 toast
+ *
+ * 同一类消息做去重 + 数量上限：
+ * 安装失败时里面有「运行时启动日志」在持续推送，以前每条都新建一个 toast，
+ * 于是屏幕上会不停叠加同一条错误，看起来像「失败信息一直循环」。
  */
+let _toastSeq = 0;
 function toast({ title, body = '', type = 'info', progress = null, sticky = false, spinner = false }) {
+  const wrap = $('toastWrap');
+  // ① 去重：同样的标题 + 正文（4 秒内）只刷新那一条，不叠加
+  const key = `${title}|${body}`;
+  const dup = [...wrap.children].find((n) => n.dataset.key === key && Date.now() - Number(n.dataset.at || 0) < 4000);
+  if (dup) {
+    dup.dataset.at = String(Date.now());
+    return {
+      el: dup,
+      dismiss: () => dup.remove(),
+      update: ({ title: t2, body: b2 } = {}) => {
+        if (t2 !== undefined) dup.querySelector('.t-title-text').textContent = t2;
+        if (b2 !== undefined) dup.querySelector('.t-body').textContent = b2;
+      },
+    };
+  }
+  // ② 上限：同时最多 4 条，超出先挤掉最旧的
+  while (wrap.children.length >= 4) wrap.firstElementChild.remove();
+
   const el = document.createElement('div');
   el.className = `toast ${type === 'error' ? 'error' : ''}`;
+  el.dataset.key = key;
+  el.dataset.at = String(Date.now());
+  el.dataset.seq = String(++_toastSeq);
   el.innerHTML = `
     <div class="t-title">
       ${spinner ? '<span class="spinner"></span>' : ''}
@@ -421,6 +447,20 @@ async function markInstalled() {
 
 /* ---------------- 安装 ---------------- */
 
+async /** 把安装失败翻译成「下一步该做什么」，只对最常见的几种做提示，其它原样显示 */
+function friendlyInstallErrorText(msg) {
+  const s = String(msg || '未知错误');
+  if (/INSUFFICIENT_STORAGE|not enough space|空间不足|ENOSPC/i.test(s)) {
+    return `${s}\n安卓数据分区不够用：设置 → 性能与资源占用 → 安卓数据分区调大后点「立即扩容」。`;
+  }
+  if (/NO_MATCHING_ABIS/i.test(s)) return `${s}\n这个包只有 ARM 库，正在自动切换兼容镜像后重试。`;
+  if (/INSTALL_FAILED_ALREADY_EXISTS|signatures do not match/i.test(s)) {
+    return `${s}\n同包名但签名不同（常见于从别的渠道装过）。在应用卡片右键「卸载」后再装。`;
+  }
+  if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(s)) return `${s}\n已装版本更高，先在右键菜单里卸载再装。`;
+  return s;
+}
+
 async function installFiles(paths) {
   if (!paths || !paths.length) return;
   if (state.installing) {
@@ -432,29 +472,32 @@ async function installFiles(paths) {
   let failed = 0;
 
   for (const p of paths) {
+    const name = p.split(/[\\/]/).pop();
+    const t = toast({ title: `正在安装 ${name}`, body: '解析 APK…', progress: 8, sticky: true, spinner: true });
+    let off = () => {};
     try {
-      const name = p.split(/[\\/]/).pop();
-      const t = toast({ title: `正在安装 ${name}`, body: '解析 APK…', progress: 8, sticky: true, spinner: true });
-      const off = api.on('install:progress', (pr) => {
+      off = api.on('install:progress', (pr) => {
         const base = { parse: 12, 'parse-done': 24, runtime: 38, install: 62, shortcut: 88, done: 100 }[pr.stage] || 50;
         const pct = pr.percent != null ? Math.min(60, Math.round((pr.percent / 100) * 60)) : base;
         t.update({ title: pr.meta ? `正在安装 ${pr.meta.label}` : `正在安装 ${name}`, body: pr.message, progress: pct });
       });
-      try {
-        const r = await api.installApk(p);
-        t.update({ title: `${r.app.label} 已安装`, body: r.app.shortcutPath ? '桌面快捷方式已创建，双击即可直接打开。' : '可在应用卡片右键创建桌面快捷方式。', progress: 100, type: 'ok' });
-        t.el.querySelector('.spinner')?.remove();
-        setTimeout(t.dismiss, 3600);
-        if (r.warnings && r.warnings.length) {
-          toast({ title: `${r.app.label} 兼容性提示`, body: r.warnings.join(' '), type: 'error', sticky: false });
-        }
-        ok++;
-      } finally {
-        off();
+      const r = await api.installApk(p);
+      t.update({ title: `${r.app.label} 已安装`, body: r.app.shortcutPath ? '桌面快捷方式已创建，双击即可直接打开。' : '可在应用卡片右键创建桌面快捷方式。', progress: 100, type: 'ok' });
+      t.el.querySelector('.spinner')?.remove();
+      setTimeout(t.dismiss, 3600);
+      if (r.warnings && r.warnings.length) {
+        toast({ title: `${r.app.label} 兼容性提示`, body: r.warnings.join(' '), type: 'error', sticky: false });
       }
+      ok++;
     } catch (e) {
       failed++;
-      toast({ title: '安装失败', body: e.message, type: 'error' });
+      // 先把那条「正在安装…」的 sticky 提示收掉，否则它会一直转圈、还继续被
+      // 运行时日志刷新 —— 用户看到的就是「失败信息一直在循环」。
+      try { off(); } catch (_) { /* ignore */ }
+      t.dismiss();
+      toast({ title: `安装失败：${name}`, body: friendlyInstallErrorText(e.message), type: 'error' });
+    } finally {
+      try { off(); } catch (_) { /* ignore */ }
     }
   }
 
@@ -647,6 +690,10 @@ function fillSettings(s) {
   $('setMemory').value = s.engine.memoryMB;
   $('setCores').value = s.engine.cores;
   $('setIdle').value = s.engine.idleShutdownMinutes;
+  if ($('setSourcePref')) $('setSourcePref').value = (s.runtime && s.runtime.sourcePreference) || 'auto';
+  if ($('setAutoMirror')) $('setAutoMirror').checked = (s.runtime && s.runtime.autoMirror) !== false;
+  if ($('setMirrorPrefix')) $('setMirrorPrefix').value = (s.runtime && s.runtime.mirrorPrefix) || '';
+  if ($('setConnections')) $('setConnections').value = Number((s.runtime && s.runtime.downloadConnections) || 8);
   $('setAudio').checked = s.engine.audio !== false;
   $('setLiteMode').checked = s.engine.liteMode !== false;
   $('setPrewarm').checked = s.engine.prewarm !== false;
@@ -746,7 +793,11 @@ function renderUpdate(info) {
     return;
   }
   if (info.hasUpdate) {
-    st.textContent = `发现新版本 ${info.tag}`;
+    // 如实说明这次是哪个源给出的版本、另一个源为什么没参与 ——
+    // 用户排查「为什么检查更新很慢」时，这一行比任何日志都直接。
+    const src = (info.sources || []).map((x) => `${x.name} ${x.tag || ''}`.trim()).join(' / ');
+    const bad = (info.unreachable || []).map((x) => x.name).join('、');
+    st.textContent = `发现新版本 ${info.tag}${src ? `（${src}）` : ''}${bad ? `；${bad} 不可达` : ''}`;
     showUpdateBtn(true);
     btn.textContent = info.asset ? '立即更新' : '打开下载页';
     btn.dataset.mode = info.asset ? 'auto' : 'manual';
@@ -757,7 +808,8 @@ function renderUpdate(info) {
     }
     if (bar) bar.hidden = true;
   } else {
-    st.textContent = `已是最新版本（v${info.current}）`;
+    const src = (info.sources || []).map((x) => x.name).join(' / ');
+    st.textContent = `已是最新版本（v${info.current}）${src ? ` · 经由 ${src}` : ''}`;
     showUpdateBtn(false);
     if (bar) bar.hidden = true;
   }
@@ -915,6 +967,22 @@ function bindSettings() {
     });
   }
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
+  if ($('setSourcePref')) {
+    $('setSourcePref').addEventListener('change', (e) => save({ runtime: { sourcePreference: e.target.value } }));
+  }
+  if ($('setAutoMirror')) {
+    $('setAutoMirror').addEventListener('change', (e) => save({ runtime: { autoMirror: e.target.checked } }));
+  }
+  if ($('setMirrorPrefix')) {
+    $('setMirrorPrefix').addEventListener('change', (e) => save({ runtime: { mirrorPrefix: e.target.value.trim() } }));
+  }
+  if ($('setConnections')) {
+    $('setConnections').addEventListener('change', (e) => {
+      const n = Math.max(1, Math.min(16, Number(e.target.value) || 8));
+      e.target.value = n;
+      save({ runtime: { downloadConnections: n } });
+    });
+  }
   $('setAudio').addEventListener('change', (e) => save({ engine: { audio: e.target.checked } }));
   $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
   $('setPrewarm').addEventListener('change', (e) => save({ engine: { prewarm: e.target.checked } }));

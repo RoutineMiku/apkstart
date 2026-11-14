@@ -830,6 +830,49 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/portable.*\.zip$/i.test('ApkStart-v0.3.2-win64-portable.zip'), '便携版资产名匹配');
   });
 
+  await test('双源：候选地址含镜像前缀，自定义前缀优先于公共镜像', () => {
+    const { Sources, withMirror } = require('../src/core/sources');
+    const url = 'https://github.com/o/r/releases/download/v1/a.zip';
+    const auto = new Sources(() => ({ runtime: { autoMirror: true } }));
+    const list = auto.candidates(url);
+    assert(list[0] === url, '源站必须排第一（测速排序前保持原序）');
+    assert(list.length >= 2 && list.some((u) => u.includes('ghfast.top')), '自动镜像应被列入候选');
+
+    const custom = new Sources(() => ({ runtime: { autoMirror: true, mirrorPrefix: 'https://my.mirror/' } }));
+    const c2 = custom.candidates(url);
+    assert(c2.length === 2 && c2[1] === `https://my.mirror/${url}`, `自定义前缀应唯一生效，实际 ${JSON.stringify(c2)}`);
+
+    const off = new Sources(() => ({ runtime: { autoMirror: false } }));
+    assert(off.candidates(url).length === 1, '关掉自动镜像后只剩直连');
+    assert(withMirror(url, 'https://x/') === `https://x/${url}`, '前缀缺尾斜杠要自动补');
+  });
+
+  await test('双源：测速结果按速度排序，全部失败时保持原序不丢可用地址', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: { autoMirror: false } }));
+    // 直接注入测速缓存，避免测试依赖外网
+    s._rankCache.set('https://slow/', { at: Date.now(), ok: true, speed: 1000 });
+    s._rankCache.set('https://fast/', { at: Date.now(), ok: true, speed: 9000 });
+    s._rankCache.set('https://dead/', { at: Date.now(), ok: false, speed: 0 });
+    const ranked = await s.rank(['https://slow/', 'https://dead/', 'https://fast/']);
+    assert(ranked[0] === 'https://fast/', `最快的应排第一，实际 ${ranked[0]}`);
+    assert(ranked[2] === 'https://dead/', '失败的地址排最后但仍保留（还有一次机会）');
+    s.reset();
+    assert(s._rankCache.size === 0, 'reset 要清空测速缓存（换源/换网后必须重测）');
+  });
+
+  await test('双源：合并版本时只认同版本的资产，不拿旧包冒充新包', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: {} }));
+    s.fetchReleases = async () => [
+      { source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v0.4.0', assets: [{ name: 'A-portable.zip', size: 10, browser_download_url: 'gh://a' }] } },
+      { source: 'gitee', name: 'Gitee', web: 'e', rel: { tag_name: 'v0.3.9', assets: [{ name: 'A-portable.zip', size: 10, browser_download_url: 'ge://a' }, { name: 'B.txt', size: 1, browser_download_url: 'ge://b' }] } },
+    ];
+    const m = await s.latest();
+    assert(m.version === '0.4.0', `应取更高版本，实际 ${m.version}`);
+    assert(m.assets.length === 1 && m.assets[0].url === 'gh://a', '旧版本同名资产不能覆盖新版本');
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {

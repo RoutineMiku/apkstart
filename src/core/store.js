@@ -80,6 +80,18 @@ const DEFAULT_SETTINGS = {
     // 拿不到时自动退回 dl.google.com 分组件下载。可在这里换成自建镜像地址。
     preferGithubRuntime: true,
     runtimePackUrl: '',
+    // GitHub 加速镜像前缀（可选）。国内直连 GitHub Releases 经常只有几十 KB/s，
+    // 填成 https://ghfast.top/ 之类的镜像前缀即可把 downloads 请求转过去。
+    // 留空 = 直连（也会先用 8 线程分块试，能跑满带宽）。
+    mirrorPrefix: '',
+    // 下载并发数：分块下载的连接数。默认 8，弱网/被限速时可调到 16。
+    downloadConnections: 8,
+    // 更新/下载的源选择。auto = 同时问 GitHub 与 Gitee、并对每个下载地址实测
+    // 128KB 速度，谁快用谁；也可以强制只走某一边（企业网络只放行一个域名时有用）。
+    sourcePreference: 'auto',
+    // 自动尝试公共 GitHub 加速镜像（ghfast / gh-proxy）。关掉后只用直连 + 自定义前缀。
+    // 这两个是第三方服务，只是转发公开的 release 文件，不涉及账号信息。
+    autoMirror: true,
   },
   sharedDir: path.join(os.homedir(), 'ApkStartShared'),
   deviceSharedDir: '/sdcard/ApkStartShared',

@@ -13,6 +13,8 @@ const store = require('./store');
 const doctor = require('./doctor');
 const { download, downloadAny, downloadAnyParallel, head } = require('./download');
 const { ZipArchive, ZipFile } = require('./zip');
+const { Sources } = require('./sources');
+const { cmpVer } = require('./version');
 
 const IS_WIN = process.platform === 'win32';
 
@@ -51,6 +53,10 @@ const SOURCES = {
   // 是同一个地方，出了问题也只需要在一个地方修。
   ghReleaseApi: 'https://api.github.com/repos/RoutineMiku/apkstart/releases',
   ghReleasePage: 'https://github.com/RoutineMiku/apkstart/releases',
+  // 同内容的 Gitee 镜像：国内直连 api.github.com 常常几十秒才响应，Gitee 一般几百毫秒。
+  // 两边都问一次，谁先给出「带运行时整包的最高版本」就用谁。
+  giteeReleaseApi: 'https://gitee.com/api/v5/repos/daily-miku/apkstart/releases',
+  giteeReleasePage: 'https://gitee.com/daily-miku/apkstart/releases',
 };
 
 /**
@@ -136,6 +142,12 @@ class Provisioner {
     this.appRoot = appRoot;
     this._hypervisor = null;
     this._cache = { adbVersion: '', qemuVersion: '' };
+    this._sources = new Sources(() => store.getSettings());
+  }
+
+  /** 双源/镜像的统一入口（测速缓存也在这里，多个组件共用一份） */
+  get sources() {
+    return this._sources;
   }
 
   /** 缓存指纹：引擎文件与加速驱动任一变化就换 key */
@@ -446,29 +458,49 @@ class Provisioner {
    * 解析「运行时整包」的下载地址。
    * 资产名约定：ApkStart-runtime-<tag>.zip（由 .github/workflows/release.yml 产出，
    * 内容就是 build/runtime 的那一套：emulator/ + platform-tools/ + aehd/ + system-images/）。
-   * 找最新的、且带这个资产的 release；找不到就抛错，让上层退回 Google 官方分组件下载。
+   * GitHub 与 Gitee 两边都扫一遍，取版本号最高的那个；找不到就抛错，让上层退回
+   * Google 官方分组件下载。
    */
   async resolveRuntimePack() {
     const custom = String(store.getSettings().runtime.runtimePackUrl || '').trim();
     if (custom) return { url: absUrl(custom), name: path.basename(custom.split('?')[0]), size: 0, tag: 'custom' };
     if (this._cache.pack) return this._cache.pack;
 
-    const list = await this._fetchJson(`${SOURCES.ghReleaseApi}?per_page=15`);
-    if (!Array.isArray(list)) throw new Error('无法读取 GitHub 发布列表（网络或限流）');
-    for (const rel of list) {
-      if (!rel || rel.draft) continue;
-      const hit = (rel.assets || []).find((a) => /^ApkStart-runtime-.*\.zip$/i.test(a.name || ''));
-      if (!hit) continue;
-      this._cache.pack = {
-        url: hit.browser_download_url,
-        name: hit.name,
-        size: hit.size || 0,
-        tag: String(rel.tag_name || '').replace(/^v/i, ''),
-        page: rel.html_url || SOURCES.ghReleasePage,
-      };
-      return this._cache.pack;
+    const pref = String(store.getSettings().runtime.sourcePreference || 'auto');
+    const apis = [];
+    if (pref !== 'gitee') apis.push({ api: SOURCES.ghReleaseApi, page: SOURCES.ghReleasePage, name: 'GitHub' });
+    if (pref !== 'github') apis.push({ api: SOURCES.giteeReleaseApi, page: SOURCES.giteeReleasePage, name: 'Gitee' });
+
+    // 并发问两边；任何一个失败都不影响另一个
+    const lists = await Promise.all(apis.map(async (a) => {
+      const j = await this._fetchJson(`${a.api}?per_page=15`).catch(() => null);
+      return { ...a, list: Array.isArray(j) ? j : null };
+    }));
+
+    const cands = [];
+    for (const item of lists) {
+      if (!item.list) continue;
+      for (const rel of item.list) {
+        if (!rel || rel.draft) continue;
+        const hit = (rel.assets || []).find((x) => /^ApkStart-runtime-.*\.zip$/i.test(x.name || ''));
+        if (!hit) continue;
+        cands.push({
+          url: hit.browser_download_url || hit.url,
+          name: hit.name,
+          size: hit.size || 0,
+          tag: String(rel.tag_name || rel.name || '').replace(/^v/i, ''),
+          page: rel.html_url || item.page,
+          from: item.name,
+        });
+      }
     }
-    throw new Error('GitHub 上还没有运行时整包');
+    if (!cands.length) {
+      const errs = lists.filter((x) => !x.list).map((x) => `${x.name} 不可达`).join('、');
+      throw new Error(`两个源上都没有运行时整包${errs ? `（${errs}）` : ''}`);
+    }
+    cands.sort((a, b) => cmpVer(b.tag, a.tag));
+    this._cache.pack = cands[0];
+    return this._cache.pack;
   }
 
   /**
@@ -481,14 +513,29 @@ class Provisioner {
     await this.guardDisk('runtime', p.root);
     const zip = path.join(p.tmp, 'runtime-pack.zip');
     const total = pack.size || 0;
+    const s = store.getSettings().runtime || {};
+    const conn = Math.max(1, Math.min(16, Number(s.downloadConnections) || 8));
 
-    onProgress({ stage: 'download', message: '从 GitHub 下载运行时（约 1.5 GB，只需一次）…', percent: 1 });
-    await download(pack.url, zip, {
+    onProgress({ stage: 'download', message: `正在挑选最快的下载源（${pack.from || 'GitHub'} · ${pack.tag}）…`, percent: 1 });
+    // 候选 = 源站 + 镜像前缀。先各下一个 128KB 实测速度再决定用哪个：
+    // 「按域名猜」在实测里经常错 —— 同一个地址上午 30KB/s、晚上 5MB/s。
+    const urls = await this.sources
+      .rank(this._downloadUrls(pack.url), { onProgress: (pp) => onProgress({ stage: 'download', message: pp.message, percent: 1 }) })
+      .catch(() => this._downloadUrls(pack.url));
+
+    onProgress({ stage: 'download', message: `下载运行时（约 1.5 GB，只需一次，${conn} 线程）…`, percent: 2 });
+    // 分块并行（8 线程）比单流快得多：GitHub 对单连接限速很常见，单流实测只有
+    // 一两百 KB/s，8 线程能跑满本地带宽。中途断掉会退回单流续传。
+    await downloadAnyParallel(urls, zip, {
+      connections: conn,
       onProgress: (pr) => {
         const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
+        const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
+        const sp = Number(pr.speed) > 0 ? ` · ${(pr.speed / 1048576).toFixed(2)} MB/s` : '';
+        const eta = Number(pr.eta) > 0 ? ` · 剩余约 ${Math.ceil(pr.eta / 60)} 分钟` : '';
         onProgress({
           stage: 'download',
-          message: `下载运行时 ${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`,
+          message: `下载运行时 ${mb}${sp}${eta}`,
           percent: Math.max(1, Math.min(90, Math.round(pct * 0.9))),
           speed: pr.speed,
         });
@@ -518,6 +565,15 @@ class Provisioner {
 
     onProgress({ stage: 'done', message: '运行时已就绪', percent: 100 });
     return { ok: true, name: pack.name, tag: pack.tag };
+  }
+
+  /**
+   * 下载地址候选：直连优先，其次镜像前缀。
+   * 走 Sources 统一处理，好处是「自动镜像（ghfast / gh-proxy）」与用户自定义前缀
+   * 只在一个地方维护，且能和多线程下载共用同一份测速缓存。
+   */
+  _downloadUrls(url) {
+    return this.sources.candidates(url);
   }
 
   async extractZip(zipPath, destDir, opts = {}) {
@@ -838,7 +894,7 @@ class Provisioner {
     const zip = path.join(p.tmp, 'emulator.zip');
     onProgress({ stage: 'download', message: '下载运行时引擎（约 440MB，走 Google 官方源）…', percent: 1 });
 
-    await downloadAnyParallel([url], zip, {
+    await downloadAnyParallel(this._downloadUrls(url), zip, {
       connections: 8,
       minChunk: 4 * 1024 * 1024,
       onProgress: (pr) => onProgress({
@@ -936,7 +992,7 @@ class Provisioner {
     const url = await this.resolvePlayUrl();
     const zip = path.join(p.tmp, 'play-sysimg.zip');
     onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（Android 14，约 1.5GB）…', percent: 1 });
-    await downloadAnyParallel([url], zip, {
+    await downloadAnyParallel(this._downloadUrls(url), zip, {
       connections: 8,
       minChunk: 4 * 1024 * 1024,
       onProgress: (pr) => onProgress({
@@ -978,7 +1034,7 @@ class Provisioner {
     await this.guardDisk('aehd', p.aehdDir);
     const zip = path.join(p.tmp, 'aehd.zip');
     onProgress({ stage: 'download', message: '下载 AEHD 驱动…', percent: 10 });
-    await downloadAnyParallel([SOURCES.aehdFallback], zip, { connections: 2 });
+    await downloadAnyParallel(this._downloadUrls(SOURCES.aehdFallback), zip, { connections: 2 });
     fs.mkdirSync(p.aehdDir, { recursive: true });
     await this.extractZip(zip, p.aehdDir);
     fs.rmSync(zip, { force: true });

@@ -363,6 +363,32 @@
           <label>空闲回收（分钟，0 = 不回收）</label>
           <input id="setIdle" type="number" min="0" step="1" />
         </div>
+        <div class="field">
+          <label>更新与下载源</label>
+          <select id="setSourcePref">
+            <option value="auto">自动选择较快的源（推荐）</option>
+            <option value="gitee">只用 Gitee（国内通常最快）</option>
+            <option value="github">只用 GitHub</option>
+          </select>
+          <span class="sub">「自动」会同时问 GitHub 与 Gitee 的最新版本，把每个下载地址都真下 256KB 测一次速度，再从最快的那个地址下载；其中一个源不通不影响更新。</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>自动尝试公共加速镜像</label>
+            <span class="sub">GitHub 直连太慢时，额外测速 ghfast.top / gh-proxy.com 这两个公开转发服务（只转发公开的发布文件，不涉及账号）。关掉后只用直连和你自己填的前缀。</span>
+          </div>
+          <input type="checkbox" id="setAutoMirror" class="switch" />
+        </div>
+        <div class="field">
+          <label>下载镜像前缀（可选，加速 GitHub）</label>
+          <input id="setMirrorPrefix" type="text" placeholder="例如 https://ghfast.top/" />
+          <span class="sub">填了就只用你填的前缀，不再尝试上面那两个公共镜像；留空则由「自动」逻辑决定。下载器会把它拼在真实地址前面。</span>
+        </div>
+        <div class="field">
+          <label>下载线程数（1–16，默认 8）</label>
+          <input id="setConnections" type="number" min="1" max="16" step="1" />
+          <span class="sub">大文件按块并行下载。默认 8 线程已经能跑满大多数家宽；网络稳定时可以试 16。</span>
+        </div>
         <div class="field switch-field">
           <div>
             <label>通用兼容镜像（自动管理）</label>

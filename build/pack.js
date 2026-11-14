@@ -40,6 +40,24 @@ console.log('复制 Electron 运行时…');
 copy(ELECTRON_DIST, OUT);
 fs.rmSync(path.join(OUT, 'resources', 'default_app.asar'), { force: true });
 
+// 1.1 语言包瘦身：Electron 自带 55 种语言，合计 41MB，我们只用中文界面。
+//     只留 zh-CN / zh-TW / en-US，其余删掉（-39MB，等于整包小 15%）。
+const KEEP_LOCALES = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak']);
+let localeSaved = 0;
+try {
+  const locDir = path.join(OUT, 'locales');
+  for (const f of fs.readdirSync(locDir)) {
+    if (KEEP_LOCALES.has(f)) continue;
+    localeSaved += (() => { try { return fs.statSync(path.join(locDir, f)).size; } catch (_) { return 0; } })();
+    fs.rmSync(path.join(locDir, f), { force: true });
+  }
+} catch (_) { /* 没有 locales 目录也不影响 */ }
+
+// 1.2 没人会点开的文件：更新日志、调试符号、部分无用的 pak（各自 0.1~9MB）
+for (const rel of ['LICENSES.chromium.html.bak', 'vk_swiftshader_icd.json.bak']) {
+  fs.rmSync(path.join(OUT, rel), { force: true });
+}
+
 // 2. 应用本体
 console.log('复制应用…');
 const appDir = path.join(OUT, 'resources', 'app');
@@ -51,8 +69,9 @@ for (const item of ['package.json', 'src', 'LICENSE']) {
 // 3. 可选目录
 // engine/ 下只有文档类内容随包分发；大体积运行时组件（emulator、system-images、
 // platform-tools、avd）由应用首次启动时自动从官方源下载，不进安装包。
+// tools/ 是开发期自检脚本（黑窗实测、测速），用户用不到，不再随包分发。
 const ENGINE_SKIP = new Set(['emulator', 'system-images', 'platform-tools', 'avd', 'aehd', '_dl', 'qemu']);
-for (const opt of ['tools', 'engine']) {
+for (const opt of ['engine']) {
   const src = path.join(ROOT, opt);
   if (!fs.existsSync(src)) continue;
   const dest = path.join(appDir, opt);
@@ -70,4 +89,17 @@ fs.renameSync(path.join(OUT, 'electron.exe'), path.join(OUT, 'ApkStart.exe'));
 const pkg = require(path.join(ROOT, 'package.json'));
 fs.writeFileSync(path.join(OUT, 'VERSION.txt'), `ApkStart ${pkg.version}\n构建时间：${new Date().toLocaleString('zh-CN')}\n`);
 
-console.log(`完成。运行 ${path.join(OUT, 'ApkStart.exe')} 即可使用。`);
+// 6. 体积报告：每次打包都打印，避免以后又悄悄变胖
+function dirSize(dir) {
+  let n = 0;
+  try {
+    for (const it of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, it.name);
+      n += it.isDirectory() ? dirSize(p) : fs.statSync(p).size;
+    }
+  } catch (_) { /* ignore */ }
+  return n;
+}
+const totalMB = dirSize(OUT) / 1048576;
+console.log(`完成。整包 ${totalMB.toFixed(0)} MB（语言包省了 ${(localeSaved / 1048576).toFixed(0)} MB）。`);
+console.log(`运行 ${path.join(OUT, 'ApkStart.exe')} 即可使用。`);

@@ -16,73 +16,14 @@
  */
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 const { spawn } = require('child_process');
-const { download } = require('./download');
+const { downloadAnyParallel } = require('./download');
 const { ZipFile } = require('./zip');
+const { cmpVer } = require('./version');
+const { Sources } = require('./sources');
 
 const OWNER = 'RoutineMiku';
 const REPO = 'apkstart';
-const API = `https://api.github.com/repos/${OWNER}/${REPO}`;
-
-/** v0.3.2 / 0.3.2-preview 归一化成可比较的数字数组 */
-function parseVer(v) {
-  return String(v || '')
-    .replace(/^v/i, '')
-    .split(/[.+-]/)
-    .map((x) => (/^\d+$/.test(x) ? Number(x) : x))
-    .filter((x) => x !== '');
-}
-
-function cmpVer(a, b) {
-  const A = parseVer(a);
-  const B = parseVer(b);
-  const n = Math.max(A.length, B.length);
-  for (let i = 0; i < n; i += 1) {
-    const x = A[i];
-    const y = B[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    if (typeof x === 'number' && typeof y === 'number') {
-      if (x !== y) return x < y ? -1 : 1;
-    } else {
-      const sx = String(x);
-      const sy = String(y);
-      if (sx !== sy) return sx < sy ? -1 : 1;
-    }
-  }
-  return 0;
-}
-
-function httpJson(url, timeout = 12000, redirect = 0) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, {
-      headers: {
-        'User-Agent': 'ApkStart-Updater',
-        Accept: 'application/vnd.github+json',
-      },
-      timeout,
-    }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirect < 3) {
-        res.resume();
-        httpJson(res.headers.location, timeout, redirect + 1).then(resolve, reject);
-        return;
-      }
-      let d = '';
-      res.setEncoding('utf8');
-      res.on('data', (c) => { d += c; if (d.length > 4 * 1024 * 1024) req.destroy(); });
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('GitHub 返回的不是 JSON')); }
-        } else {
-          reject(new Error(`GitHub ${res.statusCode}`));
-        }
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('连接 GitHub 超时')));
-    req.on('error', reject);
-  });
-}
 
 /** PowerShell 单引号字符串：内部的 ' 要写成 '' */
 function psq(s) {
@@ -101,6 +42,9 @@ class Updater {
     this.isPackaged = !!o.isPackaged;
     this.dataDir = o.dataDir;
     this.onProgress = o.onProgress || (() => {});
+    this.settings = typeof o.settings === 'function' ? o.settings : () => (o.settings || {});
+    // settings() 给 sources 用：决定「走 GitHub 还是 Gitee」「有没有镜像前缀」
+    this.sources = new Sources(this.settings);
     this.latest = null;
     this._last = null;
   }
@@ -118,20 +62,13 @@ class Updater {
     return path.join(this.dataDir, 'update');
   }
 
-  /** 拉取最新 release（含预发布兜底），并挑出与当前形态匹配的资产 */
+  /**
+   * 检查更新：GitHub / Gitee 并发问，取版本号更高的，资产取并集。
+   * 具体下载地址在 prepare() 里再做一次真实测速排序。
+   */
   async check() {
-    const rel = await httpJson(`${API}/releases/latest`).catch(async (e) => {
-      // 仓库只有预发布 / 尚未打正式 release 时 /latest 会 404
-      if (!/404/.test(e.message)) throw e;
-      const list = await httpJson(`${API}/releases?per_page=10`);
-      const first = (Array.isArray(list) ? list : []).find((r) => r && !r.draft);
-      if (!first) throw new Error('GitHub 上还没有任何发布版本');
-      return first;
-    });
-
-    const tag = String(rel.tag_name || rel.name || '');
-    const assets = Array.isArray(rel.assets) ? rel.assets : [];
-    const pick = (re) => assets.find((a) => re.test(String(a.name || '')));
+    const merged = await this.sources.latest();
+    const pick = (re) => merged.assets.find((a) => re.test(String(a.name || '')));
 
     const wantSetup = this.flavor === 'setup';
     const asset = wantSetup
@@ -139,16 +76,19 @@ class Updater {
       : (pick(/portable.*\.zip$/i) || pick(/win64.*\.zip$/i) || pick(/\.zip$/i));
 
     this.latest = {
-      version: tag.replace(/^v/i, ''),
-      tag,
-      name: rel.name || tag,
-      notes: rel.body || '',
-      htmlUrl: rel.html_url || `https://github.com/${OWNER}/${REPO}/releases`,
-      publishedAt: rel.published_at || '',
-      asset: asset ? { name: asset.name, size: asset.size, url: asset.browser_download_url } : null,
-      assets: assets.map((a) => ({ name: a.name, size: a.size, url: a.browser_download_url })),
+      version: merged.version,
+      tag: merged.tag,
+      name: merged.name,
+      notes: merged.notes,
+      htmlUrl: merged.htmlUrl,
+      publishedAt: merged.publishedAt,
+      asset: asset ? { name: asset.name, size: asset.size, url: asset.url, source: asset.source } : null,
+      assets: merged.assets,
+      // 两个源各自的最新版本 / 谁不可达，界面上可以如实显示「这次走的哪个源」
+      sources: merged.sources,
+      unreachable: merged.unreachable,
       flavor: this.flavor,
-      hasUpdate: cmpVer(tag, this.current) > 0,
+      hasUpdate: cmpVer(merged.tag, this.current) > 0,
       current: this.current,
       canAutoApply: !!asset,
     };
@@ -169,13 +109,22 @@ class Updater {
     const total = it.asset.size || 0;
 
     this.onProgress({ stage: 'download', percent: 1, message: `正在下载 ${it.asset.name}…` });
-    await download(it.asset.url, file, {
+    // 候选地址 = 源站 + 镜像前缀；先各下 128KB 实测速度，再拿最快的那个分块下载。
+    // 这是「GitHub 直连几十 KB/s、镜像能跑几 MB/s」时唯一靠谱的选路方式：
+    // 按域名猜没用，同一天不同时段差别很大。
+    const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
+    const cands = this.sources.candidates(it.asset);
+    const ranked = await this.sources.rank(cands, { onProgress: (p) => this.onProgress(p) }).catch(() => cands);
+    await downloadAnyParallel(ranked, file, {
+      connections: conns,
       onProgress: (pr) => {
         const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
+        const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
+        const sp = Number(pr.speed) > 0 ? ` · ${(pr.speed / 1048576).toFixed(2)} MB/s` : '';
         this.onProgress({
           stage: 'download',
           percent: Math.max(1, Math.min(99, pct)),
-          message: `下载中 ${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`,
+          message: `下载中 ${mb}${sp}`,
           speed: pr.speed,
         });
       },

@@ -520,8 +520,21 @@ function buildTray() {
 
 // ---------------- 核心动作 ----------------
 
+let installBusy = null;   // 正在安装的文件路径：双击 APK 连点会走 second-instance，不能并发装
+let lastInstallErr = { msg: '', at: 0 };
+
 async function runInstall(filePath) {
   showWindow();
+  // 同一个包正在装（用户连点了几次图标 / 拖了好几次）→ 只提示一次，别重复跑一遍安装
+  if (installBusy) {
+    if (installBusy === filePath) {
+      send('toast', { type: 'info', message: '这个 APK 正在安装中，请稍等…' });
+      return { ok: false, error: '正在安装中' };
+    }
+    send('toast', { type: 'info', message: '已有安装任务在进行，请等它装完。' });
+    return { ok: false, error: '已有安装任务在进行' };
+  }
+  installBusy = filePath;
   send('install:start', { file: filePath });
   try {
     const result = await installer.install(filePath, (p) => send('install:progress', p));
@@ -533,8 +546,18 @@ async function runInstall(filePath) {
   } catch (e) {
     send('install:error', { message: e.message });
     if (e.needsSetup) send('ui:navigate', 'setup');
-    notify('安装失败', e.message.slice(0, 120));
+    // 同一条错误 8 秒内只弹一次系统通知：连续重试时不会在右下角刷屏
+    const now = Date.now();
+    if (e.message !== lastInstallErr.msg || now - lastInstallErr.at > 8000) {
+      lastInstallErr = { msg: e.message, at: now };
+      // 窗口在前台时用户已经看到界面里的提示，不必再弹系统通知
+      if (!mainWindow || !mainWindow.isVisible() || mainWindow.isMinimized()) {
+        notify('安装失败', e.message.slice(0, 120));
+      }
+    }
     throw e;
+  } finally {
+    installBusy = null;
   }
 }
 
@@ -780,6 +803,15 @@ function registerIpc() {
       'mouseRightBack' in patch.engine || 'mouseWheelMode' in patch.engine || 'mouseSideButtons' in patch.engine
     )) {
       refreshPointerMapping();
+    }
+    // 换了更新源 / 镜像前缀：之前那套「谁最快」的结论不再成立，清掉测速缓存
+    if (patch && patch.runtime && (
+      'sourcePreference' in patch.runtime || 'mirrorPrefix' in patch.runtime || 'autoMirror' in patch.runtime
+    )) {
+      try {
+        updater?.sources?.reset();
+        runtime?.provisioner?.sources?.reset();
+      } catch (_) { /* ignore */ }
     }
     return next;
   });
@@ -1461,6 +1493,8 @@ if (!gotLock) {
       exePath: process.execPath,
       isPackaged: app.isPackaged,
       dataDir: store.DATA_DIR,
+      // 让更新器能读到「只走 GitHub / 只走 Gitee / 自动选快」和镜像前缀设置
+      settings: () => store.getSettings(),
       onProgress: (p) => send('update:progress', p),
     });
 
