@@ -316,6 +316,34 @@ function launcherInfo() {
   return { target: process.execPath, args: `"${APP_ROOT}"`, cwd: APP_ROOT };
 }
 
+/** 递归复制目录内容（best-effort，不删源；用于共享目录改路径时一次性搬迁旧文件） */
+function copyDirContents(src, dest) {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    try {
+      if (entry.isDirectory()) copyDirContents(s, d);
+      else fs.copyFileSync(s, d);
+    } catch (_) { /* 单文件失败不影响其余 */ }
+  }
+}
+
+/** 以管理员权限启用一个 Windows 可选功能（如 VirtualMachinePlatform / HypervisorPlatform） */
+function enableWindowsFeature(feature) {
+  return new Promise((resolve) => {
+    const inner = `Enable-WindowsOptionalFeature -Online -FeatureName '${feature}' -NoRestart -All`;
+    const ps = `Start-Process -FilePath powershell.exe -Verb RunAs -Wait `
+      + `-ArgumentList @('-NoProfile','-NonInteractive','-Command',${JSON.stringify(inner)})`;
+    const { spawn } = require('child_process');
+    const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    proc.on('exit', (code) => resolve({ ok: code === 0, restart: true, code }));
+    proc.on('error', () => resolve({ ok: false, error: '无法启动 PowerShell' }));
+  });
+}
+
 // ---------------- 主窗口 ----------------
 
 function createWindow({ show = true } = {}) {
@@ -453,6 +481,9 @@ async function runLaunch(pkg) {
   try {
     // 1) 先把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
     openAppWindow(pkg, '正在启动安卓运行时…');
+    // 开机阶段把模拟器主窗 + qemu 控制台黑窗藏起来，避免任何闪现（embed 完成后由
+    // appWin.embed() 调用 bootShow 解除隐藏）。失败（非 Windows/代理不可用）静默降级。
+    if (winAgent) winAgent.bootHide().catch(() => {});
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
 
     const r = await installer.launch(pkg, {
@@ -484,6 +515,8 @@ async function runLaunch(pkg) {
   } catch (e) {
     appLog(`launch failed ${pkg}: ${e && (e.stack || e.message)}`);
     try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
+    // 启动失败也要解除开机隐藏，避免模拟器被永久藏住（下次还能用）
+    if (winAgent) winAgent.bootShow().catch(() => {});
     showWindow();
     send('toast', { type: 'error', message: `启动失败：${e.message}` });
     return { ok: false, error: e.message };
@@ -534,6 +567,9 @@ function registerIpc() {
     isDev: IS_DEV,
     dataDir: store.DATA_DIR,
     runtimeDir: runtime.provisioner.paths().root,
+    diskFreeMB: (() => {
+      try { return require('./core/doctor').freeDiskMB(runtime.provisioner.paths().root); } catch (_) { return 0; }
+    })(),
     exe: process.execPath,
     packaged: app.isPackaged,
   }));
@@ -644,6 +680,24 @@ function registerIpc() {
     return next;
   });
 
+  /**
+   * 修改本机共享目录：把旧目录里已有的文件一次性迁到新目录（best-effort，不删旧文件），
+   * 再保存设置。Sharer 每次同步都动态读 store.getSettings().sharedDir，无需重启即可生效。
+   */
+  ipcMain.handle('settings:setSharedDir', async (_e, dir) => {
+    if (!dir || !dir.trim()) return { ok: false, error: '目录不能为空' };
+    const newDir = dir.trim();
+    const oldDir = store.getSettings().sharedDir;
+    try {
+      if (oldDir && oldDir !== newDir) copyDirContents(oldDir, newDir);
+      fs.mkdirSync(newDir, { recursive: true });
+      store.saveSettings({ sharedDir: newDir });
+      return { ok: true, oldDir, newDir };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   // ---------------- 显示模式 / 快捷方式 / 一键部署 ----------------
 
   ipcMain.handle('display:state', () => ({
@@ -709,6 +763,65 @@ function registerIpc() {
     const r = await runtime.diagnostics();
     shell.showItemInFolder(r.file);
     return r;
+  });
+
+  /**
+   * 系统问题自动校验：启动前/运行中自动检查常见导致「装不上、起不来」的根因，
+   * 并给出可操作的修复建议（在首页横幅 + 设置面板里展示，按问题一键修复）。
+   */
+  ipcMain.handle('doctor:selfCheck', async () => {
+    const doctor = require('./core/doctor');
+    const issues = [];
+    // 这两个值在 try 内赋值、在 try 外返回，必须在作用域外声明
+    let accel = { ok: false };
+    let free = 0;
+    try {
+      if (!doctor.vcRedistOk()) {
+        issues.push({
+          code: 'vcRedist', severity: 'error', title: '缺少 VC++ 运行库（x64）',
+          hint: '安卓运行时依赖微软 VC++ 2015-2022，缺失会导致模拟器无法启动（0xc0000135）。', fix: 'vcRedist',
+        });
+      }
+      accel = await runtime.provisioner.emulatorAccel().catch(() => ({ ok: false }));
+      if (!accel.ok) {
+        issues.push({
+          code: 'accel', severity: 'warn', title: '未启用硬件加速',
+          hint: (accel.note || '将回退软件模拟（能跑但很慢）。开启虚拟化后可获得最佳性能。'), fix: 'virtualization',
+        });
+      }
+      free = doctor.freeDiskMB(runtime.provisioner.paths().root);
+      if (free && free < 8192) {
+        issues.push({
+          code: 'disk', severity: free < 2048 ? 'error' : 'warn', title: '运行时磁盘空间紧张',
+          hint: `「${runtime.provisioner.paths().root}」所在盘仅剩 ${free} MB，运行时与镜像可能撑爆硬盘。`, fix: 'disk',
+        });
+      }
+      const rtDir = runtime.provisioner.paths().root;
+      if (!doctor.isAsciiPath(rtDir)) {
+        issues.push({
+          code: 'pathRuntime', severity: 'warn', title: '运行时目录含中文/特殊字符',
+          hint: '部分运行时组件对中文路径敏感，可能引发启动失败。建议改到纯英文目录。', fix: 'path',
+        });
+      }
+      const env = await runtime.provisioner.checkEnv().catch(() => ({}));
+      if (!env.adb || !env.adb.ok) {
+        issues.push({ code: 'adb', severity: 'error', title: 'adb 工具链缺失', hint: '无法连接安卓运行时。', fix: 'deploy' });
+      }
+      if (!env.emulator || !env.emulator.ok) {
+        issues.push({ code: 'emulator', severity: 'error', title: '运行时引擎未安装', hint: '需要先部署运行时引擎（约 440MB）。', fix: 'deploy' });
+      }
+      if (!env.sysimg || !env.sysimg.ok) {
+        issues.push({ code: 'sysimg', severity: 'warn', title: '系统镜像未就绪', hint: '需要先下载 Android 系统镜像（约 1.5GB）。', fix: 'deploy' });
+      }
+      // 残留锁文件：会让下一次启动被判定为「AVD 已被占用」而 FATAL
+      const avdHome = runtime.provisioner.paths().avdHome;
+      let locked = false;
+      try { for (const f of fs.readdirSync(avdHome)) { if (/\.lock$/i.test(f)) { locked = true; break; } } } catch (_) { /* ignore */ }
+      if (locked) {
+        issues.push({ code: 'lock', severity: 'warn', title: '检测到上次残留的锁文件', hint: '可能导致下一次启动被判定为「AVD 已被占用」。', fix: 'lock' });
+      }
+    } catch (_) { /* 自检失败不阻断使用 */ }
+    return { issues, accel, free };
   });
 
   // 微软 VC++ 2015-2022 x64 运行库：安卓模拟器（Qt6）与 qemu 都依赖它。
@@ -839,6 +952,56 @@ function registerIpc() {
     }
   });
 
+  /**
+   * 自动开启虚拟化：用户无需手动去「Windows 功能」面板。
+   * 优先启用系统自带的「虚拟机平台」（WHPX）功能；若该 DLL 都不存在（老系统），
+   * 退而安装并启用 Google 的 AEHD 驱动。两种方式都需要管理员提权。
+   */
+  ipcMain.handle('provision:enableVirtualization', async () => {
+    try {
+      const accel = await runtime.provisioner.emulatorAccel();
+      if (accel.ok) return { ok: true, already: true, accel, note: '硬件加速已可用，无需额外操作' };
+
+      const hv = await runtime.provisioner.hypervisor();
+      if (hv.dll) {
+        // 系统带 WinHvPlatform.dll：开启「虚拟机平台」功能（可能需要重启）
+        const r = await enableWindowsFeature('VirtualMachinePlatform');
+        const r2 = await enableWindowsFeature('HypervisorPlatform').catch(() => ({ ok: false }));
+        const ok = r.ok || r2.ok;
+        const after = await runtime.provisioner.emulatorAccel();
+        return {
+          ok,
+          restartNeeded: r.restart || r2.restart,
+          accel: after,
+          note: ok
+            ? (r.restart ? '已开启「虚拟机平台」，请重启电脑后获得最佳性能' : '「虚拟机平台」已开启，硬件加速即时生效')
+            : (r.error || r2.error || '无法开启系统虚拟化功能'),
+        };
+      }
+
+      // 没有 WHPX 组件：改用 AEHD 驱动（Google 自家，装完即用）
+      const ae = await runtime.provisioner.installAehd(
+        (x) => send('provision:progress', { ...x, component: 'aehd' }),
+      ).catch((e) => ({ ok: false, error: e.message }));
+      if (!ae.ok) return { ok: false, error: ae.error || 'AEHD 驱动包准备失败' };
+      const bat = path.join(runtime.provisioner.paths().aehdDir, 'silent_install.bat');
+      await new Promise((resolve, reject) => {
+        const { spawn: sp } = require('child_process');
+        const esc = bat.replace(/'/g, "''");
+        const ps = `try { $p = Start-Process -FilePath '${esc}' -WorkingDirectory '${path.dirname(bat).replace(/'/g, "''")}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit 2 }`;
+        const proc = sp('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true });
+        proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(
+          code === 2 ? '已取消管理员授权（需要点「是」才能安装驱动）' : `驱动安装失败（退出码 ${code}）`,
+        ))));
+        proc.on('error', (e) => reject(e));
+      });
+      const after = await runtime.provisioner.emulatorAccel();
+      return { ok: after.ok, accel: after, note: after.ok ? 'AEHD 硬件加速已启用' : after.note };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('provision:installAdb', async () => {
     try {
       const r = await runtime.provisioner.installAdb((p) => send('provision:progress', { ...p, component: 'adb' }));
@@ -962,6 +1125,48 @@ function registerIpc() {
     const dir = store.getSettings().sharedDir;
     fs.mkdirSync(dir, { recursive: true });
     shell.openPath(dir);
+  });
+
+  /** 清理上次残留的 AVD 锁文件：会让下次启动被误判为「AVD 已被占用」而 FATAL */
+  ipcMain.handle('app:clearLocks', async () => {
+    try {
+      const avdHome = runtime.provisioner.paths().avdHome;
+      let removed = 0;
+      for (const f of fs.readdirSync(avdHome)) {
+        if (/\.lock$/i.test(f)) {
+          try { fs.rmSync(path.join(avdHome, f), { force: true }); removed++; } catch (_) { /* ignore */ }
+        }
+      }
+      return { ok: true, removed };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /**
+   * 一键卸载 ApkStart 本体：
+   * 1) 先取消 .apk 文件关联（避免卸载后双击 APK 指向已删除的程序）
+   * 2) 安装版：启动 NSIS 卸载程序（它会自行请求管理员/确认），随后退出本程序
+   * 3) 便携版（旁加载 / 免安装）：没有 uninstaller.exe，返回提示让用户手动删除程序与数据目录
+   */
+  ipcMain.handle('app:removeSelf', async () => {
+    try {
+      try { await assoc.unregisterAssociation(); } catch (_) { /* 取消关联失败不影响卸载 */ }
+      const exeDir = path.dirname(process.execPath);
+      const uninstaller = path.join(exeDir, 'uninstaller.exe');
+      if (!fs.existsSync(uninstaller)) {
+        return { ok: true, portable: true, dataDir: store.DATA_DIR, exeDir };
+      }
+      const { spawn } = require('child_process');
+      // 先让本程序退出，再由一个独立进程延迟 2 秒拉起卸载器：
+      // 运行中的 exe 会锁住安装目录里的文件，直接拉起卸载器容易删不干净。
+      const cmd = `ping 127.0.0.1 -n 3 >nul & start "" "${uninstaller}"`;
+      spawn('cmd.exe', ['/c', cmd], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      setTimeout(() => app.quit(), 300);
+      return { ok: true, portable: false };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   ipcMain.handle('shell:open', (_e, url) => shell.openExternal(url));

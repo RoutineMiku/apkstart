@@ -100,6 +100,9 @@ public class ApkAgent
     static readonly ConcurrentQueue<string> _events = new ConcurrentQueue<string>();
     static long _lastToolSweep = 0;
     static long _embedAt = 0;
+    // 开机隐藏：把模拟器主窗口 + 工具栏 + qemu 控制台黑窗一起压住，直到 embed 完成
+    static volatile bool _bootHide = false;
+    static long _bootHideSweep = 0;
 
     // Hook options. All three default to OFF: an "hook on" without options must
     // never swallow anybody's clicks. JS sends the real config on every enable.
@@ -163,6 +166,37 @@ public class ApkAgent
             ShowWindow(h, 0);
             return true;
         }, IntPtr.Zero);
+    }
+
+    // 开机阶段：把 qemu / emulator 的黑色控制台窗口藏起来，避免「命令窗口」闪现。
+    // 它们是 console 子系统进程，Node 的 windowsHide 覆盖不到子进程，只能靠 Win32 周期压住。
+    static void HideConsoleWindows()
+    {
+        var pids = new System.Collections.Generic.HashSet<uint>();
+        try {
+            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
+            foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
+        } catch { }
+        if (pids.Count == 0) return;
+        EnumWindows(delegate(IntPtr h, IntPtr p)
+        {
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (!pids.Contains(pid)) return true;
+            // 只藏控制台窗口（ConsoleWindowClass），绝不动 Qt 画面窗口（QWindowIcon）
+            if (ClassOf(h).IndexOf("ConsoleWindowClass", StringComparison.Ordinal) >= 0)
+                ShowWindow(h, 0);
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    // 开机隐藏扫描：周期性把模拟器主窗口 + 工具栏 + 控制台黑窗一起压住
+    static void BootHideSweep()
+    {
+        IntPtr e = _emu != IntPtr.Zero ? _emu : FindEmulator();
+        if (e != IntPtr.Zero && IsWindowVisible(e)) ShowWindow(e, 0);
+        HideToolWindows();
+        HideConsoleWindows();
     }
 
     // ------------------------------------------------------------------ embed / detach
@@ -505,6 +539,13 @@ public class ApkAgent
             }
             if (_embedAt != 0 && now - _embedAt >= 8000) _embedAt = 0;
 
+            // 开机阶段周期性隐藏模拟器主窗 + 工具栏 + qemu 控制台黑窗，避免任何闪现
+            if (_bootHide && now - _bootHideSweep > 300)
+            {
+                _bootHideSweep = now;
+                BootHideSweep();
+            }
+
             try
             {
                 // Short poll: keep the message pump responsive even when no command
@@ -576,6 +617,23 @@ public class ApkAgent
                         RECT r = new RECT();
                         if (e != IntPtr.Zero) GetWindowRect(e, out r);
                         Reply(sock, "{\"ok\":true,\"emu\":" + e.ToInt64() + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T) + "}");
+                    }
+                    else if (cmd == "boothide")
+                    {
+                        if (L(line, "on") == 1)
+                        {
+                            _bootHide = true;
+                            _bootHideSweep = 0;
+                            BootHideSweep();
+                        }
+                        else
+                        {
+                            _bootHide = false;
+                            // embed 完成后 _emu 已经就位，Fit 已把它显示出来；
+                            // 这里只确保 qemu 控制台黑窗被永久藏好（不再闪现命令窗口）
+                            HideConsoleWindows();
+                        }
+                        Reply(sock, "{\"ok\":true}");
                     }
                     else if (cmd == "quit")
                     {

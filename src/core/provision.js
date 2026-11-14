@@ -10,6 +10,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const store = require('./store');
+const doctor = require('./doctor');
 const { download, downloadAny, downloadAnyParallel, head } = require('./download');
 const { ZipArchive, ZipFile } = require('./zip');
 
@@ -156,6 +157,30 @@ class Provisioner {
       fs.mkdirSync(d, { recursive: true });
     }
     return p;
+  }
+
+  /**
+   * 磁盘守卫：在下载 / 解压一份大体积组件之前，先确认目标盘有足够可用空间。
+   * 否则会下到一半把系统盘撑爆，或解压阶段直接失败（且残留半截文件）。
+   * 预留 1GB 缓冲：模拟器/镜像解压后还有快照、用户数据分区会持续膨胀。
+   * @param {string} component 组件名（决定所需空间估算）
+   * @param {string} targetDir 写入目录（据此定位所在盘）
+   */
+  async guardDisk(component, targetDir) {
+    const need = {
+      adb: 64, emulator: 600, sysimg: 1800, playimg: 1800, qemu: 320, iso: 1100, aehd: 64,
+    }[component] || 512; // MB
+    const buf = 1024; // 额外预留 1GB（快照 / 数据分区 / 解压中间文件）
+    const dir = targetDir || this.root;
+    const free = doctor.freeDiskMB(dir);
+    if (free && free < need + buf) {
+      throw new Error(
+        `目标磁盘空间不足：该组件约需 ${need + buf} MB，但「${dir}」所在盘仅剩 ${free} MB。\n`
+        + '建议：把「运行时数据目录」改到空间更大的盘（设置 → 系统集成 → 运行时数据目录 → 浏览），'
+        + '或先清理磁盘 / 卸载不用的应用后再试。',
+      );
+    }
+    return free;
   }
 
   // ---------------- 环境检查 ----------------
@@ -309,6 +334,7 @@ class Provisioner {
 
   async installAdb(onProgress = () => {}) {
     const p = this.ensureDirs();
+    await this.guardDisk('adb', p.root);
     const zipPath = path.join(p.tmp, 'platform-tools.zip');
     onProgress({ stage: 'download', message: '下载 Android platform-tools（约 8MB）…', percent: 2 });
 
@@ -605,6 +631,11 @@ class Provisioner {
     if (usable) {
       const kind = hasAehdFile && /aehd/i.test(text) ? 'aehd' : 'whpx';
       result = { ok: true, kind, note: kind === 'whpx' ? 'WHPX 硬件加速已启用' : 'AEHD 硬件加速已启用' };
+    } else if (/can't find the emulator-check|corrupted tools installation/i.test(text) && hasAehdFile) {
+      // 部分精简运行时包会漏掉 emulator-check.exe，导致 -accel-check 无法给出结论。
+      // 此时只要 AEHD 驱动已安装，就按「可用」处理：启动时 emulator 自己会挂载驱动，
+      // 避免被误判成无加速而强行 -accel off（软件模拟在部分机器上会直接崩溃）。
+      result = { ok: true, kind: 'aehd', note: 'AEHD 硬件加速已启用（emulator-check 缺失，按驱动判定）' };
     } else if (hasAehdFile && /aehd/i.test(text) && !/ERROR_ACCESS_DENIED/i.test(text)) {
       result = { ok: true, kind: 'aehd', note: 'AEHD 硬件加速已启用' };
     } else if (hv.dll && /whpx/i.test(text) && !/error|denied/i.test(text)) {
@@ -627,6 +658,7 @@ class Provisioner {
   /** 下载并安装 emulator（zip 顶层就是 emulator/，直接解到 SDK root） */
   async installEmulator(onProgress = () => {}) {
     const p = this.ensureDirs();
+    await this.guardDisk('emulator', p.root);
     const url = await this.resolveEmulatorUrl();
     const zip = path.join(p.tmp, 'emulator.zip');
     onProgress({ stage: 'download', message: '下载运行时引擎（约 440MB，走 Google 官方源）…', percent: 1 });
@@ -725,6 +757,7 @@ class Provisioner {
   /** 下载并安装 ARM 兼容镜像（Google Play 版，约 1.5GB） */
   async installPlayImage(onProgress = () => {}) {
     const p = this.ensureDirs();
+    await this.guardDisk('playimg', p.sysImgRoot);
     const url = await this.resolvePlayUrl();
     const zip = path.join(p.tmp, 'play-sysimg.zip');
     onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（Android 14，约 1.5GB）…', percent: 1 });
@@ -767,6 +800,7 @@ class Provisioner {
   /** 下载 AEHD 驱动（小文件）；安装需要管理员权限，交给引导流程 */
   async installAehd(onProgress = () => {}) {
     const p = this.ensureDirs();
+    await this.guardDisk('aehd', p.aehdDir);
     const zip = path.join(p.tmp, 'aehd.zip');
     onProgress({ stage: 'download', message: '下载 AEHD 驱动…', percent: 10 });
     await downloadAnyParallel([SOURCES.aehdFallback], zip, { connections: 2 });
@@ -809,6 +843,7 @@ class Provisioner {
 
   async installQemu(onProgress = () => {}) {
     const p = this.ensureDirs();
+    await this.guardDisk('qemu', p.root);
     const setup = path.join(p.tmp, 'qemu-setup.exe');
 
     onProgress({ stage: 'resolve', message: '查找最新 QEMU 版本…', percent: 1 });
@@ -854,6 +889,7 @@ class Provisioner {
     const p = this.ensureDirs();
     const s = store.getSettings();
     const dest = s.runtime.isoPath || p.iso;
+    await this.guardDisk('iso', path.dirname(dest));
     const custom = s.runtime.isoUrl && s.runtime.isoUrl.trim();
     const urls = custom ? [custom, ...SOURCES.iso] : SOURCES.iso;
 

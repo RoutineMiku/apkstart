@@ -52,7 +52,12 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   displayLanguageSelector: false
-  createDesktopShortcut: true
+  # always：即使桌面上已有同名 .lnk 也重建一次。
+  # 默认的 true 只在「不存在」时才创建，某些机器上（安全软件拦截、桌面被
+  # OneDrive 重定向、旧版残留了指向已删目录的坏快捷方式）会出现装完没图标，
+  # 或者图标还指着旧 exe。always 保证每次安装后都指向当前安装目录。
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
   artifactName: ApkStart-${version}-Setup.exe
   # 卸载前先结束仍在运行的运行时进程，避免文件被锁导致无法删除
   # （火绒等粉碎工具删不掉，多半是 qemu/adb 进程还驻留）。

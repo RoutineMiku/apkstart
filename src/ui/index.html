@@ -40,6 +40,9 @@
     </div>
   </section>
 
+  <!-- 环境自检横幅：自动检测常见问题并给出一键修复 -->
+  <div id="envCheck" class="env-check" hidden></div>
+
   <section class="content" id="content">
     <div class="grid" id="grid"></div>
     <div class="empty" id="empty">
@@ -419,6 +422,10 @@
           <label>快捷方式目录</label>
           <input id="setShortcutDir" type="text" placeholder="留空 = 桌面" />
         </div>
+        <div class="runtime-actions">
+          <button class="btn ghost sm" id="btnRebuildShortcuts">重建快捷方式</button>
+          <span class="inline-note">桌面图标被误删或被安全软件拦掉时，点这里按当前设置全部补齐。</span>
+        </div>
       </div>
 
       <div class="group">
@@ -427,8 +434,11 @@
           <label>本机共享目录</label>
           <div class="row">
             <input id="setSharedDir" type="text" />
+            <button class="btn ghost sm" id="btnBrowseShared">浏览</button>
             <button class="btn ghost sm" id="btnOpenShared">打开</button>
+            <button class="btn primary sm" id="btnSaveShared">保存并迁移</button>
           </div>
+          <span class="sub">修改后旧目录里已有的文件会自动搬到新目录；正在运行的文件互通不受影响。</span>
         </div>
         <div class="field">
           <label>安卓内对应目录</label>
@@ -454,6 +464,13 @@
             <button class="btn ghost sm" id="btnOpenData">打开</button>
           </div>
           <span class="sub">这里占用空间最大（数 GB）。改到非系统盘可大幅减轻 C 盘压力；修改后需重启软件，已存在的数据不会自动搬移（请手动复制后删除旧目录）。</span>
+        </div>
+        <div class="field">
+          <label>卸载 ApkStart</label>
+          <div class="row">
+            <button class="btn ghost sm" id="btnUninstall">一键卸载</button>
+            <span class="inline-note">卸载会取消 .apk 关联并移除程序；便携版请按提示手动删除目录。</span>
+          </div>
         </div>
       </div>
       <div class="group" id="aboutGroup">

@@ -134,12 +134,21 @@ async function iconToIco(raw, { decode } = {}) {
 
 /**
  * 生成桌面快捷方式
+ *
+ * writeShortcutLink 返回 true 并不代表文件真的落盘了：安全软件拦截、
+ * 桌面目录被重定向到未登录的网盘时都可能「成功但没文件」。所以写完必须
+ * 回读一次，保证调用方拿到的路径是真实存在的入口。
+ *
  * @param {object} opt { shortcutPath, target, args, iconIcoPath, description, cwd }
  */
 function writeShortcut(opt) {
   const { shell } = require('electron');
   const dir = path.dirname(opt.shortcutPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    throw new Error(`快捷方式目录不可写：${dir}（${e.message}）`);
+  }
   if (fs.existsSync(opt.shortcutPath)) {
     try { fs.unlinkSync(opt.shortcutPath); } catch (_) { /* ignore */ }
   }
@@ -153,6 +162,9 @@ function writeShortcut(opt) {
     appUserModelId: opt.appUserModelId,
   });
   if (!ok) throw new Error('创建快捷方式失败（writeShortcutLink 返回 false）');
+  if (!fs.existsSync(opt.shortcutPath)) {
+    throw new Error(`快捷方式未落盘：${opt.shortcutPath}`);
+  }
   return opt.shortcutPath;
 }
 

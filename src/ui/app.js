@@ -347,6 +347,7 @@ async function deployAll() {
   } finally {
     setStepBusy('all', false);
     await refreshStatus();
+    selfCheck();
   }
 }
 
@@ -725,7 +726,6 @@ function bindSettings() {
   $('setAutoShortcut').addEventListener('change', (e) => save({ createShortcutOnInstall: e.target.checked }));
   $('setStartMenuShortcut').addEventListener('change', (e) => save({ createStartMenuShortcut: e.target.checked }));
   $('setShortcutDir').addEventListener('change', (e) => save({ shortcutDir: e.target.value.trim() }));
-  $('setSharedDir').addEventListener('change', (e) => save({ sharedDir: e.target.value.trim() }));
   $('setDeviceSharedDir').addEventListener('change', (e) => save({ deviceSharedDir: e.target.value.trim() }));
   $('setAutoStart').addEventListener('change', (e) => save({ autoStart: e.target.checked }));
   $('setDisplayMode').addEventListener('change', async (e) => {
@@ -782,6 +782,67 @@ function bindSettings() {
   });
 
   $('btnOpenShared').addEventListener('click', () => api.openSharedDir());
+
+  // 重建快捷方式：桌面图标被误删 / 被安全软件拦掉时的兜底入口
+  $('btnRebuildShortcuts').addEventListener('click', async () => {
+    const btn = $('btnRebuildShortcuts');
+    btn.disabled = true;
+    try {
+      const r = await api.rebuildShortcuts().catch(() => ({ ok: false }));
+      const fixed = (r && r.fixed) || [];
+      toast(fixed.length
+        ? { title: '快捷方式已重建', body: fixed.join('、'), type: 'ok' }
+        : { title: '快捷方式都在', body: '没有需要重建的入口', type: 'info' });
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // 共享目录：先浏览选目录，再「保存并迁移」把旧文件一次性搬到新目录
+  $('btnBrowseShared').addEventListener('click', async () => {
+    const picked = await api.openDir();
+    if (!picked) return;
+    $('setSharedDir').value = picked;
+    toast({ title: '已选新目录', body: '点「保存并迁移」把旧文件搬过去', type: 'info' });
+  });
+  $('btnSaveShared').addEventListener('click', async () => {
+    const dir = $('setSharedDir').value.trim();
+    if (!dir) { toast({ title: '请先填写或浏览目录', type: 'error' }); return; }
+    const btn = $('btnSaveShared');
+    btn.disabled = true;
+    const r = await api.setSharedDir(dir).catch(() => ({ ok: false }));
+    btn.disabled = false;
+    if (r.ok) {
+      const moved = r.oldDir && r.oldDir !== r.newDir;
+      toast({ title: '共享目录已更新', body: moved ? '旧目录里已有的文件已迁移到新目录' : '已保存', type: 'ok' });
+    } else {
+      toast({ title: '保存失败', body: r.error, type: 'error' });
+    }
+  });
+
+  // 一键卸载 ApkStart 本体（取消 .apk 关联 + 启动卸载程序；便携版手动删除）
+  $('btnUninstall').addEventListener('click', async () => {
+    const ok = window.confirm('确定卸载 ApkStart？\n\n将取消 .apk 文件关联并移除程序。此操作不可撤销。');
+    if (!ok) return;
+    const btn = $('btnUninstall');
+    btn.disabled = true;
+    const r = await api.removeSelf().catch(() => ({ ok: false }));
+    if (r.ok && r.portable) {
+      btn.disabled = false;
+      toast({
+        title: '便携版无法自动卸载',
+        body: `请手动删除程序目录（${r.exeDir}）与数据目录（${r.dataDir}）`,
+        type: 'info', sticky: true,
+      });
+      return;
+    }
+    if (!r.ok) {
+      btn.disabled = false;
+      toast({ title: '卸载失败', body: r.error, type: 'error' });
+      return;
+    }
+    toast({ title: '正在卸载…', body: '卸载程序已启动，ApkStart 即将退出', type: 'ok', sticky: true });
+  });
 
   // ARM 兼容镜像下载（带进度 toast）
   $('btnInstallPlay').addEventListener('click', async () => {
@@ -1069,8 +1130,10 @@ async function init() {
   await refreshApps();
   refreshAndroid();
   checkVcRedist();
+  selfCheck();
   setInterval(refreshStatus, 6000);
   setInterval(refreshApps, 15000);
+  setInterval(selfCheck, 60000);
 }
 
 // VC++ 运行库检测：缺失时显示横幅，提供一键提权安装
@@ -1084,6 +1147,138 @@ async function checkVcRedist() {
     warn._hasInstaller = !!r.path;
     document.getElementById('btnInstallVcRedist').disabled = !r.path;
   } catch (_) { /* 检测失败不阻断主流程 */ }
+}
+
+/* ---------------- 环境自检 ---------------- */
+
+let envBusy = false;
+
+/** 拉取 doctor:selfCheck 并渲染横幅；VC++ 由独立横幅负责，这里不再重复列出 */
+async function selfCheck() {
+  if (envBusy) return;
+  envBusy = true;
+  try {
+    const r = await api.selfCheck().catch(() => null);
+    if (r) renderEnvCheck(r);
+  } catch (_) { /* 自检失败不阻断主流程 */ }
+  finally { envBusy = false; }
+}
+
+function renderEnvCheck(r) {
+  const box = $('envCheck');
+  if (!box) return;
+  // 首次部署向导本身已在补齐组件，此时不再重复列出「组件缺失」类问题
+  const setupVisible = !$('setupView').hidden;
+  const issues = (r.issues || []).filter((i) =>
+    i.code !== 'vcRedist' && !(setupVisible && i.fix === 'deploy'));
+  if (!issues.length) {
+    if (setupVisible) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `
+      <div class="env-check-ok">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+        <span>环境自检通过，没有发现会影响运行的问题。</span>
+        <span style="flex:1"></span>
+        <button class="btn ghost sm" id="btnEnvRecheck">重新检查</button>
+      </div>`;
+    const re = $('btnEnvRecheck');
+    if (re) re.addEventListener('click', selfCheck);
+    return;
+  }
+  const errs = issues.filter((i) => i.severity === 'error').length;
+  const warns = issues.length - errs;
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="env-check-head">
+      <span class="ec-title">环境自检</span>
+      ${errs ? `<span class="ec-count">${errs} 个严重</span>` : ''}
+      ${warns ? `<span class="ec-count warn">${warns} 个提示</span>` : ''}
+      <span class="ec-spacer"></span>
+      <button class="btn ghost sm" id="btnEnvRecheck">重新检查</button>
+      <button class="btn primary sm" id="btnEnvFixAll">一键修复全部</button>
+    </div>
+    <div class="env-check-list">
+      ${issues.map((i) => `
+        <div class="env-check-item ${i.severity}">
+          <span class="ec-sev"></span>
+          <div class="ec-body">
+            <div class="ec-name">${esc(i.title)}</div>
+            <div class="ec-hint">${esc(i.hint || '')}</div>
+          </div>
+          ${i.fix ? `<button class="ec-fix" data-code="${esc(i.code)}">修复</button>` : ''}
+        </div>`).join('')}
+    </div>`;
+  const re = $('btnEnvRecheck');
+  if (re) re.addEventListener('click', selfCheck);
+  const fixAll = $('btnEnvFixAll');
+  if (fixAll) fixAll.addEventListener('click', () => fixAllIssues(issues));
+  box.querySelectorAll('.ec-fix').forEach((b) => {
+    b.addEventListener('click', () => {
+      const issue = issues.find((x) => x.code === b.dataset.code);
+      if (issue) fixIssue(issue);
+    });
+  });
+}
+
+async function fixIssue(issue) {
+  switch (issue.fix) {
+    case 'vcRedist': {
+      const r = await api.installVcRedist().catch(() => ({ ok: false }));
+      toast(r.ok
+        ? { title: 'VC++ 运行库已安装', type: 'ok' }
+        : { title: '安装未完成', body: r.error || (r.reason === 'no-installer' ? '安装包缺失，请重新部署后再试' : '请重试'), type: 'error' });
+      break;
+    }
+    case 'virtualization': {
+      const t = toast({ title: '正在开启硬件加速…', body: '请在弹出的窗口点「是」', sticky: true, spinner: true });
+      const r = await api.enableVirtualization().catch(() => ({ ok: false }));
+      if (r.ok) {
+        t.update({ title: '硬件加速已启用', body: r.restartNeeded ? '请重启电脑以获得最佳性能' : (r.note || ''), type: 'ok' });
+        setTimeout(t.dismiss, 3200);
+      } else {
+        t.update({ title: '未能开启', body: r.error || '请重试', type: 'error', sticky: true });
+      }
+      break;
+    }
+    case 'disk': {
+      // 主进程会弹出原生确认框（含可释放空间预览），这里不再重复 confirm
+      const r = await api.runtimeCleanup({ apply: true }).catch(() => null);
+      if (!r) { toast({ title: '清理失败', body: '请重试', type: 'error' }); break; }
+      if (r.cancelled) break;
+      toast({ title: '清理完成', body: `释放约 ${((r.saved || 0) / 1048576).toFixed(0)} MB`, type: 'ok' });
+      break;
+    }
+    case 'path': {
+      toast({ title: '建议改到纯英文目录', body: '在 设置 → 系统集成 里修改「运行时数据目录」，再重启软件。', type: 'info', sticky: true });
+      openSettings();
+      break;
+    }
+    case 'deploy': {
+      toast({ title: '正在补齐缺失的运行时组件…', type: 'info', sticky: true, spinner: true });
+      await deployAll();
+      break;
+    }
+    case 'lock': {
+      const r = await api.clearLocks().catch(() => ({ ok: false }));
+      toast(r.ok ? { title: '已清理残留锁文件', type: 'ok' } : { title: '清理失败', body: r.error, type: 'error' });
+      break;
+    }
+    default:
+      toast({ title: '暂不支持自动修复', body: issue.hint || '', type: 'info' });
+  }
+  // 修复后重新自检，刷新横幅与状态
+  setTimeout(selfCheck, 600);
+  setTimeout(refreshStatus, 600);
+}
+
+async function fixAllIssues(issues) {
+  const fixable = issues.filter((i) => i.fix);
+  for (const i of fixable) {
+    // eslint-disable-next-line no-await-in-loop
+    await fixIssue(i);
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((res) => setTimeout(res, 500));
+  }
 }
 
 init().catch((e) => {

@@ -209,6 +209,10 @@ class AppWindow {
     const hwnd = this._hwnd();
     if (!hwnd) return false;
     const r = await this.agent.embed(hwnd, this._rect()).catch(() => null);
+    if (r && r.ok) {
+      // 嵌入完成后停止「开机隐藏」，让画面显出来（同时把 qemu 控制台黑窗永久藏好）
+      await this.agent.bootShow().catch(() => {});
+    }
     return !!(r && r.ok);
   }
 

@@ -161,6 +161,23 @@ class WinAgent extends EventEmitter {
   async probe() { return this.call({ cmd: 'probe' }, 4000); }
 
   /**
+   * 开机阶段把模拟器窗口（QWindowIcon 主帧缓冲）+ 它的工具栏（QWindowTool）
+   * + qemu 的黑色控制台窗口全部藏起来，直到 embed 完成才显示。
+   * 这是「彻底隐藏命令窗口 / 模拟器浮窗」的关键：emulator 拉起 detached 的
+   * qemu 控制台子进程，Node 的 windowsHide 覆盖不到它；只能由窗口代理周期性
+   * 用 ShowWindow(SW_HIDE) 压住。启动即调用，boot 期间每帧都压一次，
+   * 避免任何闪现。失败（非 Windows / 代理不可用）时静默降级，不阻断启动。
+   */
+  async bootHide() {
+    return this.call({ cmd: 'boothide', on: 1 }, 4000).catch(() => ({ ok: false }));
+  }
+
+  /** 开机完成：停止隐藏，并让模拟器窗口显示出来（随后会被 embed 重新父化） */
+  async bootShow() {
+    return this.call({ cmd: 'boothide', on: 0 }, 4000).catch(() => ({ ok: false }));
+  }
+
+  /**
    * 全局鼠标钩子开关（幂等）。
    * 只在应用窗口前台、且至少一项映射开启时才安装；opts 变化时不重装线程，
    * 只把新开关发给常驻代理，避免窗口反复 focus / 改设置时反复装卸钩子。

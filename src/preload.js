@@ -53,10 +53,16 @@ contextBridge.exposeInMainWorld('apkstart', {
   installPlayImage: () => invoke('provision:installPlayImage'),
   installAehd: () => invoke('provision:installAehd'),
   enableAccel: () => invoke('provision:enableAccel'),
+  enableVirtualization: () => invoke('provision:enableVirtualization'),
   downloadIso: () => invoke('provision:downloadIso'),
   createDisk: (gb) => invoke('provision:createDisk', gb),
   importIso: () => invoke('provision:importIso'),
   importDisk: () => invoke('provision:importDisk'),
+
+  selfCheck: () => invoke('doctor:selfCheck'),
+  clearLocks: () => invoke('app:clearLocks'),
+  removeSelf: () => invoke('app:removeSelf'),
+  setSharedDir: (dir) => invoke('settings:setSharedDir', dir),
 
   assocStatus: () => invoke('assoc:status'),
   assocRegister: () => invoke('assoc:register'),

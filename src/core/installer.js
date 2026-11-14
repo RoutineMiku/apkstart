@@ -284,35 +284,58 @@ class Installer {
     const args = `${baseArgs ? baseArgs + ' ' : ''}--launch "${app.package}"`.trim();
     const ico = app.icoPath && fs.existsSync(app.icoPath) ? app.icoPath : undefined;
     const paths = this.shortcutPaths(app);
+
+    const write = (shortcutPath) => writeShortcut({
+      shortcutPath,
+      target,
+      args,
+      iconIcoPath: ico,
+      description: `${app.label} — 由 ApkStart 运行`,
+      cwd: this.ctx.cwd,
+      // 每个应用一个 AUMID：任务栏上按应用分组，不会全挤到 ApkStart 里
+      appUserModelId: `RoutineMiku.ApkStart.${app.package}`.slice(0, 128),
+    });
+
     let first = null;
+    let startMenuPath = null;
     const errors = [];
-    for (const p of paths) {
+    paths.forEach((p, i) => {
       try {
-        writeShortcut({
-          shortcutPath: p,
-          target,
-          args,
-          iconIcoPath: ico,
-          description: `${app.label} — 由 ApkStart 运行`,
-          cwd: this.ctx.cwd,
-          // 每个应用一个 AUMID：任务栏上按应用分组，不会全挤到 ApkStart 里
-          appUserModelId: `RoutineMiku.ApkStart.${app.package}`.slice(0, 128),
-        });
+        write(p);
         if (!first) first = p;
+        if (i === 1) startMenuPath = p;
       } catch (e) {
         errors.push(`${p}: ${e.message}`);
+      }
+    });
+
+    // 主路径全失败（自定义快捷方式目录不可写 / 被安全软件拦截）：
+    // 退回桌面再试一次——桌面上有图标，用户才找得到应用。
+    if (!first) {
+      const fallback = path.join(this.ctx.desktopDir, `${safeFileName(app.label)}.lnk`);
+      try {
+        write(fallback);
+        first = fallback;
+      } catch (e) {
+        errors.push(`${fallback}: ${e.message}`);
       }
     }
     if (!first) throw new Error(errors.join('; ') || '创建快捷方式失败');
     // 开始菜单那份的路径也存下来，卸载时一起删
-    store.upsertApp({ package: app.package, startMenuPath: paths[1] || null });
+    if (startMenuPath || first) {
+      store.upsertApp({ package: app.package, startMenuPath });
+    }
     return first;
   }
 
   /** 补全缺失的快捷方式与图标：老版本只建了桌面那份，且 WebP 图标当时没转成功 */
   async ensureShortcuts() {
     const made = [];
+    // 用户明确关掉「安装后自动创建」、且这个应用本来就没有任何入口时不要擅自补，
+    // 否则开关关掉了也挡不住启动时被重建。
+    const auto = store.getSettings().createShortcutOnInstall !== false;
     for (const app of store.getApps()) {
+      if (!auto && !app.shortcutPath && !app.startMenuPath) continue;
       let dirty = false;
       if ((!app.icoPath || !fs.existsSync(app.icoPath)) && app.iconPath && fs.existsSync(app.iconPath)) {
         try {
@@ -330,8 +353,8 @@ class Installer {
       if (!missing.length && !dirty) continue;
       try {
         // 图标刚补出来时，即使 .lnk 存在也要重建，让快捷方式换上真实应用图标
-        this.createShortcut(app);
-        store.upsertApp({ package: app.package, shortcutPath: this.shortcutPath(app) });
+        const madePath = this.createShortcut(app);
+        store.upsertApp({ package: app.package, shortcutPath: madePath });
         made.push(app.label);
       } catch (_) { /* 单个失败不阻塞启动 */ }
     }
