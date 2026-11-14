@@ -85,7 +85,13 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         shell: pwsh
         run: |
-          if (-not $env:GITEE_TOKEN) { Write-Output "未配置 GITEE_TOKEN，跳过 Gitee 同步"; exit 0 }
+          # 以前这里是「没配 token 就静默跳过、这一步仍显示成功」——
+          # v0.3.4 就这样在 Gitee 上悄悄少了一个版本，事后才发现。
+          # 现在缺 token 直接让这一步失败，宁可红一次也别再无声无息。
+          if (-not $env:GITEE_TOKEN) {
+            Write-Error "缺少 GITEE_TOKEN：Gitee 这一版不会有安装包。请在 Settings → Secrets and variables → Actions 添加 GITEE_TOKEN（勾选 projects + pull_requests 之外的 releases 权限即可）。"
+            exit 1
+          }
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           # 发布说明与 GitHub 用同一份，别让 Gitee 那边只剩一句「便携版安装包」
