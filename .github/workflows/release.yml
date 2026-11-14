@@ -51,8 +51,15 @@ jobs:
           $zip = "ApkStart-$tag-win64-portable.zip"
           # 幂等：release 已存在（如重跑 / 重推 tag）就跳过 create，只上传资产
           $existing = gh release view $tag --json tagName -q .tagName 2>$null
+          # 有手写的发版说明就用它（.github/release-notes-<tag>.md），比 --generate-notes
+          # 的「Full Changelog」有用得多；没有才退回自动生成。
+          $notes = ".github/release-notes-$tag.md"
           if (-not $existing) {
-            gh release create $tag --title "ApkStart $tag" --generate-notes
+            if (Test-Path $notes) {
+              gh release create $tag --title "ApkStart $tag" --notes-file $notes
+            } else {
+              gh release create $tag --title "ApkStart $tag" --generate-notes
+            }
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
           $ok = $false
