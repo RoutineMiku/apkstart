@@ -330,9 +330,9 @@ Node 的 `windowsHide` 管不到 emulator 自己 detached 出来的 `qemu` / `ne
 
 ### 6.5 本地修复记录（v0.3.5-dev，未发布、未 push）
 
-2026-11-14 第二轮开发：只改本地工作区，`npm test` 由 **98 项增至 110 项全绿**
-（run-tests 3→8 + engine-test 25 + auto-test 70→77，新增合成 APK / .xapk 拆分包 /
-materializeImages / Zip64 / 更新资产 / 0xC0000005 / 日志边界 / 失败落盘等回归用例），
+2026-11-14 第二轮开发：只改本地工作区，`npm test` 由 **98 项增至 113 项全绿**
+（run-tests 3→8 + engine-test 25 + auto-test 70→80，新增合成 APK / .xapk 拆分包 /
+materializeImages / Zip64 / 更新资产 / 0xC0000005 / 日志边界 / 失败落盘 / 启动组件拼接等回归用例），
 并跑了一次真实冷启（25s）/ 热启（5s，命中快照）/ 优雅关机（快照已存）端到端验证；
 **实测 2.15GB 的合成 APK：解析 18ms、进程 RSS 47MB**（旧路径需要约 2.2GB 连续内存），
 `assoc` 用本机真实注册表做过「备份 → 注册 → 注销 → 还原」闭环
@@ -354,6 +354,7 @@ materializeImages / Zip64 / 更新资产 / 0xC0000005 / 日志边界 / 失败落
 | 12 | 图标：白名单加 jpg、XML 图标递归 3 层、占位图可区分并给软警告 | `apk.js:27-115`、`shortcut.js:109-140`、`installer.js:210-235,289-300` | `.jpg`/adaptive-icon/layer-list 图标不再一律变占位图；真解不出来时告诉用户 |
 | 13 | 安装失败 UI：错误提示统一由 `install:error` 收口并清掉「正在安装」转圈 | `ui/app.js:469-520,1446-1460`、`main.js:566` | issue #21 里「报错了右下角还在加载」 |
 | 14 | 新增「合成 APK」回归测试：自造 AXML 清单 + PNG 图标 + ABI 目录，覆盖 `attributeStart` 基准、非命名空间 `package`、整数属性、启动 Activity 解析；`.xapk` 拆分包与 `materializeImages`（展开/跳过/坏镜像不留半截）另有专门用例 | `test/lib/make-apk.js`、`test/run-tests.js`、`test/auto-test.js` | 真实 APK 夹具缺失时 CI 上 axml/apk 零覆盖；镜像展开是部署最脆的一步 |
+| 15 | **全新安装后点图标只看到安卓桌面**：`startApp` 无条件拼 `${pkg}/${activity}`，而 `resolveLauncher`/新装记录里存的是完整组件 `pkg/class` → `am start` 组件变成 `pkg/pkg/class`，系统直接取消（result code=-92）。新增 `componentArg()` 统一两种形式，`parseResolvedActivity()` 容忍尾部空行/priority 行 | `adb.js:105-131,520`、`test/auto-test.js` | 这是实测中发现的**上游已有 bug**（v0.3.4 同样存在），只影响「新装/重装过的应用」，老 apps.json（纯类名）不会触发 |
 
 > 仍未做（留给下一轮）：`main.js` IPC 拆分、`emulator.js` 拆分、`arsc` config 打分可配置化、
 > `main.js` 1790 行里的托盘/更新菜单抽离、`arsc.js` 的合成字节用例（`axml.js`/`apk.js`

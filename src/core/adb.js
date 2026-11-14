@@ -103,6 +103,31 @@ function unstage(staged) {
 }
 
 /**
+ * 把「Activity」拼成 am start -n 需要的完整组件。
+ * 两种形式都要支持：
+ *   - 纯类名（老版本 apps.json 存的是这种）：`MainActivity` / `.MainActivity` → `<pkg>/<activity>`
+ *   - 完整组件（`cmd package resolve-activity` 的输出）：`com.a.b/.Main` → 原样使用
+ * 旧实现无条件拼 `${pkg}/${activity}`，遇到完整组件就变成 `pkg/pkg/class`，
+ * am start 直接取消（result code=-92），表现是「点图标只看到安卓桌面」。
+ */
+function componentArg(pkg, activity) {
+  const a = String(activity || '').trim();
+  if (!a) return '';
+  if (a.includes('/')) return a;
+  return `${pkg}/${a}`;
+}
+
+/** 从 `cmd package resolve-activity --brief` 的输出里取出属于 pkg 的组件（容忍尾部空行/priority 行） */
+function parseResolvedActivity(pkg, out) {
+  const lines = String(out || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const m = /^([\w.]+)\/([.\w$]+)$/.exec(lines[i]);
+    if (m && m[1] === pkg) return `${m[1]}/${m[2]}`;
+  }
+  return '';
+}
+
+/**
  * adb install 的超时上限本来固定 240s，但 2GB+ 的安装包在慢盘上
  * 「push + 安装 + dexopt」很容易超过 4 分钟：一旦超时就会被当成安装失败，
  * 用户看到的就是「大包装了没反应/失败」。这里按包体放大，上限 20 分钟。
@@ -470,10 +495,10 @@ class AdbClient {
       const out = await this.shell(
         `cmd package resolve-activity --brief ${pkg}`, { timeout: 10000 },
       );
-      const m = /([\w.]+\/[.\w$]+)/.exec(String(out).split('\n').pop() || out);
-      if (m && m[1].startsWith(`${pkg}/`)) {
-        LAUNCHER_CACHE.set(key, { value: m[1], at: Date.now() });
-        return m[1];
+      const comp = parseResolvedActivity(pkg, out);
+      if (comp) {
+        LAUNCHER_CACHE.set(key, { value: comp, at: Date.now() });
+        return comp;
       }
     } catch (_) { /* 落到 monkey */ }
     return null;
@@ -513,8 +538,11 @@ class AdbClient {
     // 很多应用（红果短剧等）的启动页才做真正的初始化，直接进主 Activity 会
     // 抛 "had you called RpcService.init"，表现为点开闪一下就没了。
     const resolved = (await this.resolveLauncher(pkg).catch(() => '')) || activity;
-    const intent = resolved
-      ? ['-n', `${pkg}/${resolved}`]
+    // resolved 可能是完整组件（pkg/class），也可能只是类名（老 apps.json）；
+    // 这里统一成 am start -n 要的完整组件，避免 pkg/pkg/class 被系统取消。
+    const comp = componentArg(pkg, resolved);
+    const intent = comp
+      ? ['-n', comp]
       : ['-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', '-p', pkg];
     const modes = freeform
       ? [['--windowingMode', '5'], []]
@@ -842,4 +870,7 @@ class AdbClient {
   }
 }
 
-module.exports = { AdbClient, AdbError, parseStatList, friendlyInstallError, friendlyLaunchError };
+module.exports = {
+  AdbClient, AdbError, parseStatList, friendlyInstallError, friendlyLaunchError,
+  componentArg, parseResolvedActivity,
+};

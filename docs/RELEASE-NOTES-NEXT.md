@@ -7,7 +7,6 @@
 ## 这一版解决什么
 
 ### 1. 2GB 以上的 APK 装不了（#21）
-
 旧版解析 APK 时把整个文件读进内存，2GB 以上会直接撞上 Node 的单 Buffer 上限，
 表现为「点了安装、弹个英文错误、右下角一直转圈」。
 
@@ -83,30 +82,45 @@
 - 真解不出来时，安装完成提示里会明确说「图标无法解析，快捷方式暂时使用占位图标」，
   而不是让用户看着一个绿色三角猜。
 
-### 9. 日志滚动边界
+### 9. 全新安装后点桌面图标，只看到安卓桌面
+
+实测发现的上游 bug（v0.3.4 也存在）：装完应用后 `apps.json` 里记录的启动入口是
+「完整组件」（`com.foo.bar/com.foo.bar/.MainActivity`），而启动时又拼了一次包名，
+`am start -n` 拿到的是 `com.foo.bar/com.foo.bar/com.foo.bar/.MainActivity`，
+系统直接取消启动（日志 `result code=-92`）——窗口里就是安卓桌面。
+
+- 新增 `componentArg()`：完整组件原样使用，纯类名才补包名；两种历史数据都兼容；
+- `parseResolvedActivity()` 改为扫全部行（`resolve-activity` 输出末尾常带空行），
+  不再因为最后一行是空串而误判为「解析不到」；
+- 实测：重装红果后点桌面图标，`mCurrentFocus` 正确落到
+  `com.phoenix.read/...SplashActivity`，窗口里是应用自己的界面（不再是桌面）。
+
+### 10. 日志滚动边界
 
 - 日志文件名不以 `.log` 结尾时，滚动会「先删后改名」导致日志丢失；
   现在直接跳过滚动（宁可日志大一点，也不丢）。
 
-### 10. 其它
-
+### 11. 其它
 - 新增「合成 APK」测试夹具（`test/lib/make-apk.js`）：自造二进制 AXML 清单 +
   PNG 图标 + ABI 目录，真实 APK 夹具缺失时解析栈也有覆盖；
 - 新增/扩充回归用例：Zip64、.xapk 拆分包、materializeImages、
   更新资产选择、`0xC0000005` 诊断、日志边界、失败记录落盘、WebP 图标降级；
-- `npm test` 从 98 项增至 **110 项全绿**。
+- `npm test` 从 98 项增至 **113 项全绿**。
 
 ## 验证记录
 
 | 项目 | 结果 |
 |---|---|
-| `npm test` | 110 通过 / 0 失败（8 + 25 + 77） |
+| `npm test` | 113 通过 / 0 失败（8 + 25 + 80） |
 | `electron test/electron-integration.js` | ICO / .lnk / WebP 降级全部通过 |
 | 真实冷启动 | 25.0s 就绪（`sys.boot_completed=1`） |
 | 命中快照 | 5~6s |
 | 优雅关机 | `code=0`，`hasSnapshot=true` |
 | 真机 APK 解析 | 红果短剧 7.4.3.32 / `res/b/a3.webp` / arm64-v8a 正确 |
 | 2.15GB APK 解析 | 18ms 完成，进程 RSS 47MB（旧版需把整个 2.2GB 读进内存） |
+| 全新安装 + 桌面图标启动 | 重装红果后点图标：`mCurrentFocus` = `com.phoenix.read/...SplashActivity`，窗口内是应用界面（修复前是安卓桌面） |
+| 安装链路 | 打包版拖入 153MB APK：22s 完成解析/安装/图标/快捷方式；桌面 + 开始菜单 .lnk 的 Target/Args/Icon 均正确 |
+| 窗口不泄漏 | `check-quit-clean`：开机全程 + 退出后 8 秒，可见的模拟器/控制台窗口 **0 个** |
 | 注册表关联 | 本机原关联 `MuMuPlayer.apk`，注册→取消后原样还原 |
 | 打包版 | 226MB 便携包，界面冒烟通过 |
 

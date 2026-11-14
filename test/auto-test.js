@@ -1636,6 +1636,22 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(fallback.length === emu._log.length, `空轮次应退回整体日志，实际 ${fallback.length} 行`);
   });
 
+  await test('启动组件拼接：完整组件不能重复拼包名（否则点图标只看到安卓桌面）', () => {
+    const { componentArg, parseResolvedActivity } = require('../src/core/adb');
+    // 完整组件（v0.3.4 装完后 apps.json 里存的就是这种）→ 原样使用
+    assert(componentArg('com.phoenix.read', 'com.phoenix.read/com.dragon.read.pages.splash.SplashActivity')
+      === 'com.phoenix.read/com.dragon.read.pages.splash.SplashActivity', '完整组件应原样返回');
+    // 老数据：纯类名 / 以点开头的类名 → 补包名
+    assert(componentArg('com.a.b', 'MainActivity') === 'com.a.b/MainActivity');
+    assert(componentArg('com.a.b', '.MainActivity') === 'com.a.b/.MainActivity');
+    assert(componentArg('com.a.b', '') === '', '空 activity 应返回空（走隐式 intent）');
+    // resolve-activity 输出末尾常有空行/priority 行：必须能取到组件
+    const out = 'priority=0\ncom.phoenix.read/com.dragon.read.pages.splash.SplashActivity\n\n';
+    assert(parseResolvedActivity('com.phoenix.read', out)
+      === 'com.phoenix.read/com.dragon.read.pages.splash.SplashActivity', '应跳过空行取到最后一行组件');
+    assert(parseResolvedActivity('com.other', out) === '', '别的包名不能拿来用');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }
