@@ -83,5 +83,7 @@ const bad = (w) => {
 
   try { proc.kill(); } catch (_) { /* ignore */ }
   agent.dispose();
+  // 沙盒里的 AVD 有好几个 GB，测完顺手清掉（模拟器还占着文件时会失败，忽略即可）
+  try { fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 3 }); } catch (_) { /* ignore */ }
   process.exit(ok ? 0 : 1);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });
