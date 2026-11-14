@@ -1148,9 +1148,13 @@ class Runtime {
    *
    * @returns {Promise<{ok:boolean,reason?:string,ip?:string,gateway?:string}>}
    */
-  async ensureNetwork({ onLog = () => {}, firstWaitMs = 60000, secondWaitMs = 180000 } = {}) {
+  async ensureNetwork({ onLog = () => {}, firstWaitMs = 25000, secondWaitMs = 90000 } = {}) {
     let net = await this.waitForNetwork({ onLog, timeoutMs: firstWaitMs });
     if (net && net.ok) return net;
+    // 冷启动很贵（几十秒），一个进程里只做一次：否则每次点开应用都要重来一遍，
+    // 用户感受到的就是「点开要等好几分钟」。
+    if (this._netColdBootTried) return net;
+    this._netColdBootTried = true;
     onLog('网络仍未就绪，正在冷启动一次虚拟机（不加载快照）后重试…');
     try {
       await this.stop({ graceful: false }).catch(() => {});

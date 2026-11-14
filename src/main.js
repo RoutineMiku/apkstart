@@ -314,8 +314,14 @@ async function toggleDisplayMode() {
     display: { mode: displaySettings().mode === 'fullscreen' ? 'window' : 'fullscreen' },
   });
   if (appWin && appWin.isOpen) {
-    if (next.display.mode === 'fullscreen') appWin.win.maximize();
-    else appWin.win.unmaximize();
+    if (next.display.mode === 'fullscreen') {
+      appWin.win.maximize();
+      // 全屏 = 平板横屏排版：让安卓按宽屏重新排版，而不是只把窗口拉大
+      appWin.setLandscape(true).catch(() => {});
+    } else {
+      appWin.win.unmaximize();
+      appWin.setLandscape(false).catch(() => {});
+    }
     appWin.scheduleFit();
   }
   return next.display.mode;
@@ -884,8 +890,11 @@ function registerIpc() {
     const next = store.saveSettings({ display: patch || {} });
     if (appWin && appWin.isOpen) {
       appWin.portrait = portraitSize();
-      if (next.display.mode === 'fullscreen' && !appWin.win.isMaximized()) appWin.win.maximize();
-      if (next.display.mode !== 'fullscreen' && appWin.win.isMaximized()) appWin.win.unmaximize();
+      const full = next.display.mode === 'fullscreen';
+      if (full && !appWin.win.isMaximized()) appWin.win.maximize();
+      if (!full && appWin.win.isMaximized()) appWin.win.unmaximize();
+      // 全屏 = 平板横屏排版（见 toggleDisplayMode 的说明）
+      appWin.setLandscape(full).catch(() => {});
       appWin.scheduleFit();
     }
     return next.display;
@@ -1143,7 +1152,9 @@ function registerIpc() {
     try {
       const installDir = path.dirname(app.getPath('exe'));
       const dataDir = store.DATA_DIR;
-      return { ok: true, ...leftovers.scan({ installDir, dataDir }) };
+      let avdHome = '';
+      try { avdHome = runtime.provisioner.paths().avdHome; } catch (_) { avdHome = ''; }
+      return { ok: true, ...leftovers.scan({ installDir, dataDir, avdHome }) };
     } catch (e) {
       return { ok: false, error: e.message };
     }

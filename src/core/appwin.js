@@ -247,11 +247,14 @@ class AppWindow {
   _rect() {
     const sf = this._scale();
     const b = this.win.getContentBounds();
+    const top = Math.round(TITLEBAR_H * sf);
     return {
       x: -EMU_PAD,
-      y: Math.round(TITLEBAR_H * sf) - EMU_PAD,
+      y: top - EMU_PAD,
       w: Math.round(b.width * sf) + EMU_PAD * 2,
       h: Math.round((b.height - TITLEBAR_H) * sf) + EMU_PAD * 2,
+      // 上面那条 -EMU_PAD 会压到标题栏上，交给窗口代理裁掉（见 agent.fit 的 clipTop）
+      clipTop: EMU_PAD,
     };
   }
 
@@ -275,18 +278,20 @@ class AppWindow {
   }
 
   /**
-   * 横竖屏切换。
-   * 两步：先让 Android 按目标方向重新排版（画面始终是正的），再让模拟器按新比例
-   * 重排一次窗口（它自己会算，CtrL+← 只是触发重排，不会改 Android 的方向），
-   * 最后把我们的窗口换成同样的比例。
+   * 横竖屏切换 = 切换「手机排版 / 平板排版」。
+   *
+   * 关键：**不再去转模拟器的画面**。以前这里先改 wm size、再让 agent 发 Ctrl+←，
+   * 模拟器会把整块画面顺时针/逆时针转 90°，而安卓侧的排版并没有跟着变 ——
+   * 用户看到的就是「画面整个躺倒、还摆不正」。
+   * 现在只做一件事：改逻辑显示尺寸（wm size）+ 锁 user-rotation=0，
+   * 安卓会按新宽度重新排版：360dp 宽是手机，640dp 宽自动进平板/分栏布局。
    */
   async rotate() {
     if (!this.isOpen) return this.state.landscape;
     const next = !this.state.landscape;
     if (this.setOrientation) await this.setOrientation(next).catch(() => {});
-    await sleep(700);
-    await this.agent.rotate(next ? 'left' : 'right').catch(() => {});
-    await sleep(800);
+    // wm size 会触发全局配置变更，应用要重建一次界面，给足时间再贴窗口
+    await sleep(1200);
     const area = this._area();
     const size = AppWindow.sizeFor(area, this.portrait, next);
     if (!this.win.isMaximized()) {
@@ -299,12 +304,19 @@ class AppWindow {
     }
     this.state.landscape = next;
     this._push();
-    await sleep(250);
+    await sleep(300);
     await this.fitNow();
-    // 模拟器换比例后还会自己再调一次窗口，收尾再贴合一次免得留黑边
-    await sleep(600);
+    // 应用重构后模拟器窗口可能再自己调一次，收尾再贴合一次免得留黑边
+    await sleep(900);
     await this.fitNow();
     return next;
+  }
+
+  /** 需要时切到指定方向（全屏=横屏，窗口=竖屏） */
+  async setLandscape(want) {
+    if (!this.isOpen) return this.state.landscape;
+    if (!!this.state.landscape === !!want) return this.state.landscape;
+    return this.rotate();
   }
 
   toggleMaximize() {

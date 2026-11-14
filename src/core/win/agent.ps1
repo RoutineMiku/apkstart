@@ -46,6 +46,10 @@ public class ApkAgent
     [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint f);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int c);
+    // 裁剪嵌入窗口的可见区域：把压到标题栏上的那条外框去掉
+    [DllImport("user32.dll")] static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
@@ -471,7 +475,7 @@ public class ApkAgent
     // HWND_TOP: Chromium 的渲染子窗口和模拟器是同级的子窗口，
     // 不主动抬到最前就会被 Chromium 那块黑底盖住（用户看到的就是黑屏）。
     static readonly IntPtr HWND_TOP = new IntPtr(1);
-    static void Fit(int x, int y, int w, int h, bool frame)
+    static void Fit(int x, int y, int w, int h, bool frame, int clipTop)
     {
         if (_emu == IntPtr.Zero) return;
         if (w < 16) w = 16;
@@ -490,6 +494,19 @@ public class ApkAgent
         // on every periodic sweep caused visible stutter and wasted GPU/CPU.
         uint flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | (frame ? SWP_FRAMECHANGED : 0u);
         SetWindowPos(_emu, HWND_TOP, x, y, w, h, flags);
+        // 模拟器 Qt 窗口的外框比 LCD 大一圈，我们让它向上溢出、把外框挤出客户区；
+        // 溢到标题栏上的那一条必须裁掉 —— 否则它被抬到最前时会在标题栏下方画出一条
+        // 黑边（用户反馈「点四个按钮时冒出黑色区域侵入界面」就是这个）。
+        if (clipTop > 0)
+        {
+            IntPtr rgn = CreateRectRgn(0, clipTop, w, h);
+            // SetWindowRgn 成功后区域归系统所有，不能再删
+            if (SetWindowRgn(_emu, rgn, true) == 0) DeleteObject(rgn);
+        }
+        else
+        {
+            SetWindowRgn(_emu, IntPtr.Zero, true);
+        }
     }
 
     static void Raise()
@@ -913,14 +930,14 @@ public class ApkAgent
                             bool ok = Embed(_host, _emu);
                             _embedAt = Environment.TickCount;
                             _lastToolSweep = 0;
-                            Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), true);
+                            Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), true, (int)L(line, "clipTop"));
                             Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + ",\"emu\":" + _emu.ToInt64() + "}");
                         }
                     }
                     else if (cmd == "fit")
                     {
                         if (_emu == IntPtr.Zero) _emu = FindEmulator();
-                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), false);
+                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), false, (int)L(line, "clipTop"));
                         Reply(sock, "{\"ok\":true}");
                     }
                     else if (cmd == "rotate")

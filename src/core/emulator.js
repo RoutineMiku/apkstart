@@ -373,7 +373,10 @@ class EmulatorEngine {
       'hw.camera.back=none',
       'hw.camera.front=none',
       'hw.gps=no',
-      'hw.sensors.orientation=no',
+      // 方向/加速度传感器必须开：关掉之后安卓拒绝旋转，横竖屏只能靠"转画面"糊弄，
+      // 表现就是画面躺倒、排版不变。开了才能用 wm size 做真正的手机/平板排版切换。
+      'hw.sensors.orientation=yes',
+      'hw.sensors.accelerometer=yes',
     ].join('\n') + '\n';
     fs.writeFileSync(cfgPath, cfg);
 

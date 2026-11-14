@@ -819,13 +819,27 @@ class AdbClient {
    * 都是这个结果）。真正可行的是把 Android 的逻辑分辨率换成目标方向，
    * 系统会按新方向重新排版，界面始终是正的；模拟器随后跟着换成同样的比例。
    */
+  /**
+   * 切换「手机竖屏 / 平板横屏」排版。
+   *
+   * 正确做法是改**逻辑显示尺寸**（wm size），让安卓以宽屏重新排版：
+   *   - 竖屏 720x1280 @320dpi ≈ 360dp 宽 → 手机排版；
+   *   - 横屏 1280x720 @320dpi ≈ 640dp 宽 → 平板/分栏排版（>=600dp 就是 tablet）。
+   * 同时把 user-rotation 锁回 0，保证画面是正的。
+   *
+   * 以前这里只有 wm size，然后外面再调 agent.rotate 去转模拟器的画面
+   * （等价于 Ctrl+←），结果就是「画面被旋转 90°、应用并没重新排版、还摆不正」。
+   */
   async setOrientation(landscape) {
     try {
+      // 无论哪边，先把自动旋转关掉并把用户旋转锁回 0，画面才不会横躺
+      await this.shell('settings put system accelerometer_rotation 0; wm user-rotation lock 0', { timeout: 15000 });
       if (!landscape) {
         await this.shell('wm size reset; wm density reset', { timeout: 15000 });
         return true;
       }
       const sizeOut = await this.shell('wm size', { timeout: 10000 });
+      // 注意：重置过之后这里读到的是「Physical size」，用物理尺寸算横屏分辨率
       const m = /Physical size:\s*(\d+)x(\d+)/.exec(sizeOut);
       const w = m ? Math.max(Number(m[1]), Number(m[2])) : 1280;
       const h = m ? Math.min(Number(m[1]), Number(m[2])) : 720;
@@ -839,6 +853,18 @@ class AdbClient {
     } catch (_) {
       return false;
     }
+  }
+
+  /** 当前逻辑分辨率（横屏切换后窗口要按它算宽高比） */
+  async displaySize() {
+    try {
+      const out = await this.shell('wm size', { timeout: 8000 });
+      const o = /Override size:\s*(\d+)x(\d+)/.exec(out);
+      if (o) return { w: Number(o[1]), h: Number(o[2]) };
+      const p = /Physical size:\s*(\d+)x(\d+)/.exec(out);
+      if (p) return { w: Number(p[1]), h: Number(p[2]) };
+    } catch (_) { /* ignore */ }
+    return null;
   }
 
   /** 授权框还挂在最前面时（用户不在电脑前也能自愈），按返回键收掉 */

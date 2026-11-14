@@ -138,12 +138,35 @@ function scanTemp(dataDir) {
   return out;
 }
 
-function scan({ installDir, dataDir }) {
+/** 旧/废弃的快速启动快照：default_boot 是早期版本留下的（一份 ram.img 约 3GB），
+ *  *.stale-* 是「删不掉就改名」的残留。当前快照名是 apkstart，绝不碰。 */
+function scanSnapshots(avdHome) {
+  const out = [];
+  if (!avdHome) return out;
+  const snapDir = path.join(avdHome, 'apkstart.avd', 'snapshots');
+  let list = [];
+  try { list = fs.readdirSync(snapDir, { withFileTypes: true }); } catch (_) { return out; }
+  for (const e of list) {
+    if (!e.isDirectory()) continue;
+    if (e.name === 'apkstart') continue;   // 当前在用的快照
+    const full = path.join(snapDir, e.name);
+    out.push({
+      kind: 'dir',
+      path: full,
+      size: dirSize(full),
+      note: e.name.startsWith('default_boot') ? '旧版遗留的快速启动快照' : '废弃的快照残留',
+    });
+  }
+  return out;
+}
+
+function scan({ installDir, dataDir, avdHome }) {
   const items = [];
   const push = (list) => { for (const x of list) items.push(x); };
   push(scanDirs(installDir));
   push(scanRegistry());
   push(scanTemp(dataDir));
+  push(scanSnapshots(avdHome));
   const total = items.reduce((n, x) => n + (x.size || 0), 0);
   return { items, totalBytes: total };
 }
