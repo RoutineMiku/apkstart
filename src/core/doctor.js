@@ -297,8 +297,23 @@ async function freeAdbPort(start = 5044) {
  */
 function snapshotKey(plan, imageDir) {
   return crypto.createHash('sha1').update([
-    imageDir, plan.emulatorVersion || '', plan.api || '', plan.tag || '',
+    imageIdentity(imageDir), plan.emulatorVersion || '', plan.api || '', plan.tag || '',
   ].join('|')).digest('hex').slice(0, 16);
+}
+
+/**
+ * 系统镜像的「身份」：只保留 `system-images/...` 之后的部分。
+ *
+ * 镜像放哪个盘都无所谓，同一套镜像换个目录不该被当成「换了镜像」——
+ * 否则用户把运行时从 C 盘挪到 D 盘（我们自己在设置里就建议这么做）以后，
+ * AVD 里的 sysdir 与新路径不一致 → 判定镜像变了 → -wipe-data → 已装应用全丢。
+ * 这个坑在实测中真的会踩到，所以两个地方（AVD 配置、快照指纹）都必须用身份而不是绝对路径。
+ */
+function imageIdentity(dir) {
+  const p = String(dir || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const i = p.indexOf('system-images/');
+  if (i >= 0) return p.slice(i);
+  return p.split('/').slice(-3).join('/');
 }
 
 const RULES = [
@@ -470,6 +485,6 @@ module.exports = {
   hostInfo, freeDiskMB, isAsciiPath, shortPath, lcdFor, liteProfile,
   versionNumbers, gpuCandidates, chooseProfile, planVariants,
   overridesFromSettings, autoProfile,
-  freePortPair, freeAdbPort, snapshotKey,
+  freePortPair, freeAdbPort, snapshotKey, imageIdentity,
   diagnose, describeProfile, writeReport, vcRedistOk,
 };

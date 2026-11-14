@@ -106,11 +106,35 @@ async function download(url, dest, opt = {}) {
       let lastBytes = got;
       const ws = fs.createWriteStream(dest, { flags: startSize > 0 ? 'a' : 'w' });
 
+      // 和分块下载一样：必须保证 promise 一定会 settle。
+      // 连接静默（被墙/被限速）时 res 既不 end 也不 error，pipe 永远不 finish，
+      // 整个下载就卡死在这里，用户看到的是进度条不动、也没有报错。
+      const idleMs = Number(opt.idleMs) > 0 ? Number(opt.idleMs) : 30000;
+      let settled = false;
+      let idle = null;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        if (idle) clearTimeout(idle);
+        try { ws.destroy(); } catch (_) { /* ignore */ }
+        if (err) reject(err); else resolve();
+      };
+      const kick = () => {
+        if (settled) return;
+        if (idle) clearTimeout(idle);
+        idle = setTimeout(() => {
+          res.destroy();
+          finish(new Error('连接停滞（长时间无数据）'));
+        }, idleMs);
+      };
+      kick();
+
       const onAbort = () => { res.destroy(new Error('已取消')); };
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
       res.on('data', (c) => {
         got += c.length;
+        kick();
         const now = Date.now();
         if (now - lastTick > 400) {
           const speed = (got - lastBytes) / ((now - lastTick) / 1000);
@@ -125,9 +149,10 @@ async function download(url, dest, opt = {}) {
         }
       });
       res.pipe(ws);
-      ws.on('finish', () => resolve());
-      ws.on('error', reject);
-      res.on('error', reject);
+      ws.on('finish', () => finish());
+      ws.on('error', (e) => finish(e));
+      res.on('error', (e) => finish(e));
+      res.on('close', () => { if (!res.complete) finish(new Error('连接被中断')); });
     });
 
     break;
@@ -186,6 +211,7 @@ async function downloadParallel(url, dest, opt = {}) {
 
   const n = Math.max(1, Math.min(connections, Math.ceil(total / minChunk)));
   const per = Math.ceil(total / n);
+  const idleMs = Number(opt.idleMs) > 0 ? Number(opt.idleMs) : 20000;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { force: true });
 
@@ -223,19 +249,35 @@ async function downloadParallel(url, dest, opt = {}) {
       throw new Error(`分块请求被拒绝 HTTP ${res.statusCode}`);
     }
     await new Promise((resolve, reject) => {
+      // 必须自己兜住「promise 永远不 settle」：res.destroy(err) 在某些情况下只发
+      // close 不发 error，没有这个 guard 的话一整块会挂死，整个下载停在那里不动。
+      let settled = false;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(idle);
+        if (err) reject(err); else resolve();
+      };
+      let idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
+      const kick = () => {
+        clearTimeout(idle);
+        idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
+      };
       res.on('data', (buf) => {
         try {
           fs.writeSync(fd, buf, 0, buf.length, c.pos);
         } catch (e) {
           res.destroy();
-          return reject(e);
+          return finish(e);
         }
         c.pos += buf.length;
         got += buf.length;
+        kick();
         tick();
       });
-      res.on('end', resolve);
-      res.on('error', reject);
+      res.on('end', () => finish());
+      res.on('error', (e) => finish(e));
+      res.on('close', () => finish(new Error('连接被中断')));
     });
     return c.pos > c.end;
   };
@@ -298,8 +340,12 @@ async function downloadMulti(urls, dest, opt = {}) {
     connections = 8,
     onProgress = () => {},
     minChunk = 2 * 1024 * 1024,
-    retries = 3,
+    // 每个分块的重试次数。3 次在「三个源里有两个偶尔停摆」的链路上不够用：
+    // 1.4GB 的运行时包一旦有块耗尽重试，整包作废重下。给到 6 次（每源两轮）。
+    // 重试是从断点继续的（c.pos 保留），不会重复下载已收到的字节。
+    retries = 6,
   } = opt;
+  const idleMs = Number(opt.idleMs) > 0 ? Number(opt.idleMs) : 20000;
 
   const list = [...new Set((urls || []).filter(Boolean))];
   if (!list.length) throw new Error('没有可用的下载地址');
@@ -333,9 +379,27 @@ async function downloadMulti(urls, dest, opt = {}) {
   const n = Math.max(2, Math.min(connections, Math.ceil(total / minChunk)));
   const per = Math.ceil(total / n);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.rmSync(dest, { force: true });
-  const fd = fs.openSync(dest, 'w');
-  fs.ftruncateSync(fd, total);
+
+  // 分块断点续传：1.4GB 的包在「镜像偶尔停摆」的链路上很容易有块耗尽重试，
+  // 一旦整包作废重下，用户要再等十几分钟。这里把「哪些块已经下完」记在
+  // 边车文件里，下次（同一路径、同一分块方式）只补缺的块。
+  const meta = `${dest}.chunks.json`;
+  let doneSet = new Set();
+  let resume = false;
+  try {
+    const m = JSON.parse(fs.readFileSync(meta, 'utf8'));
+    if (m && m.total === total && m.n === n && fs.existsSync(dest) && fs.statSync(dest).size === total) {
+      doneSet = new Set(m.done || []);
+      resume = true;
+    }
+  } catch (_) { /* 没有边车就全新下 */ }
+
+  if (!resume) {
+    fs.rmSync(dest, { force: true });
+    fs.rmSync(meta, { force: true });
+  }
+  const fd = resume ? fs.openSync(dest, 'r+') : fs.openSync(dest, 'w');
+  if (!resume) fs.ftruncateSync(fd, total);
 
   const chunks = Array.from({ length: n }, (_, i) => ({
     start: i * per,
@@ -343,11 +407,20 @@ async function downloadMulti(urls, dest, opt = {}) {
     pos: i * per,
     src: i % same.length,
     tries: 0,
-  }));
+  })).filter((c) => !doneSet.has(c.start));
 
-  let got = 0;
+  const saveMeta = () => {
+    try {
+      fs.writeFileSync(meta, JSON.stringify({ total, n, done: [...doneSet] }));
+    } catch (_) { /* 边车写不进去不影响下载 */ }
+  };
+
+  // 续传时把已完成的块算进进度，用户看到的百分比不会从 0 重来
+  let got = resume ? [...doneSet].reduce((sum, start) => (
+    sum + (Math.min(total - 1, start + per - 1) - start + 1)
+  ), 0) : 0;
   let lastTick = Date.now();
-  let lastBytes = 0;
+  let lastBytes = got;
   const tick = (force) => {
     const now = Date.now();
     if (!force && now - lastTick < 400) return;
@@ -372,24 +445,37 @@ async function downloadMulti(urls, dest, opt = {}) {
       throw new Error(`分块被拒绝 HTTP ${res.statusCode}`);
     }
     await new Promise((resolve, reject) => {
-      // 空闲看门狗：连接建立了但一个字节都不来（常见的「TCP 通但被墙/被限」），
-      // 光等 socket 超时要 30 秒，一块卡住整包就停在那里。20 秒没动静就换源。
-      let idle = setTimeout(() => res.destroy(new Error('连接停滞（20 秒无数据）')), 20000);
-      const kick = () => { clearTimeout(idle); idle = setTimeout(() => res.destroy(new Error('连接停滞（20 秒无数据）')), 20000); };
+      // 空闲看门狗 + 「保证 settle」：连接建立了但一个字节都不来（常见的
+      // 「TCP 通但被墙/被限」），光等 socket 超时要 30 秒；而 res.destroy(err)
+      // 可能只发 close 不发 error，promise 就永远不会 reject —— 表现是一块挂死、
+      // 整个下载停在那里（实测踩过）。所以看门狗自己调用 finish。
+      let settled = false;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(idle);
+        if (err) reject(err); else resolve();
+      };
+      let idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
+      const kick = () => {
+        clearTimeout(idle);
+        idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（无数据超时）')); }, idleMs);
+      };
       res.on('data', (buf) => {
         try {
           fs.writeSync(fd, buf, 0, buf.length, c.pos);
         } catch (e) {
           res.destroy();
-          return reject(e);
+          return finish(e);
         }
         c.pos += buf.length;
         got += buf.length;
         kick();
         tick(false);
       });
-      res.on('end', () => { clearTimeout(idle); resolve(); });
-      res.on('error', (e) => { clearTimeout(idle); reject(e); });
+      res.on('end', () => finish());
+      res.on('error', (e) => finish(e));
+      res.on('close', () => finish(new Error('连接被中断')));
     });
     return c.pos > c.end;
   };
@@ -399,11 +485,19 @@ async function downloadMulti(urls, dest, opt = {}) {
       for (;;) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          if (await fetchChunk(c)) return;
+          if (await fetchChunk(c)) {
+            doneSet.add(c.start);
+            saveMeta();
+            return;
+          }
           throw new Error('分块未完整返回');
         } catch (e) {
           c.tries += 1;
-          if (c.tries >= retries) throw new Error(`分块失败（${c.start}-${c.end}）：${e.message}`);
+          if (c.tries >= retries) {
+            // 记下已完成的部分（边车），下次从缺的块继续，而不是从头再下 1.4GB
+            saveMeta();
+            throw new Error(`分块失败（${c.start}-${c.end}）：${e.message}`);
+          }
           // 换一个源再试：一个镜像抽风不该拖垮整个下载
           c.src += 1;
           // eslint-disable-next-line no-await-in-loop
@@ -416,11 +510,12 @@ async function downloadMulti(urls, dest, opt = {}) {
     throw e;
   }
   fs.closeSync(fd);
+  fs.rmSync(meta, { force: true });
 
   const size = fs.statSync(dest).size;
   tick(true);
   if (size !== total) throw new Error(`下载不完整：${size}/${total} 字节`);
-  return { file: dest, size, parallel: n, sources: same.length, multi: true };
+  return { file: dest, size, parallel: n, sources: same.length, multi: true, resumed: resume };
 }
 
 /** 依次尝试多个源（并行分块版），任一成功即返回 */

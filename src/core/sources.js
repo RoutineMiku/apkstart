@@ -346,11 +346,20 @@ class Sources {
     return result;
   }
 
-  /** 某个资产在所有源 + 镜像下的候选地址（去重、保序：源站优先，其次镜像） */
+  /**
+   * 某个资产在所有源 + 镜像下的候选地址（去重、保序：源站优先，其次镜像）。
+   * 镜像只套在 GitHub 的地址上：ghfast / gh-proxy 只代理 GitHub，
+   * 把 Gitee 的链接拼上去只会得到一个 403，白白多测一次速。
+   */
   candidates(assetOrUrl) {
     const url = typeof assetOrUrl === 'string' ? assetOrUrl : assetOrUrl.url;
     const out = [];
-    if (url) out.push(url);
+    if (!url) return out;
+    out.push(url);
+    let host = '';
+    try { host = new URL(url).host.toLowerCase(); } catch (_) { return out; }
+    const isGithub = /(^|\.)github\.com$/.test(host) || /(^|\.)githubusercontent\.com$/.test(host);
+    if (!isGithub) return out;
     for (const m of mirrorList(this.settings())) {
       const u = withMirror(url, m);
       if (u && !out.includes(u)) out.push(u);

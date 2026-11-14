@@ -251,7 +251,11 @@ class EmulatorEngine {
       const prev = fs.readFileSync(cfgPath, 'utf8');
       const prevTag = /tag\.id=(.+)$/m.exec(prev);
       const prevImg = /image\.sysdir\.1=(.+)$/m.exec(prev);
-      if ((prevTag && prevTag[1].trim() !== tag) || (prevImg && prevImg[1].trim() !== wantImg)) {
+      // 比较「镜像身份」而不是绝对路径：同一套镜像换盘/换目录不算换镜像，
+      // 否则用户一改运行时目录就会被清掉所有已装应用（见 doctor.imageIdentity 注释）。
+      const prevId = prevImg ? doctor.imageIdentity(prevImg[1].trim()) : '';
+      const wantId = doctor.imageIdentity(wantImg);
+      if ((prevTag && prevTag[1].trim() !== tag) || (prevId && prevId !== wantId)) {
         // 旧 userdata 与新镜像不兼容（APEX 引导循环），必须重建
         this.wipePending = true;
       }

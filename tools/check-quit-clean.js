@@ -14,7 +14,10 @@ const { spawn } = require('child_process');
 const { WinAgent } = require('../src/core/agent');
 
 const ROOT = path.join(__dirname, '..');
-const ENGINE = path.join(ROOT, 'engine');
+// 运行时与安卓数据目录都可能被用户改到别的盘，测试时用环境变量指过去，
+// 免得每次都重新下载 1.4GB 运行时、或另建一个空 AVD。
+const ENGINE = path.resolve(process.env.APKSTART_RUNTIME || path.join(ROOT, 'engine'));
+const AVD_DIR = process.env.APKSTART_AVD_HOME || '';
 const ELECTRON = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -34,7 +37,7 @@ const bad = (w) => {
     apps: [{ package: 'com.example.demo', label: 'Demo', installedAt: Date.now() }],
   }));
   fs.writeFileSync(path.join(appData, 'settings.json'), JSON.stringify({
-    runtime: { dir: ENGINE },
+    runtime: { dir: ENGINE, avdDir: AVD_DIR },
     engine: { prewarm: true },
   }));
 

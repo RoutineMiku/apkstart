@@ -85,6 +85,16 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(new Set(keys).size === keys.length, '重试方案不应重复');
   });
 
+  await test('镜像换盘不算换镜像：sysdir 换了目录不该清用户数据', () => {
+    const c = 'C:/Users/x/AppData/Roaming/apkstart/system-images/android-34/google_apis_playstore/x86_64/';
+    const d = 'D:/ApkStartRuntime/system-images/android-34/google_apis_playstore/x86_64/';
+    assert(doctor.imageIdentity(c) === doctor.imageIdentity(d), '同一套镜像的路径身份必须相同');
+    const key = (p) => doctor.snapshotKey({ emulatorVersion: '37.3.8', api: '34', tag: 'google_apis_playstore' }, p);
+    assert(key(c) === key(d), '换盘后快照不该作废（否则白等一次冷启动）');
+    const other = 'D:/rt/system-images/android-34/google_apis/x86_64/';
+    assert(doctor.imageIdentity(other) !== doctor.imageIdentity(d), '真的换了镜像必须能识别出来');
+  });
+
   await test('快照指纹不随 GPU/加速/内存重试变化（避免每次重试都清空已装应用）', () => {
     const a = doctor.snapshotKey({ dataMB: 4096, emulatorVersion: '37.3.8.0', api: '34', tag: 'google_apis_playstore' }, 'C:\\img');
     const b = doctor.snapshotKey({ dataMB: 4096, emulatorVersion: '37.3.8.0', api: '34', tag: 'google_apis_playstore' }, 'C:\\img');
@@ -845,6 +855,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const off = new Sources(() => ({ runtime: { autoMirror: false } }));
     assert(off.candidates(url).length === 1, '关掉自动镜像后只剩直连');
     assert(withMirror(url, 'https://x/') === `https://x/${url}`, '前缀缺尾斜杠要自动补');
+
+    // 镜像只代理 GitHub：Gitee 的地址拼上镜像前缀只会 403，不该被列入候选
+    const giteeUrl = 'https://gitee.com/daily-miku/apkstart/releases/download/v1/a.zip.part1';
+    assert(auto.candidates(giteeUrl).length === 1, 'Gitee 资产不应套 GitHub 镜像前缀');
   });
 
   await test('双源：测速结果按速度排序，全部失败时保持原序不丢可用地址', async () => {
@@ -968,6 +982,96 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     } finally {
       s1.close(); s2.close();
       fs.rmSync(out, { force: true });
+    }
+  });
+
+  await test('多源并行下载：失败后重来只补缺的块（不重下整个 1.4GB）', async () => {
+    const http = require('http');
+    const { downloadMulti } = require('../src/core/download');
+    const MB = 1024 * 1024;
+    const total = 3 * MB;
+    const data = Buffer.alloc(total);
+    for (let i = 0; i < total; i += 1) data[i] = i % 251;
+    let ranged = 0;
+    const handler = (req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': total }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), total - 1);
+      if (b > a) ranged += 1;          // 只统计真正的数据块请求（探测用 0-0 不算）
+      res.writeHead(206, { 'Content-Range': `bytes ${a}-${b}/${total}`, 'Content-Length': b - a + 1 });
+      res.end(data.slice(a, b + 1));
+    };
+    // 必须是两条地址：只有一条时 downloadMulti 会直接交给单源分块（那条路径自带续传）
+    const mk = () => new Promise((resolve) => {
+      const srv = http.createServer(handler);
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    const s1 = await mk();
+    const s2 = await mk();
+    const urls = [`http://127.0.0.1:${s1.address().port}/f`, `http://127.0.0.1:${s2.address().port}/f`];
+    const out = path.join(TMP, 'multi-resume.bin');
+    try {
+      // 造出「前两块已下完、最后一块没下」的现场（分块方式：3 连接 × 1MB）
+      const per = Math.ceil(total / 3);
+      const fd = fs.openSync(out, 'w');
+      fs.ftruncateSync(fd, total);
+      fs.writeSync(fd, data, 0, per * 2, 0);
+      fs.closeSync(fd);
+      fs.writeFileSync(`${out}.chunks.json`, JSON.stringify({ total, n: 3, done: [0, per] }));
+
+      const r = await downloadMulti(urls, out, { connections: 3, minChunk: MB });
+      assert(r.resumed === true, '应识别出这是断点续传');
+      assert(ranged === 1, `只应补下 1 个块，实际请求 ${ranged} 块`);
+      assert(Buffer.compare(fs.readFileSync(out), data) === 0, '续传后的文件必须与源完全一致');
+      assert(!fs.existsSync(`${out}.chunks.json`), '完成后要清掉边车文件');
+    } finally {
+      s1.close(); s2.close();
+      fs.rmSync(out, { force: true });
+      fs.rmSync(`${out}.chunks.json`, { force: true });
+    }
+  });
+
+  await test('下载器：连接建立后一个字节都不来，必须超时换源而不是挂死', async () => {
+    const http = require('http');
+    const { downloadMulti } = require('../src/core/download');
+    const data = Buffer.alloc(4 * 1024 * 1024, 9);
+    // 头正常回、然后一直不说话：模拟「TCP 通但被墙/被限速」的经典状态
+    const stall = http.createServer((req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': data.length }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), data.length - 1);
+      res.writeHead(206, { 'Content-Range': `bytes ${a}-${b}/${data.length}`, 'Content-Length': b - a + 1 });
+      // 先给 1KB，然后不再发任何东西
+      res.write(data.slice(a, a + 1024));
+    });
+    const good = http.createServer((req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': data.length }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), data.length - 1);
+      res.writeHead(206, { 'Content-Range': `bytes ${a}-${b}/${data.length}`, 'Content-Length': b - a + 1 });
+      res.end(data.slice(a, b + 1));
+    });
+    const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+    const s1 = await listen(stall);
+    const s2 = await listen(good);
+    const out = path.join(TMP, 'stall.bin');
+    const t0 = Date.now();
+    try {
+      const r = await downloadMulti(
+        [`http://127.0.0.1:${s1.address().port}/f`, `http://127.0.0.1:${s2.address().port}/f`],
+        out,
+        { connections: 4, minChunk: 1024 * 1024, idleMs: 400, retries: 2 },
+      );
+      const cost = Date.now() - t0;
+      assert(fs.statSync(out).size === data.length, '最终必须下完整');
+      assert(cost < 15000, `不能在停滞的连接上挂住，实际用了 ${cost}ms`);
+    } finally {
+      s1.close(); s2.close();
+      fs.rmSync(out, { force: true });
+      fs.rmSync(`${out}.chunks.json`, { force: true });
     }
   });
 

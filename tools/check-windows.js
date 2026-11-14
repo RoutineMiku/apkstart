@@ -16,9 +16,12 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { WinAgent } = require('../src/core/agent');
 
-const ROOT = path.resolve(process.argv[2] || path.join(__dirname, '..', 'engine'));
+// 运行时目录：命令行参数 > 环境变量 > 仓库里的 engine/
+const ROOT = path.resolve(process.argv[2] || process.env.APKSTART_RUNTIME || path.join(__dirname, '..', 'engine'));
 const EMU = path.join(ROOT, 'emulator', 'emulator.exe');
-const AVD_HOME = path.join(process.env.APPDATA || '', 'apkstart', 'avd');
+// AVD 可能在别的盘（设置里 runtime.avdDir），线上用户常见；这里也支持显式指定
+const AVD_HOME = process.env.APKSTART_AVD_HOME
+  || path.join(process.env.APPDATA || '', 'apkstart', 'avd');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const bad = (w) => {
