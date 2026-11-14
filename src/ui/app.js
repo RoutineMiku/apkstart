@@ -332,9 +332,14 @@ function renderSetup(s) {
   $('setupSteps').innerHTML = stepRow(step);
   $('btnDeployAll').disabled = !!busy;
   $('btnDeployAll').textContent = busy ? '准备中…' : (allDone ? '已完成 · 点此复查' : '一键完成');
-  $('setupNote').textContent = s.diagnosis
-    ? `上次启动自动诊断：${s.diagnosis.title}`
-    : (s.autoProfile || '全自动：无需选择镜像、无需启用加速、无需调内存');
+  // 「上次为什么没起来」优先显示落盘的失败记录：进程重启后内存里的 diagnosis 是空的，
+  // 只显示 autoProfile 会让用户完全看不出原因（issue #20/#25 的报告就是这样）。
+  const lf = s.lastFailure;
+  const lastMsg = (lf && lf.diagnosis && lf.diagnosis.title)
+    ? `上次启动失败：${lf.diagnosis.title}`
+    : (s.diagnosis ? `上次启动自动诊断：${s.diagnosis.title}` : '');
+  $('setupNote').textContent = lastMsg
+    || s.autoProfile || '全自动：无需选择镜像、无需启用加速、无需调内存';
 }
 
 function store_getDiskSize() {
@@ -458,8 +463,17 @@ function friendlyInstallErrorText(msg) {
     return `${s}\n同包名但签名不同（常见于从别的渠道装过）。在应用卡片右键「卸载」后再装。`;
   }
   if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(s)) return `${s}\n已装版本更高，先在右键菜单里卸载再装。`;
+  if (/ERR_FS_FILE_TOO_LARGE|greater than possible Buffer|Cannot allocate|ENOMEM|out of memory/i.test(s)) {
+    return `${s}\n这个安装包过大或内存不足，解析被系统拒绝了。请确认磁盘与内存充足后重试；`
+      + '仍失败请把安装包路径换成纯英文短路径（如 D:\\a.apk）。';
+  }
   return s;
 }
+
+/* 当前那条「正在安装…」的 sticky 提示。install:error 事件要能把它收掉：
+ * 主进程是先 send('install:error') 再让 invoke 失败的，两者都可能到得很晚，
+ * 只靠 catch 收会出现「报错了右下角还在转圈」。 */
+let installToast = null;
 
 async function installFiles(paths) {
   if (!paths || !paths.length) return;
@@ -474,6 +488,7 @@ async function installFiles(paths) {
   for (const p of paths) {
     const name = p.split(/[\\/]/).pop();
     const t = toast({ title: `正在安装 ${name}`, body: '解析 APK…', progress: 8, sticky: true, spinner: true });
+    installToast = t;
     let off = () => {};
     try {
       off = api.on('install:progress', (pr) => {
@@ -493,9 +508,11 @@ async function installFiles(paths) {
       failed++;
       // 先把那条「正在安装…」的 sticky 提示收掉，否则它会一直转圈、还继续被
       // 运行时日志刷新 —— 用户看到的就是「失败信息一直在循环」。
+      // 错误提示统一由下面的 install:error 监听器负责（带文件名与中文原因），
+      // 这里不再重复弹一条。
       try { off(); } catch (_) { /* ignore */ }
       t.dismiss();
-      toast({ title: `安装失败：${name}`, body: friendlyInstallErrorText(e.message), type: 'error' });
+      if (installToast === t) installToast = null;
     } finally {
       try { off(); } catch (_) { /* ignore */ }
     }
@@ -1429,7 +1446,16 @@ function bindEvents() {
   });
 
   // 主进程事件
-  api.on('install:error', (p) => toast({ title: '安装失败', body: p.message, type: 'error' }));
+  api.on('install:error', (p) => {
+    // 报错了就别再让「正在安装…」那条一直转圈（可能来自双击 APK 的另一条链路）
+    if (installToast) { try { installToast.dismiss(); } catch (_) { /* ignore */ } installToast = null; }
+    const name = p && p.file ? String(p.file).split(/[\\/]/).pop() : '';
+    toast({
+      title: name ? `安装失败：${name}` : '安装失败',
+      body: friendlyInstallErrorText((p && p.message) || '未知错误'),
+      type: 'error',
+    });
+  });
   api.on('toast', (p) => toast({ title: p.message, type: p.type === 'error' ? 'error' : 'info' }));
   api.on('app:launched', () => setTimeout(refreshApps, 800));
   api.on('runtime:log', (m) => console.log('[runtime]', m));

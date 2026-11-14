@@ -2,6 +2,12 @@
 /**
  * 极简 ZIP 读取器（仅依赖 Node 内置 zlib）
  * 只解析中央目录，按需解压单个条目，避免大 APK 全量解压撑爆内存。
+ *
+ * 注意：本文件只做「读」，不做「写」。两处「大小」相关的不变量：
+ *  - 单个 Buffer 有上限（Node 约 2GB），所以 GB 级条目一律走 ZipFile + pipeTo；
+ *  - ZIP 的传统 EOCD 用 16/32 位存条目数与偏移，超过就进位成 0xffff/0xffffffff，
+ *    真正的值在 Zip64 EOCD（0x06064b50）与 Zip64 扩展字段（id=0x0001）里。
+ *    两条路径都必须识别，否则大镜像包会被「静默截断条目」或直接越界。
  */
 const zlib = require('zlib');
 const fs = require('fs');
@@ -9,6 +15,79 @@ const fs = require('fs');
 const EOCD_SIG = 0x06054b50;
 const CEN_SIG = 0x02014b50;
 const LOC_SIG = 0x04034b50;
+const ZIP64_EOCD_SIG = 0x06064b50;
+const ZIP64_LOC_SIG = 0x07064b50;
+const MAX32 = 0xffffffff;
+const MAX16 = 0xffff;
+// read() 单条目上限：超过就要求调用方走 pipeTo（流式），避免整块进内存
+const MAX_READ = 256 * 1024 * 1024;
+
+/** 把 BigInt 偏移安全地转成 Number（ZIP 不可能大过 2^53 字节） */
+function toNum(v) { return typeof v === 'bigint' ? Number(v) : v; }
+
+/**
+ * 解析 Zip64 扩展字段（0x0001），补全中央目录里被置成 0xffffffff 的字段。
+ * 字段顺序固定：未压缩大小、压缩大小、本地头偏移、起始磁盘号；只出现「被置位」的那些。
+ * @param {Buffer} extra 中央目录项的扩展字段
+ * @param {{uncompSize:number, compSize:number, localOffset:number}} fields
+ */
+function applyZip64Extra(extra, fields) {
+  if (!extra || extra.length < 4) return fields;
+  let off = 0;
+  while (off + 4 <= extra.length) {
+    const id = extra.readUInt16LE(off);
+    const len = extra.readUInt16LE(off + 2);
+    const dataStart = off + 4;
+    const dataEnd = dataStart + len;
+    if (dataEnd > extra.length) break;
+    if (id === 0x0001) {
+      let p = dataStart;
+      const take64 = () => {
+        if (p + 8 > dataEnd) return null;
+        const v = toNum(extra.readBigUInt64LE(p));
+        p += 8;
+        return v;
+      };
+      if (fields.uncompSize === MAX32) { const v = take64(); if (v !== null) fields.uncompSize = v; }
+      if (fields.compSize === MAX32) { const v = take64(); if (v !== null) fields.compSize = v; }
+      if (fields.localOffset === MAX32) { const v = take64(); if (v !== null) fields.localOffset = v; }
+      break;
+    }
+    off = dataEnd;
+  }
+  return fields;
+}
+
+/**
+ * 从 EOCD 位置解出条目数 / 中央目录大小 / 中央目录偏移，自动跟进 Zip64。
+ * @param {Buffer} buf 包含 EOCD 的缓冲区
+ * @param {number} eocd EOCD 在 buf 内的下标
+ * @param {number} base buf[0] 对应的文件绝对偏移（ZipFile 的尾部窗口用）
+ * @returns {{total:number, cdSize:number, cdOffset:number, eocdAbs:number}}
+ */
+function readEndOfCentralDirectory(buf, eocd, base) {
+  let total = buf.readUInt16LE(eocd + 10);
+  let cdSize = buf.readUInt32LE(eocd + 12);
+  let cdOffset = buf.readUInt32LE(eocd + 16);
+  const eocdAbs = base + eocd;
+
+  const needsZip64 = total === MAX16 || cdSize === MAX32 || cdOffset === MAX32;
+  if (!needsZip64) return { total, cdSize, cdOffset, eocdAbs };
+
+  // Zip64 EOCD locator 固定紧挨在 EOCD 前面 20 字节
+  const loc = eocd - 20;
+  if (loc < 0) return { total, cdSize, cdOffset, eocdAbs };
+  if (buf.readUInt32LE(loc) !== ZIP64_LOC_SIG) return { total, cdSize, cdOffset, eocdAbs };
+  const z64Abs = toNum(buf.readBigUInt64LE(loc + 8));
+  const z64 = z64Abs - base;
+  if (z64 < 0 || z64 + 56 > buf.length) return { total, cdSize, cdOffset, eocdAbs };
+  if (buf.readUInt32LE(z64) !== ZIP64_EOCD_SIG) return { total, cdSize, cdOffset, eocdAbs };
+
+  total = toNum(buf.readBigUInt64LE(z64 + 32));
+  cdSize = toNum(buf.readBigUInt64LE(z64 + 40));
+  cdOffset = toNum(buf.readBigUInt64LE(z64 + 48));
+  return { total, cdSize, cdOffset, eocdAbs };
+}
 
 class ZipArchive {
   constructor(buffer) {
@@ -26,24 +105,34 @@ class ZipArchive {
     }
     if (eocd < 0) throw new Error('不是有效的 ZIP/APK 文件（未找到 EOCD）');
 
-    const total = buf.readUInt16LE(eocd + 10);
-    let offset = buf.readUInt32LE(eocd + 16);
+    const { total, cdOffset } = readEndOfCentralDirectory(buf, eocd, 0);
+    let offset = cdOffset;
 
     for (let i = 0; i < total; i++) {
-      if (buf.readUInt32LE(offset) !== CEN_SIG) break;
+      if (offset + 46 > buf.length || buf.readUInt32LE(offset) !== CEN_SIG) break;
       const flags = buf.readUInt16LE(offset + 8);
       const method = buf.readUInt16LE(offset + 10);
-      const compSize = buf.readUInt32LE(offset + 20);
-      const uncompSize = buf.readUInt32LE(offset + 24);
       const nameLen = buf.readUInt16LE(offset + 28);
       const extraLen = buf.readUInt16LE(offset + 30);
       const commentLen = buf.readUInt16LE(offset + 32);
-      const localOffset = buf.readUInt32LE(offset + 42);
-      const name = buf.toString('utf8', offset + 46, offset + 46 + nameLen);
+      const nameEnd = offset + 46 + nameLen;
+      if (nameEnd > buf.length) break;
+      const fields = applyZip64Extra(
+        buf.subarray(nameEnd, nameEnd + extraLen),
+        {
+          uncompSize: buf.readUInt32LE(offset + 24),
+          compSize: buf.readUInt32LE(offset + 20),
+          localOffset: buf.readUInt32LE(offset + 42),
+        },
+      );
+      const name = buf.toString('utf8', offset + 46, nameEnd);
       this.entries.set(name, {
-        name, flags, method, compSize, uncompSize, localOffset,
+        name, flags, method,
+        compSize: fields.compSize,
+        uncompSize: fields.uncompSize,
+        localOffset: fields.localOffset,
       });
-      offset += 46 + nameLen + extraLen + commentLen;
+      offset = nameEnd + extraLen + commentLen;
     }
   }
 
@@ -55,12 +144,14 @@ class ZipArchive {
     const e = this.entries.get(name);
     if (!e) return null;
     const buf = this.buf;
+    if (e.localOffset + 30 > buf.length) throw new Error(`本地文件头越界: ${name}`);
     if (buf.readUInt32LE(e.localOffset) !== LOC_SIG) {
       throw new Error(`本地文件头损坏: ${name}`);
     }
     const nameLen = buf.readUInt16LE(e.localOffset + 26);
     const extraLen = buf.readUInt16LE(e.localOffset + 28);
     const start = e.localOffset + 30 + nameLen + extraLen;
+    if (start + e.compSize > buf.length) throw new Error(`条目数据越界: ${name}`);
     const raw = buf.subarray(start, start + e.compSize);
     if (e.method === 0) return Buffer.from(raw);
     if (e.method === 8) return zlib.inflateRawSync(raw);
@@ -143,12 +234,22 @@ class ZipFile {
   }
 
   _readAt(pos, len) {
-    const b = Buffer.alloc(Math.max(0, len));
-    if (len > 0) fs.readSync(this.fd, b, 0, len, pos);
+    const n = Math.max(0, Math.min(len, this.size - pos));
+    const b = Buffer.alloc(n);
+    if (n > 0) {
+      let got = 0;
+      while (got < n) {
+        // readSync 可能短读（尤其大块），必须循环到读满
+        const r = fs.readSync(this.fd, b, got, n - got, pos + got);
+        if (r <= 0) break;
+        got += r;
+      }
+    }
     return b;
   }
 
   _parse() {
+    if (this.size < 22) throw new Error('不是有效的 ZIP/APK 文件（文件过小）');
     const tailLen = Math.min(this.size, 22 + 65557 + 4096);
     const tailBase = this.size - tailLen;
     const tail = this._readAt(tailBase, tailLen);
@@ -158,14 +259,16 @@ class ZipFile {
     }
     if (eocd < 0) throw new Error('不是有效的 ZIP/APK 文件（未找到 EOCD）');
 
-    const total = tail.readUInt16LE(eocd + 10);
-    const cdOffset = tail.readUInt32LE(eocd + 16);
-    const eocdAbs = tailBase + eocd;
+    const { total, cdSize, cdOffset, eocdAbs } = readEndOfCentralDirectory(tail, eocd, tailBase);
+    if (cdOffset + cdSize > this.size) {
+      throw new Error('ZIP 中央目录偏移异常');
+    }
+
     let cd = tail;
     let cdBase = tailBase;
-    if (cdOffset < tailBase || cdOffset > eocdAbs) {
-      // 中央目录不在尾部缓冲里（超大注释等），单独读一段
-      const len = Math.min(eocdAbs - cdOffset, 64 * 1024 * 1024);
+    if (cdOffset < tailBase || cdOffset + cdSize > eocdAbs) {
+      // 中央目录不在尾部缓冲里（超大注释 / 多分卷），按声明大小精确读一段
+      const len = Math.min(cdSize, 256 * 1024 * 1024);
       if (len <= 0) throw new Error('ZIP 中央目录偏移异常');
       cd = this._readAt(cdOffset, len);
       cdBase = cdOffset;
@@ -176,15 +279,27 @@ class ZipFile {
       if (off + 46 > cd.length || cd.readUInt32LE(off) !== CEN_SIG) break;
       const flags = cd.readUInt16LE(off + 8);
       const method = cd.readUInt16LE(off + 10);
-      const compSize = cd.readUInt32LE(off + 20);
-      const uncompSize = cd.readUInt32LE(off + 24);
       const nameLen = cd.readUInt16LE(off + 28);
       const extraLen = cd.readUInt16LE(off + 30);
       const commentLen = cd.readUInt16LE(off + 32);
-      const localOffset = cd.readUInt32LE(off + 42);
-      const name = cd.toString('utf8', off + 46, off + 46 + nameLen);
-      this.entries.set(name, { name, flags, method, compSize, uncompSize, localOffset });
-      off += 46 + nameLen + extraLen + commentLen;
+      const nameEnd = off + 46 + nameLen;
+      if (nameEnd > cd.length) break;
+      const fields = applyZip64Extra(
+        cd.subarray(nameEnd, nameEnd + extraLen),
+        {
+          uncompSize: cd.readUInt32LE(off + 24),
+          compSize: cd.readUInt32LE(off + 20),
+          localOffset: cd.readUInt32LE(off + 42),
+        },
+      );
+      const name = cd.toString('utf8', off + 46, nameEnd);
+      this.entries.set(name, {
+        name, flags, method,
+        compSize: fields.compSize,
+        uncompSize: fields.uncompSize,
+        localOffset: fields.localOffset,
+      });
+      off = nameEnd + extraLen + commentLen;
     }
   }
 
@@ -196,7 +311,7 @@ class ZipFile {
     const e = this.entries.get(name);
     if (!e) throw new Error(`条目不存在: ${name}`);
     const head = this._readAt(e.localOffset, 30);
-    if (head.readUInt32LE(0) !== LOC_SIG) throw new Error(`本地文件头损坏: ${name}`);
+    if (head.length < 30 || head.readUInt32LE(0) !== LOC_SIG) throw new Error(`本地文件头损坏: ${name}`);
     const nameLen = head.readUInt16LE(26);
     const extraLen = head.readUInt16LE(28);
     const start = e.localOffset + 30 + nameLen + extraLen;
@@ -205,7 +320,13 @@ class ZipFile {
 
   read(name) {
     const { e, start } = this._range(name);
+    // read() 会把整个条目解到内存：给一个明确上限，避免未来某个调用点顺手
+    // 拿来读 GB 级镜像（那正是 issue #21 里「大包必炸」的形态）。
+    if (e.compSize > MAX_READ) {
+      throw new Error(`条目过大（${(e.compSize / 1048576).toFixed(0)}MB），请改用 pipeTo: ${name}`);
+    }
     const raw = this._readAt(start, e.compSize);
+    if (raw.length < e.compSize) throw new Error(`条目数据被截断: ${name}`);
     if (e.method === 0) return raw;
     if (e.method === 8) return zlib.inflateRawSync(raw);
     throw new Error(`不支持的压缩方式 ${e.method}: ${name}`);

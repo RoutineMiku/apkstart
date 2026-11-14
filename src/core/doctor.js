@@ -318,6 +318,17 @@ function imageIdentity(dir) {
 
 const RULES = [
   {
+    code: 'ACCESS_VIOLATION',
+    // Windows 上 emulator/qemu 以 0xC0000005（十进制 3221225477）退出：
+    // 实测多见于「显卡驱动 / Vulkan 后端在 guest 刚要启动时崩掉」，
+    // 与 CPU、内存、镜像都无关（同机换 -gpu software 往往就能过）。
+    // 必须排在 GPU_INIT 前面：崩溃日志里通常也带着渲染初始化信息，先判崩溃更准。
+    re: /emulator exit 3221225477|exit code 3221225477|0xC0000005|STATUS_ACCESS_VIOLATION/i,
+    title: '渲染后端崩溃（0xC0000005 访问冲突）',
+    hint: '已自动改用更保守的渲染后端重试，并记住这个后端下次不再先试。'
+      + '若反复出现，请更新显卡驱动；或在设置 → 性能与资源里把画质调低、关闭远程桌面/虚拟机显卡直通后再试。',
+  },
+  {
     code: 'GPU_INIT',
     // 只匹配「失败」语境：正常日志里也会出现 Vulkan/EGL/ANGLE 字样，不能误判为致命错误
     re: /Failed to initialize GL emulation|Could not initialize (OpenGL|emulated framebuffer)|Failed to create .*GLES|EGL_(BAD|NOT_INITIALIZED|CONTEXT_LOST)|Failed to (load|initialize) .*vulkan|vulkan.*(failed|error)|ANGLE.*(fail|error)/i,

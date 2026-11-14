@@ -131,5 +131,54 @@ if (fixture) {
   console.log('  （跳过：未找到 APK 夹具，可设置 APKSTART_TEST_APK）');
 }
 
+// 合成 APK 的构造器放在 test/lib/make-apk.js：真实夹具缺失时也能覆盖解析栈，
+// 且 run-tests / auto-test 共用同一份（避免两处各写一套字节拼装）。
+const { buildApkBytes } = require('./lib/make-apk');
+
+console.log('\n[合成 APK：axml + apk 全链路]');
+{
+  const { attrValue, ANDROID_NS } = require('../src/core/axml');
+  test('attrValue 的命名空间语义：传 null = 不限定，默认只认 android', () => {
+    const node = {
+      attrs: [
+        { ns: '', name: 'package', typed: 'com.a.b' },
+        { ns: ANDROID_NS, name: 'label', typed: '测试' },
+      ],
+    };
+    // 非命名空间属性（如 package）必须传 null 才能取到；这是 parseApk 的关键前提
+    assert(attrValue(node, 'package', null) === 'com.a.b', 'package 需要 ns=null');
+    assert(attrValue(node, 'package') === null, '默认只认 android 命名空间');
+    assert(attrValue(node, 'label') === '测试', 'android 属性走默认命名空间');
+    assert(attrValue(node, 'label', null) === '测试', 'ns=null 时应能找到 android 属性');
+  });
+}
+{
+  const tmp = path.join(os.tmpdir(), `apkstart-synth-${Date.now()}.apk`);
+  fs.writeFileSync(tmp, buildApkBytes());
+  try {
+    const meta = parseApk(tmp);
+    test('包名：manifest 上的 package 是非命名空间属性', () => {
+      assert(meta.package === 'com.example.test', `实际 ${meta.package}`);
+    });
+    test('应用名 / 版本 / SDK', () => {
+      assert(meta.label === 'TestApp', `label=${meta.label}`);
+      assert(meta.versionName === '1.2.3', `versionName=${meta.versionName}`);
+      assert(meta.versionCode === 7, `versionCode=${meta.versionCode}`);
+      assert(meta.minSdk === 21 && meta.targetSdk === 34, `sdk=${meta.minSdk}/${meta.targetSdk}`);
+    });
+    test('启动 Activity 从 intent-filter 解析', () => {
+      assert(meta.launchActivity === 'com.example.test.Main', `activity=${meta.launchActivity}`);
+    });
+    test('ABI 目录与图标资源', () => {
+      assert(JSON.stringify(meta.abis) === '["arm64-v8a"]', JSON.stringify(meta.abis));
+      assert(meta.iconFile === 'res/mipmap-hdpi/ic_launcher.png', `icon=${meta.iconFile}`);
+      assert(meta.iconPng && meta.iconPng[0] === 0x89 && meta.iconPng[1] === 0x50, '图标应是 PNG');
+      assert(meta.sizeBytes === fs.statSync(tmp).size, '文件大小应回填');
+    });
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch (_) { /* ignore */ }
+  }
+}
+
 console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
 process.exit(failed ? 1 : 0);

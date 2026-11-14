@@ -73,11 +73,16 @@ class Updater {
   async check(opts = {}) {
     const merged = await this.sources.latest({ force: !!opts.force });
     const pick = (re) => merged.assets.find((a) => re.test(String(a.name || '')));
+    // 发行版里同时挂着「便携包」和「运行时整包」（ApkStart-runtime-*.zip）。
+    // 兜底的 .zip 匹配必须把运行时整包排除掉：某次发布如果只有运行时整包、
+    // 没有便携包，旧逻辑会把它当更新包解压进程序目录（多出 1.5GB 文件、程序也被换坏）。
+    const isRuntimePack = (a) => /runtime/i.test(String((a && a.name) || ''));
 
     const wantSetup = this.flavor === 'setup';
     const asset = wantSetup
-      ? (pick(/Setup\.exe$/i) || pick(/win.*\.exe$/i))
-      : (pick(/portable.*\.zip$/i) || pick(/win64.*\.zip$/i) || pick(/\.zip$/i));
+      ? (pick(/Setup\.exe$/i) || merged.assets.find((a) => /\.exe$/i.test(a.name) && !isRuntimePack(a)))
+      : (pick(/portable.*\.zip$/i) || pick(/win64.*\.zip$/i)
+        || merged.assets.find((a) => /\.zip$/i.test(a.name) && !isRuntimePack(a)));
 
     this.latest = {
       version: merged.version,

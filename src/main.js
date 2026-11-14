@@ -136,7 +136,8 @@ function bootstrapBundledRuntime() {
     const s = store.getSettings();
     // 旧版只在 settings.json 不存在时接管：用户先装过在线版再解压完整版，
     // 就会一直走「缺组件」的部署向导。现在只要当前运行时目录里没有 emulator 就接管。
-    const current = s.runtime.dir || path.join(store.DATA_DIR, 'runtime');
+    const explicit = String(s.runtime.dir || '').trim();
+    const current = explicit || path.join(store.DATA_DIR, 'runtime');
     const currentExe = path.join(current, 'emulator', 'emulator.exe');
     // 便携版被移动/升级（解压到新目录）后，settings 里记的还是旧路径：
     // 必须只认「本次 EXE 所在目录下的 runtime」，否则会一直用旧包里的组件
@@ -144,6 +145,16 @@ function bootstrapBundledRuntime() {
     const sameTree = path.resolve(current).toLowerCase()
       .startsWith(path.resolve(exeDir).toLowerCase());
     const currentOk = fs.existsSync(currentExe) && sameTree;
+    // 用户自己挑的目录（不在 EXE 目录树里，例如 D:\ApkStartRuntime 或别的盘）
+    // 一律尊重：他可能就是为了省 C 盘空间、或让多个便携版共用一个运行时。
+    // 旧版在这里无条件覆盖成 exe 旁边的 bundled runtime，表现就是
+    // 「设置里改了运行时数据目录，结果还是下到旧目录 / AppData」（issue #23）。
+    if (explicit && !sameTree && fs.existsSync(currentExe)) {
+      if (s.engine.gpuMode === 'swiftshader_indirect' || s.engine.memoryMB === 4096) {
+        store.saveSettings({ engine: { gpuMode: 'auto', autoMemory: true, memoryMB: 0, cores: 0 } });
+      }
+      return;
+    }
     // 已有可用运行时（含在线版）就尊重它：AVD 用户数据就在该目录下，不能悄悄搬走
     if (currentOk) {
       // 但仍把自动参数打开，旧配置里的硬编码 4G/4核/弃用 GPU 模式不能继续用
@@ -555,7 +566,7 @@ async function runInstall(filePath) {
     notify('安装完成', `${result.app.label} 已安装${result.app.shortcutPath ? '，桌面快捷方式已创建' : ''}`);
     return result;
   } catch (e) {
-    send('install:error', { message: e.message });
+    send('install:error', { message: e.message, file: filePath });
     if (e.needsSetup) send('ui:navigate', 'setup');
     // 同一条错误 8 秒内只弹一次系统通知：连续重试时不会在右下角刷屏
     const now = Date.now();
@@ -815,13 +826,17 @@ function registerIpc() {
     )) {
       refreshPointerMapping();
     }
-    // 换了更新源 / 镜像前缀：之前那套「谁最快」的结论不再成立，清掉测速缓存
+    // 换了更新源 / 镜像前缀 / 整包地址：之前那套「谁最快」的结论不再成立，清掉测速缓存；
+    // 运行时整包 / 引擎 / 镜像的地址还缓存在 provisioner._cache 里，不清掉就要重启进程才生效。
     if (patch && patch.runtime && (
-      'sourcePreference' in patch.runtime || 'mirrorPrefix' in patch.runtime || 'autoMirror' in patch.runtime
+      'sourcePreference' in patch.runtime || 'mirrorPrefix' in patch.runtime
+      || 'autoMirror' in patch.runtime || 'runtimePackUrl' in patch.runtime
+      || 'emulatorUrl' in patch.runtime || 'sysimgUrl' in patch.runtime
     )) {
       try {
         updater?.sources?.reset();
         runtime?.provisioner?.sources?.reset();
+        runtime?.provisioner?.invalidateEnvCache?.();
       } catch (_) { /* ignore */ }
     }
     return next;
@@ -1705,7 +1720,7 @@ if (!gotLock) {
               console.log('[smoke] settings opened =', opened);
               await new Promise((r) => setTimeout(r, 600));
               const dbg = await mainWindow.webContents.executeJavaScript(
-                "JSON.stringify({ on: document.getElementById('settingsMask').classList.contains('on'), qr: !!document.querySelector('#aboutGroup img'), qrH: (document.querySelector('#aboutGroup img')||{}).naturalHeight, ver: (document.getElementById('aboutVer')||{}).textContent })",
+                "JSON.stringify({ on: document.getElementById('settingsMask').classList.contains('on'), qr: !!document.querySelector('#aboutGroup img'), qrH: (document.querySelector('#aboutGroup img')||{}).naturalHeight, ver: (document.getElementById('aboutVer')||{}).textContent, note: (document.getElementById('setupNote')||{}).textContent })",
               );
               console.log('[smoke] dom =', dbg);
             }

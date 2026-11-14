@@ -17,6 +17,9 @@ function rotate(file, limitKB) {
     const st = fs.statSync(file);
     if (st.size < limitKB * 1024) return false;
     const bak = file.replace(/\.log$/i, '.1.log');
+    // 文件名不以 .log 结尾时 bak 会等于原文件：先删后 rename 就把日志删没了。
+    // 显式跳过这种边界，宁可日志大一点也不能丢。
+    if (path.resolve(bak) === path.resolve(file)) return false;
     try { fs.rmSync(bak, { force: true }); } catch (_) { /* ignore */ }
     fs.renameSync(file, bak);
     return true;

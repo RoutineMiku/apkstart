@@ -106,8 +106,9 @@ function pngBytesToIco(png) {
  *  2) decode 回调（渲染进程用 Chromium 解 WebP）→ PNG-in-ICO；
  *  3) 品牌占位图标 → PNG-in-ICO。
  */
-async function iconToIco(raw, { decode } = {}) {
-  if (!Buffer.isBuffer(raw) || !raw.length) return null;
+async function iconToIco(raw, { decode, onFallback } = {}) {
+  const fail = (why) => { try { if (onFallback) onFallback(why); } catch (_) { /* ignore */ } };
+  if (!Buffer.isBuffer(raw) || !raw.length) { fail('empty'); return null; }
   try {
     const { nativeImage } = require('electron');
     const img = nativeImage.createFromBuffer(raw);
@@ -122,14 +123,17 @@ async function iconToIco(raw, { decode } = {}) {
       const png = await decode(raw);
       const ico = pngBytesToIco(png);
       if (ico) return ico;
-    } catch (_) { /* 解码失败走占位图 */ }
+      fail('decode-output-invalid');
+    } catch (_) { fail('webp-decode-failed'); }
+  } else {
+    fail('no-decoder');
   }
   try {
     const { drawAppIcon } = require('./png');
-    return pngBytesToIco(drawAppIcon(256));
-  } catch (_) {
-    return null;
-  }
+    const ico = pngBytesToIco(drawAppIcon(256));
+    if (ico) { fail('placeholder'); return ico; }
+  } catch (_) { /* ignore */ }
+  return null;
 }
 
 /**

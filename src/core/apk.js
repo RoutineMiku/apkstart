@@ -4,9 +4,8 @@
  * 全部离线完成，不需要 aapt、不需要 adb、不需要联网。
  */
 const fs = require('fs');
-const path = require('path');
-const { ZipArchive } = require('./zip');
-const { parseAxml, attr, attrValue, children, ANDROID_NS } = require('./axml');
+const { ZipFile } = require('./zip');
+const { parseAxml, attr, attrValue, children } = require('./axml');
 const { ResTable } = require('./arsc');
 
 const LAUNCHER_ACTIONS = ['android.intent.action.MAIN'];
@@ -25,8 +24,8 @@ function isLauncherActivity(node) {
 }
 
 function pickIconFromZip(zip) {
-  // 兜底：在 res/ 里找最大的、名字像图标的 png
-  const candidates = zip.names().filter((n) => /^res\/.*\.(png|webp)$/i.test(n));
+  // 兜底：在 res/ 里找最大的、名字像图标的位图（png / webp / jpg 都认）
+  const candidates = zip.names().filter((n) => /^res\/.*\.(png|webp|jpe?g)$/i.test(n));
   const scored = candidates.map((n) => {
     const e = zip.entries.get(n);
     let s = e.uncompSize;
@@ -47,37 +46,86 @@ function pickIconFromZip(zip) {
   return null;
 }
 
-/** 从自适应图标 XML 里找出可用的前景/背景位图 */
-function iconFromAdaptiveXml(zip, xmlBuffer, res) {
+const IMG_RE = /\.(png|webp|jpe?g)$/i;
+
+/** 取节点上的 drawable / src 引用，还原成 APK 内的文件路径 */
+function drawableFileOf(node, res) {
+  for (const name of ['drawable', 'src']) {
+    const a = attr(node, name);
+    if (!a) continue;
+    if (a.refId && res) {
+      const f = res.resolve(a.refId, 'file');
+      if (f) return f;
+    } else if (typeof a.typed === 'string') {
+      return a.typed;
+    }
+  }
+  return null;
+}
+
+/**
+ * 在图标 XML 的节点树里找可用位图。深度优先、XML 最多再展开 3 层：
+ * 现代图标常见 `<adaptive-icon><foreground><inset><drawable/></inset></foreground>`，
+ * 或者 `<layer-list><item><bitmap android:src="@drawable/x"/></item></layer-list>`，
+ * 只认一层属性会直接落到「品牌占位图」。
+ */
+function iconFromNode(zip, node, res, depth = 0) {
+  const file = drawableFileOf(node, res);
+  if (file) {
+    if (IMG_RE.test(file) && zip.has(file)) {
+      const data = zip.read(file);
+      if (data && data.length > 100) return { data, file };
+    }
+    if (/\.xml$/i.test(file) && depth < 3 && zip.has(file)) {
+      const inner = iconFromXml(zip, zip.read(file), res, depth + 1);
+      if (inner) return inner;
+    }
+  }
+  for (const c of node.children || []) {
+    const hit = iconFromNode(zip, c, res, depth);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** 从自适应图标 / layer-list 的 XML 里找出可用的前景/背景位图 */
+function iconFromXml(zip, xmlBuffer, res, depth = 0) {
   let root;
   try {
     root = parseAxml(xmlBuffer);
   } catch (_) {
     return null;
   }
-  const order = ['foreground', 'background', 'monochrome'];
-  for (const key of order) {
+  // 先按规范顺序找 foreground → background → monochrome
+  for (const key of ['foreground', 'background', 'monochrome']) {
     const node = root.children.find((c) => c.name === key) || (root.name === key ? root : null);
     if (!node) continue;
-    const a = attr(node, 'drawable');
-    if (!a) continue;
-    let file = null;
-    if (a.refId && res) file = res.resolve(a.refId, 'file');
-    else if (typeof a.typed === 'string') file = a.typed;
-    if (!file || !/\.(png|webp)$/i.test(file)) continue;
-    if (!zip.has(file)) continue;
-    const data = zip.read(file);
-    if (data && data.length > 100) return { data, file };
+    const hit = iconFromNode(zip, node, res, depth);
+    if (hit) return hit;
   }
-  return null;
+  // 再整棵树扫一遍（layer-list / bitmap / inset 这类没有固定子节点名的）
+  return iconFromNode(zip, root, res, depth);
 }
 
+/**
+ * 解析一个 APK 的元信息。
+ * 走文件版 ZIP 读取器（只读中央目录 + 按需读条目），因此**不把整个 APK 读进内存**：
+ * 旧版 fs.readFileSync 整包读会让 2GB 以上的安装包直接失败（Node 单 Buffer 上限），
+ * 低内存机器上大包也容易被 OOM 打断。
+ */
 function parseApk(filePath) {
   const stat = fs.statSync(filePath);
   if (stat.size < 1024) throw new Error('文件过小，不是有效的 APK');
-  const buf = fs.readFileSync(filePath);
-  const zip = new ZipArchive(buf);
+  const zip = new ZipFile(filePath);
+  try {
+    return parseApkZip(zip, filePath, stat);
+  } finally {
+    zip.close();
+  }
+}
 
+/** parseApk 的主体：调用方负责关闭 zip */
+function parseApkZip(zip, filePath, stat) {
   if (!zip.has('AndroidManifest.xml')) {
     throw new Error('缺少 AndroidManifest.xml：这不是单个 APK（可能是 .apks/.xapk 拆分包）');
   }
@@ -85,7 +133,9 @@ function parseApk(filePath) {
   const manifestBuf = zip.read('AndroidManifest.xml');
   const manifest = parseAxml(manifestBuf);
 
-  const packageName = attrValue(manifest, 'package', null) || attrValue(manifest, 'package');
+  // package 是 manifest 上的**非命名空间**属性（ns=''），必须按「任意命名空间」找：
+  // attrValue 默认只认 android 命名空间，传 null 表示不限定命名空间。
+  const packageName = attrValue(manifest, 'package', null);
   if (!packageName) throw new Error('清单中未找到 package 名');
 
   const versionName = attrValue(manifest, 'versionName') || '1.0';
@@ -143,7 +193,7 @@ function parseApk(filePath) {
 
     if (file && zip.has(file)) {
       if (/\.xml$/i.test(file)) {
-        icon = iconFromAdaptiveXml(zip, zip.read(file), res);
+        icon = iconFromXml(zip, zip.read(file), res);
       } else {
         icon = { data: zip.read(file), file };
       }

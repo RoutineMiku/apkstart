@@ -23,6 +23,27 @@ const SNAPSHOT_NAME = 'apkstart';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Windows 上把 emulator/qemu 的退出码翻译成人话。
+ * 0xC0000005（3221225477）是崩溃里最常见的那个：访问冲突，实测多由
+ * 显卡驱动 / Vulkan 后端在 guest 启动瞬间崩掉引起，换软件渲染即可绕过。
+ */
+function describeExitCode(code) {
+  // 被信号结束时 code 是 null（Windows 上走 taskkill / adb emu kill 都会这样），
+  // 不能当成 0 报「正常退出」，但也谈不上异常，返回空串让调用方原样显示。
+  if (code == null) return '';
+  switch (Number(code)) {
+    case 0: return '正常退出';
+    case 1: return '启动参数或环境错误';
+    case 3221225477: return '0xC0000005 访问冲突，渲染后端崩溃';
+    case 3221225725: return '0xC00000FD 栈溢出';
+    case 3221225781: return '0xC0000135 缺少 DLL（VC++ 运行库 / 运行时组件被杀毒删除）';
+    case 3221225506: return '0xC0000022 拒绝访问（驱动或权限问题）';
+    case 3221225595: return '0xC000007B 镜像位数不匹配或 DLL 损坏';
+    default: return '';
+  }
+}
+
 class EmulatorEngine {
   constructor(appRoot) {
     this.appRoot = appRoot;
@@ -34,6 +55,7 @@ class EmulatorEngine {
     this.profile = null;
     this.attempts = [];
     this.lastDiagnosis = null;
+    this.lastExitCode = null;
     // 快照的 ram.bin ≈ 分配给虚拟机的内存（2-4GB）。
     // 冷启动本来就快的机器不该为它付出几个 GB 的磁盘，只在「真慢」时才保存。
     this.snapshotWorthSaving = null;
@@ -45,6 +67,39 @@ class EmulatorEngine {
   }
 
   get settings() { return store.getSettings(); }
+
+  /**
+   * 把「最后一次启动失败」落盘。
+   * 旧版只放在内存里（this.attempts），用户重启 ApkStart 后再导出诊断报告，
+   * 报告里就是 attempts: []、bootLog: [] 一片空白，只能在日志里翻 —— 这也是
+   * issue #20/#25 里「附了报告却看不出原因」的直接原因。
+   */
+  _persistFailure(extra = {}) {
+    try {
+      const dir = path.join(store.DATA_DIR, 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      const data = {
+        at: new Date().toISOString(),
+        exitCode: this.lastExitCode,
+        exitMeaning: describeExitCode(this.lastExitCode),
+        diagnosis: this.lastDiagnosis,
+        attempts: this.attempts,
+        ...extra,
+      };
+      fs.writeFileSync(path.join(dir, 'last-failure.json'), JSON.stringify(data, null, 2), 'utf8');
+    } catch (_) { /* 落盘失败不影响主流程 */ }
+  }
+
+  /** 读回上一次失败记录（诊断报告 / 开机前提示用） */
+  lastFailure() {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(store.DATA_DIR, 'logs', 'last-failure.json'), 'utf8'));
+    } catch (_) { return null; }
+  }
+
+  _clearFailure() {
+    try { fs.rmSync(path.join(store.DATA_DIR, 'logs', 'last-failure.json'), { force: true }); } catch (_) { /* ignore */ }
+  }
 
   get serial() { return `emulator-${this.port}`; }
 
@@ -550,10 +605,12 @@ class EmulatorEngine {
     pipe(proc.stdout);
     pipe(proc.stderr);
     proc.on('exit', (code) => {
-      this.log(`emulator exit ${code}`);
-      this._logWrite(logFile, `emulator exit ${code}\n`);
+      this.lastExitCode = code;
+      const meaning = describeExitCode(code);
+      this.log(`emulator exit ${code}${meaning ? `（${meaning}）` : ''}`);
+      this._logWrite(logFile, `emulator exit ${code}${meaning ? `（${meaning}）` : ''}\n`);
       this.proc = null;
-      onLog(`运行时已退出（code=${code}）`);
+      onLog(`运行时已退出（code=${code}${meaning ? `，${meaning}` : ''}）`);
     });
     proc.on('error', (e) => {
       this.log(`spawn error: ${e.message}`);
@@ -812,6 +869,11 @@ class EmulatorEngine {
       const port = i === 0 ? startPort : await doctor.freePortPair(startPort + (i * 2));
       const plan = { ...base, port, adbPort, lcd: screen };
       this.port = port;
+      // 每轮重置退出码：上一轮 0xC0000005 不能带进下一轮的诊断里
+      this.lastExitCode = null;
+      // 日志也按轮切分：内存日志是跨轮累积的，第 1 轮的崩溃行若留在尾部，
+      // 第 2 轮（比如换后端后端口冲突）会被误诊成同一个崩溃。
+      const logStart = this._log.length;
       onLog(`启动运行时（第 ${i + 1}/${variants.length} 次：${plan.label}）…`);
 
       // eslint-disable-next-line no-await-in-loop
@@ -833,18 +895,19 @@ class EmulatorEngine {
       // eslint-disable-next-line no-await-in-loop
       const dead = await this._waitSpawnSettled(2200);
       if (dead || !this.proc) {
-        const d = doctor.diagnose(this.recentLog(60));
-        this.attempts.push({ plan: plan.label, diagnosis: d.code });
+        const d = doctor.diagnose(this._attemptLines(logStart, 60));
+        this.attempts.push({ plan: plan.label, diagnosis: d.code, exitCode: this.lastExitCode });
         this.lastDiagnosis = d;
         lastError = `${d.title}：${d.hint}`;
         // 磁盘写满不是「换组参数就能好」的问题：继续重试只会反复失败，
         // 而且历史上最后那组参数带 wipe，会把用户数据一起抹掉。直接收工、如实报错。
         if (d.code === 'DISK_FULL') {
           onLog('磁盘空间不足，已停止重试（不会动你的应用与存档）。');
-          return { ok: false, error: lastError, needsSpace: true, attempts: this.attempts };
+          this._persistFailure({ profile, why: 'disk-full' });
+          return { ok: false, error: lastError, needsSpace: true, attempts: this.attempts, exitCode: this.lastExitCode };
         }
         // 加速/镜像类结论可能是缓存里的旧数据，作废掉，下次启动重新探测
-        if (['ACCEL', 'GPU_INIT', 'GPU_MODE', 'IMAGE', 'DLL'].includes(d.code)) {
+        if (['ACCEL', 'GPU_INIT', 'GPU_MODE', 'IMAGE', 'DLL', 'ACCESS_VIOLATION'].includes(d.code)) {
           try { this.provisioner.invalidateEnvCache(); } catch (_) { /* ignore */ }
         }
         onLog(`${d.title}，自动换一组参数重试…`);
@@ -880,8 +943,8 @@ class EmulatorEngine {
         if (state === 'booting') sawBooting = true;
         // 45 秒仍完全没连上，且日志出现明确致命错误 → 提前换方案，不干等 4 分钟
         if (!sawBooting && Date.now() - started > 45000) {
-          const d = doctor.diagnose(this.recentLog(80));
-          if (['GPU_INIT', 'ACCEL', 'GPU_MODE', 'IMAGE', 'DLL', 'MEMORY'].includes(d.code)) {
+          const d = doctor.diagnose(this._attemptLines(logStart, 80));
+          if (['GPU_INIT', 'ACCEL', 'GPU_MODE', 'IMAGE', 'DLL', 'MEMORY', 'ACCESS_VIOLATION'].includes(d.code)) {
             this.lastDiagnosis = d;
             try { this.provisioner.invalidateEnvCache(); } catch (_) { /* ignore */ }
             fatal = true;
@@ -900,6 +963,8 @@ class EmulatorEngine {
 
       if (ok) {
         const bootMs = Date.now() - started;
+        // 这一次真的起来了：清掉上次的失败记录，避免以后「诊断」翻出旧账
+        this._clearFailure();
         // 一定要存 quickboot 快照：模拟器进程会随 ApkStart 退出而结束（Electron 的
         // job 对象会连带杀掉子进程），下次打开有没有快照直接决定是 25 秒还是 7 秒。
         // 装完新应用时 installer 会作废快照，避免"重启后应用消失"。
@@ -911,8 +976,9 @@ class EmulatorEngine {
         };
       }
 
-      const d = fatal ? (this.lastDiagnosis || doctor.diagnose(this.recentLog(80))) : doctor.diagnose(this.recentLog(80));
-      this.attempts.push({ plan: plan.label, diagnosis: d.code, timeout: !fatal });
+      const attemptLines = this._attemptLines(logStart, 80);
+      const d = fatal ? (this.lastDiagnosis || doctor.diagnose(attemptLines)) : doctor.diagnose(attemptLines);
+      this.attempts.push({ plan: plan.label, diagnosis: d.code, timeout: !fatal, exitCode: this.lastExitCode });
       this.lastDiagnosis = d;
       lastError = fatal ? `${d.title}：${d.hint}` : '开机超时（可能是首次引导较慢或硬件加速未生效）';
       onLog(`${lastError}，自动换一组参数重试…`);
@@ -924,7 +990,13 @@ class EmulatorEngine {
     const d = this.lastDiagnosis || doctor.diagnose(this.recentLog(120));
     const report = doctor.writeReport({
       dataDir: store.DATA_DIR, profile, logLines: this.recentLog(300),
-      extra: { attempts: this.attempts, diagnosis: d, image: choice },
+      extra: {
+        attempts: this.attempts,
+        diagnosis: d,
+        image: choice,
+        exitCode: this.lastExitCode,
+        exitMeaning: describeExitCode(this.lastExitCode),
+      },
     });
     const err = new Error(
       `运行时多次尝试仍未能启动（${d.title}）。\n${d.hint}\n\n`
@@ -934,6 +1006,7 @@ class EmulatorEngine {
     err.diagnosis = d;
     err.report = report.file;
     err.attempts = this.attempts;
+    this._persistFailure({ profile, why: 'boot-failed', report: report.file });
     throw err;
   }
 
@@ -1059,6 +1132,39 @@ class EmulatorEngine {
   }
 
   recentLog(n = 40) { return this._log.slice(-n).map((x) => x.line); }
+
+  /**
+   * 只取「本轮启动尝试」产生的日志行。
+   * 内存日志是跨轮累积的（诊断报告要看到全部尝试），但诊断结论必须只看本轮：
+   * 否则第 1 轮的 `emulator exit 3221225477` 会让第 2 轮的任何失败都被判成同一个崩溃。
+   * 本轮一条日志都没有时（进程压根没起来）退回整体尾部，至少给个结论。
+   */
+  _attemptLines(from, max = 80) {
+    const lines = this._log.slice(Math.max(0, from || 0)).map((x) => x.line);
+    return lines.length ? lines.slice(-max) : this.recentLog(max);
+  }
+
+  /**
+   * 从 emulator.log 文件尾部读最近 n 行（内存缓冲为空时用）。
+   * 用户重启 ApkStart 再导出诊断报告时，内存里的 this._log 已经空了，
+   * 旧版报告因此只剩一句 UNKNOWN —— 真实崩溃原因全在日志文件里。
+   */
+  tailLogFile(n = 300) {
+    try {
+      const file = path.join(store.DATA_DIR, 'logs', 'emulator.log');
+      const size = fs.statSync(file).size;
+      const take = Math.min(size, 2 * 1024 * 1024);
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(take);
+        fs.readSync(fd, buf, 0, take, size - take);
+        const lines = buf.toString('utf8').split(/\r?\n/);
+        // 从头读的话第一行可能被截断，丢掉它
+        if (take < size) lines.shift();
+        return lines.slice(-n);
+      } finally { fs.closeSync(fd); }
+    } catch (_) { return []; }
+  }
 }
 
 module.exports = { EmulatorEngine, AVD_NAME, SNAPSHOT_NAME };

@@ -262,6 +262,8 @@ class Provisioner {
   async guardDisk(component, targetDir) {
     const need = {
       adb: 64, emulator: 600, sysimg: 1800, playimg: 1800, qemu: 320, iso: 1100, aehd: 64,
+      // 运行时整包：1.5GB 压缩包 + 展开后 ~3.3GB 镜像，峰值同时存在
+      runtime: 5000,
     }[component] || 512; // MB
     const buf = 1024; // 额外预留 1GB（快照 / 数据分区 / 解压中间文件）
     const dir = targetDir || this.root;
@@ -521,6 +523,8 @@ class Provisioner {
    */
   async installRuntimePack(onProgress = () => {}) {
     const p = this.ensureDirs();
+    // 先给一条进度：找版本 + 测速这一段没有字节数，不给提示用户会以为「卡死了」。
+    onProgress({ stage: 'download', message: '正在获取运行时版本信息…', percent: 1 });
     const pack = await this.resolveRuntimePack();
     await this.guardDisk('runtime', p.root);
     const zip = path.join(p.tmp, 'runtime-pack.zip');
@@ -572,8 +576,10 @@ class Provisioner {
 
     // 整包里的 system.img 是 .xz 压缩的（和完整版安装包一致）。这里立刻展开，
     // 否则紧接着 checkEnv() 会认为「没装系统镜像」，又去 Google 下一套 1.4 GB。
+    // 展开失败必须让部署失败并带上原因：旧版这里 catch 成 0，用户看到进度
+    // 停在 99% 之后又跳回「改用官方源补齐」，白下一套 1.4GB。
     onProgress({ stage: 'extract', message: '展开系统镜像（约 1 分钟，只需一次）…', percent: 99 });
-    await this.materializeImages((m) => onProgress({ stage: 'extract', message: m, percent: 99 })).catch(() => 0);
+    await this.materializeImages((m) => onProgress({ stage: 'extract', message: m, percent: 99 }));
 
     onProgress({ stage: 'done', message: '运行时已就绪', percent: 100 });
     return { ok: true, name: pack.name, tag: pack.tag };
@@ -760,35 +766,60 @@ class Provisioner {
     }
 
     let done = 0;
+    const failures = [];
     for (const j of jobs) {
       const have = fileSize(j.dest);
-      if (have > 32 * 1024 * 1024) continue; // 已经展开过
+      // 判断「已经展开过」不能只看 32MB：旧版没有 .part，被中断后可能留下
+      // 几百 MB 的半截镜像，阈值一过就被当成完成，开机时炸在系统镜像损坏上。
+      // 真实镜像解压后一定比压缩包大，所以「小于压缩包大小」= 必然没展开完。
+      const srcSize = fileSize(j.src);
+      if (have > 32 * 1024 * 1024 && (srcSize <= 0 || have >= srcSize)) continue;
+      // 先解到 .part，成功后再改名：解压中途被打断（关程序 / 断电 / 磁盘满）
+      // 不会留下一个「看着像已完成」的半截 system.img，否则下次会跳过展开、
+      // 开机时死在镜像损坏上，用户只能删数据重来。
+      const part = `${j.dest}.part`;
+      try { fs.rmSync(part, { force: true }); } catch (_) { /* ignore */ }
       fs.mkdirSync(path.dirname(j.dest), { recursive: true });
       onLog(`首次启动：正在展开系统镜像 ${path.basename(j.dest)}（约 1 分钟，只需一次）`);
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((resolve, reject) => {
-        const { pipeline, Readable } = require('stream');
-        if (j.xz) {
-          // LZMA2 解压：必须直接引原生绑定 index.js。
-          // 包默认入口 main.js / xz.js 内部会 require('stream-polyfill.mjs')，
-          // Electron 的 Node 20 不支持 require(ESM) 会抛错；而 exports 又不允许
-          // 直接写 '@napi-rs/lzma/index.js'，所以用 require.resolve 定位目录后按文件路径引。
-          const path0 = require('path');
-          const lzmaDir = path0.dirname(require.resolve('@napi-rs/lzma'));
-          const { xz } = require(path0.join(lzmaDir, 'index.js'));
-          const webIn = Readable.toWeb(fs.createReadStream(j.src));
-          const webOut = xz.decompressStream(webIn);
-          pipeline(Readable.fromWeb(webOut), fs.createWriteStream(j.dest), (err) => (err ? reject(err) : resolve()));
-        } else {
-          pipeline(
-            fs.createReadStream(j.src),
-            zlib.createGunzip(),
-            fs.createWriteStream(j.dest),
-            (err) => (err ? reject(err) : resolve()),
-          );
-        }
-      }).catch((e) => onLog(`展开镜像失败：${e.message}`));
-      done += 1;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve, reject) => {
+          const { pipeline, Readable } = require('stream');
+          if (j.xz) {
+            // LZMA2 解压：必须直接引原生绑定 index.js。
+            // 包默认入口 main.js / xz.js 内部会 require('stream-polyfill.mjs')，
+            // Electron 的 Node 20 不支持 require(ESM) 会抛错；而 exports 又不允许
+            // 直接写 '@napi-rs/lzma/index.js'，所以用 require.resolve 定位目录后按文件路径引。
+            const path0 = require('path');
+            const lzmaDir = path0.dirname(require.resolve('@napi-rs/lzma'));
+            const { xz } = require(path0.join(lzmaDir, 'index.js'));
+            const webIn = Readable.toWeb(fs.createReadStream(j.src));
+            const webOut = xz.decompressStream(webIn);
+            pipeline(Readable.fromWeb(webOut), fs.createWriteStream(part), (err) => (err ? reject(err) : resolve()));
+          } else {
+            pipeline(
+              fs.createReadStream(j.src),
+              zlib.createGunzip(),
+              fs.createWriteStream(part),
+              (err) => (err ? reject(err) : resolve()),
+            );
+          }
+        });
+        fs.renameSync(part, j.dest);
+        done += 1;
+      } catch (e) {
+        try { fs.rmSync(part, { force: true }); } catch (_) { /* ignore */ }
+        // 不能再静默吞掉：调用方（一键部署 / 开机）必须知道镜像没展开成功，
+        // 否则会「用官方源再下一套 1.4GB」或者直接开机失败。
+        failures.push(`${path.basename(j.dest)}: ${e.message}`);
+        onLog(`展开镜像失败：${e.message}`);
+      }
+    }
+    if (failures.length) {
+      const err = new Error(`系统镜像展开失败（${failures.join('；')}）`);
+      err.code = 'MATERIALIZE_FAILED';
+      err.failed = failures;
+      throw err;
     }
     return done;
   }

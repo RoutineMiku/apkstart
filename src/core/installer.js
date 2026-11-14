@@ -9,7 +9,7 @@ const path = require('path');
 const crypto = require('crypto');
 const store = require('./store');
 const { parseApk } = require('./apk');
-const { ZipArchive } = require('./zip');
+const { ZipFile } = require('./zip');
 const { iconToIco, writeShortcut, removeShortcut, safeFileName } = require('./shortcut');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,30 +21,38 @@ function isArmOnly(meta) {
 
 /**
  * 拆分安装包（.apks / .xapk）：解出里面的分片 APK 到纯 ASCII 临时目录。
+ * 用文件版 ZIP 读取器 + 流式落盘：拆分包动辄 2GB+，整包读内存会失败。
  * 返回 { meta, files, cleanup }；meta 来自带 AndroidManifest 的 base APK。
  */
-function parseBundle(filePath) {
-  const zip = new ZipArchive(fs.readFileSync(filePath));
-  const apkNames = zip.names().filter((n) => /\.apk$/i.test(n));
-  if (!apkNames.length) throw new Error('这个安装包里没有找到 APK 分片（可能不是 .apks/.xapk）');
+async function parseBundle(filePath) {
+  const zip = new ZipFile(filePath);
   const dir = path.join(os.tmpdir(), 'apkstart-bundle', crypto.createHash('sha1')
     .update(filePath).digest('hex').slice(0, 12));
-  fs.mkdirSync(dir, { recursive: true });
-  const files = apkNames.map((n, i) => {
-    const target = path.join(dir, `split-${i}.apk`);
-    fs.writeFileSync(target, zip.read(n));
-    return target;
-  });
-  let meta = null;
-  for (const f of files) {
-    try { meta = parseApk(f); break; } catch (_) { /* 分片里没有清单 */ }
+  const cleanup = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* ignore */ } };
+  try {
+    const apkNames = zip.names().filter((n) => /\.apk$/i.test(n));
+    if (!apkNames.length) throw new Error('这个安装包里没有找到 APK 分片（可能不是 .apks/.xapk）');
+    fs.mkdirSync(dir, { recursive: true });
+    const files = [];
+    for (let i = 0; i < apkNames.length; i++) {
+      const target = path.join(dir, `split-${i}.apk`);
+      // 单个分片也可能是几百 MB：流式解压，不经过 Buffer
+      // eslint-disable-next-line no-await-in-loop
+      await zip.pipeTo(apkNames[i], fs.createWriteStream(target));
+      files.push(target);
+    }
+    let meta = null;
+    for (const f of files) {
+      try { meta = parseApk(f); break; } catch (_) { /* 分片里没有清单 */ }
+    }
+    if (!meta) throw new Error('拆分包的 base APK 解析失败');
+    return { meta, files, cleanup };
+  } catch (e) {
+    cleanup();
+    throw e;
+  } finally {
+    zip.close();
   }
-  if (!meta) throw new Error('拆分包的 base APK 解析失败');
-  return {
-    meta,
-    files,
-    cleanup: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* ignore */ } },
-  };
 }
 
 function accentOf(pkg) {
@@ -124,7 +132,8 @@ class Installer {
       if (!app.apkPath || !fs.existsSync(app.apkPath)) continue;
       try {
         if (app.bundle) {
-          const b = parseBundle(app.apkPath);
+          // eslint-disable-next-line no-await-in-loop
+          const b = await parseBundle(app.apkPath);
           // eslint-disable-next-line no-await-in-loop
           await rt.client.installMultiple(b.files);
           b.cleanup();
@@ -143,7 +152,7 @@ class Installer {
     let meta;
     let bundle = null;
     if (/\.(apks|xapk)$/i.test(filePath)) {
-      bundle = parseBundle(filePath);
+      bundle = await parseBundle(filePath);
       meta = bundle.meta;
     } else {
       meta = parseApk(filePath);
@@ -201,15 +210,21 @@ class Installer {
 
     // 图标落盘。APK 图标大量是 WebP，nativeImage 解不了，交给渲染进程解码 +
     // 品牌占位图兜底，保证 .lnk 一定带图标（之前 icoPath 一直是 null）。
+    // iconFallback 记录「真实图标解不出来、用了占位图」——这种要作为软警告告诉用户，
+    // 否则桌面上只有一片绿色三角，用户会以为是 ApkStart 弄错了图标。
     let iconPath = null;
     let icoPath = null;
+    let iconFallback = '';
     if (meta.iconPng) {
       try {
         iconPath = store.iconPath(meta.package);
         fs.writeFileSync(iconPath, meta.iconPng);
       } catch (_) { /* ignore */ }
       try {
-        const ico = await iconToIco(meta.iconPng, { decode: this.ctx.decodeIcon });
+        const ico = await iconToIco(meta.iconPng, {
+          decode: this.ctx.decodeIcon,
+          onFallback: (why) => { iconFallback = why; },
+        });
         if (ico) {
           icoPath = this.icoFile(meta.package);
           fs.writeFileSync(icoPath, ico);
@@ -273,6 +288,11 @@ class Installer {
     const warnings = [];
     if (meta.minSdk && meta.minSdk > 34) {
       warnings.push(`此应用要求 Android ${meta.minSdk}+，高于当前运行时，可能无法正常运行。`);
+    }
+    if (iconFallback === 'placeholder') {
+      warnings.push('应用图标无法解析（可能是特殊格式的自适应图标），快捷方式暂时使用占位图标。');
+    } else if (iconFallback === 'webp-decode-failed') {
+      warnings.push('应用图标（WebP）解码失败，快捷方式暂时使用占位图标。');
     }
     client.batteryOptimizeOff(meta.package).catch(() => {});
     // 装应用时作废了旧快照，这里补排一次：空闲时把「已装好新应用」的状态存下来，
@@ -514,4 +534,4 @@ class Installer {
   }
 }
 
-module.exports = { Installer, accentOf };
+module.exports = { Installer, accentOf, parseBundle };

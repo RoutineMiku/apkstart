@@ -137,6 +137,8 @@ class Runtime {
       autoProfile: this.emulator.profile ? doctor.describeProfile(this.emulator.profile) : '',
       diagnosis: this.emulator.lastDiagnosis || null,
       attempts: this.emulator.attempts || [],
+      // 「上次为什么没起来」：内存里没有就回落到落盘记录，设置页/诊断都能显示真实原因
+      lastFailure: (this.emulator.lastFailure ? this.emulator.lastFailure() : null),
     };
 
     if (!env.adb.ok) {
@@ -319,6 +321,7 @@ class Runtime {
           needsSpace: !!(st && st.needsSpace),
           attempts: (st && st.attempts) || [],
           diagnosis: this.emulator.lastDiagnosis,
+          exitCode: st && st.exitCode,
         };
       }
       this.lastActivity = Date.now();
@@ -844,8 +847,13 @@ class Runtime {
     }
 
     // 默认：自带运行时
-    // 单文件发行版的镜像是压缩的，先展开（已展开过就秒过）
-    await this.provisioner.materializeImages(onLog).catch(() => {});
+    // 单文件发行版的镜像是压缩的，先展开（已展开过就秒过）。
+    // 展开失败不要把错误吞掉：否则后面 checkEnv() 只会说「还差系统镜像」，
+    // 用户会以为是没下载，而不是解压失败（磁盘满 / 文件损坏）。
+    await this.provisioner.materializeImages(onLog).catch((e) => {
+      onLog(`系统镜像展开失败：${e.message}`);
+      this.log(`materialize failed: ${e.message}`);
+    });
     const env = await this.provisioner.checkEnv();
 
     // emulator 路径：镜像即系统，没有"安装到磁盘"这一步
@@ -859,7 +867,7 @@ class Runtime {
         if (r.ok) return { ok: true, client: r.client, engine: 'emulator', profile: r.profile };
         return {
           ok: false, error: r.error, env,
-          diagnosis: r.diagnosis, report: r.report, attempts: r.attempts,
+          diagnosis: r.diagnosis, report: r.report, attempts: r.attempts, exitCode: r.exitCode,
         };
       } catch (e) {
         return { ok: false, error: e.message, env };
@@ -1000,13 +1008,27 @@ class Runtime {
       emulatorVersion: checked.emulator.version || '',
       diskMB: doctor.freeDiskMB(store.DATA_DIR),
     });
+    // 内存里的 attempts 只在本次会话有效；用户重启后再导出报告时它是空的。
+    // 这时改用上次落盘的失败记录，并把 emulator.log 的尾部带上 —— 否则报告
+    // 只有一句 UNKNOWN，看不到真正原因（issue #20/#25 都栽在这里）。
+    const persisted = this.emulator.lastFailure ? this.emulator.lastFailure() : null;
+    const liveAttempts = this.emulator.attempts || [];
+    const attempts = liveAttempts.length ? liveAttempts : ((persisted && persisted.attempts) || []);
+    const diagnosis = this.emulator.lastDiagnosis || (persisted && persisted.diagnosis) || null;
+    const exitCode = this.emulator.lastExitCode != null ? this.emulator.lastExitCode
+      : (persisted ? persisted.exitCode : null);
+    let logLines = this.emulator.recentLog(300);
+    if (!logLines.length && this.emulator.tailLogFile) logLines = this.emulator.tailLogFile(300);
     return doctor.writeReport({
       dataDir: store.DATA_DIR,
       profile,
-      logLines: this.emulator.recentLog(300),
+      logLines,
       extra: {
-        attempts: this.emulator.attempts,
-        diagnosis: this.emulator.lastDiagnosis,
+        attempts,
+        diagnosis,
+        exitCode,
+        exitMeaning: persisted && persisted.exitMeaning ? persisted.exitMeaning : '',
+        lastFailure: persisted,
         runtimeDir: env.root,
         serial: this.emuSerial,
         bootLog: this.bootLog,

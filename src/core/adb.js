@@ -102,6 +102,16 @@ function unstage(staged) {
   try { fs.rmSync(staged, { force: true }); } catch (_) { /* ignore */ }
 }
 
+/**
+ * adb install 的超时上限本来固定 240s，但 2GB+ 的安装包在慢盘上
+ * 「push + 安装 + dexopt」很容易超过 4 分钟：一旦超时就会被当成安装失败，
+ * 用户看到的就是「大包装了没反应/失败」。这里按包体放大，上限 20 分钟。
+ */
+function installTimeoutMs(bytes) {
+  const mb = Math.max(1, Number(bytes || 0) / 1048576);
+  return Math.min(1200000, Math.max(240000, Math.round(60000 + mb * 120)));
+}
+
 class AdbError extends Error {
   constructor(message, stderr, code) {
     super(message);
@@ -344,11 +354,13 @@ class AdbClient {
       ['install', '-r', file],
     ];
     let last = '';
+    let timeout = 240000;
+    try { timeout = installTimeoutMs(fs.statSync(file).size); } catch (_) { /* 取不到大小就用默认值 */ }
     try {
       for (const args of variants) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          const { stdout } = await this.exec(args, { timeout: 240000 });
+          const { stdout } = await this.exec(args, { timeout });
           if (/Failure|Error/i.test(stdout) && !/Success/i.test(stdout)) {
             throw new Error(String(stdout).trim());
           }
@@ -396,11 +408,13 @@ class AdbClient {
     if (!apkPaths || !apkPaths.length) throw new Error('没有可安装的分片 APK');
     const staged = apkPaths.map((p) => stageApk(p));
     const files = staged.map((s) => s.path);
+    const totalBytes = staged.reduce((n, s) => n + (fs.existsSync(s.path) ? fs.statSync(s.path).size : 0), 0);
+    const timeout = installTimeoutMs(totalBytes);
     try {
       for (const extra of [['-r', '-t', '--bypass-low-target-sdk-block'], ['-r', '-t']]) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          const { stdout } = await this.exec(['install-multiple', ...extra, ...files], { timeout: 300000 });
+          const { stdout } = await this.exec(['install-multiple', ...extra, ...files], { timeout });
           if (/Failure|Error/i.test(stdout) && !/Success/i.test(stdout)) throw new Error(stdout);
           return stdout.trim();
         } catch (e) {

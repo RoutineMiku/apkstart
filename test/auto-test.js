@@ -111,6 +111,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(doctor.diagnose(['random line']).code === 'UNKNOWN');
   });
 
+  await test('日志诊断：emulator 以 0xC0000005 退出要判定为渲染后端崩溃', () => {
+    // 实测 issue #20/#25：打印完 Userspace boot properties 后 exit 3221225477
+    assert(doctor.diagnose(['emulator exit 3221225477']).code === 'ACCESS_VIOLATION');
+    assert(doctor.diagnose(['... 0xC0000005 ...']).code === 'ACCESS_VIOLATION');
+    // 崩溃日志里通常也带着渲染初始化信息：必须优先判崩溃，而不是 GPU_INIT
+    const mixed = ['Graphics backend: gfxstream', 'emulator exit 3221225477'];
+    assert(doctor.diagnose(mixed).code === 'ACCESS_VIOLATION', '崩溃应优先于普通渲染日志');
+  });
+
   await test('空闲端口探测返回偶数端口对', async () => {
     const p = await doctor.freePortPair(5560);
     assert(p % 2 === 0 && p >= 5560, `端口异常：${p}`);
@@ -325,6 +334,74 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       const out = path.join(TMP, 'b.bin');
       await file.pipeTo('dir/b.bin', fs.createWriteStream(out));
       assert(fs.readFileSync(out).equals(entries[1].data), 'pipeTo 流式输出应完整');
+    } finally {
+      file.close();
+    }
+  });
+
+  await test('Zip64：EOCD 用 0xffff/0xffffffff 占位时，条目数与偏移从 Zip64 EOCD 取', async () => {
+    const { ZipArchive, ZipFile } = require('../src/core/zip');
+    const name = Buffer.from('hello.txt');
+    const data = Buffer.from('hello zip64 apkstart');
+    // 本地头
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(45, 4);
+    lh.writeUInt32LE(data.length, 18);
+    lh.writeUInt32LE(data.length, 22);
+    lh.writeUInt16LE(name.length, 26);
+    const cenStart = lh.length + name.length + data.length;
+    // 中央目录项：三个字段置 0xffffffff，真实值进 Zip64 extra（id=0x0001）
+    const extra = Buffer.alloc(28);
+    extra.writeUInt16LE(0x0001, 0);
+    extra.writeUInt16LE(24, 2);
+    extra.writeBigUInt64LE(BigInt(data.length), 4);
+    extra.writeBigUInt64LE(BigInt(data.length), 12);
+    extra.writeBigUInt64LE(0n, 20);
+    const ch = Buffer.alloc(46 + name.length + extra.length);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(45, 6);
+    ch.writeUInt32LE(0xffffffff, 20);
+    ch.writeUInt32LE(0xffffffff, 24);
+    ch.writeUInt16LE(name.length, 28);
+    ch.writeUInt16LE(extra.length, 30);
+    ch.writeUInt32LE(0xffffffff, 42);
+    name.copy(ch, 46);
+    extra.copy(ch, 46 + name.length);
+    // Zip64 EOCD + locator + 传统 EOCD（全部进位）
+    const z64 = Buffer.alloc(56);
+    z64.writeUInt32LE(0x06064b50, 0);
+    z64.writeBigUInt64LE(44n, 4);
+    z64.writeUInt16LE(45, 12);
+    z64.writeUInt16LE(45, 14);
+    z64.writeBigUInt64LE(1n, 24);
+    z64.writeBigUInt64LE(1n, 32);
+    z64.writeBigUInt64LE(BigInt(ch.length), 40);
+    z64.writeBigUInt64LE(BigInt(cenStart), 48);
+    const loc = Buffer.alloc(20);
+    loc.writeUInt32LE(0x07064b50, 0);
+    loc.writeBigUInt64LE(BigInt(cenStart + ch.length), 8);
+    loc.writeUInt32LE(1, 16);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(0xffff, 8);
+    eocd.writeUInt16LE(0xffff, 10);
+    eocd.writeUInt32LE(0xffffffff, 12);
+    eocd.writeUInt32LE(0xffffffff, 16);
+    const buf = Buffer.concat([lh, name, data, ch, z64, loc, eocd]);
+
+    const mem = new ZipArchive(buf);
+    assert(mem.has('hello.txt'), 'ZipArchive 应能认出 Zip64 条目');
+    assert(String(mem.read('hello.txt')) === 'hello zip64 apkstart', 'ZipArchive 内容应正确');
+    assert(mem.entries.get('hello.txt').uncompSize === data.length, 'ZipArchive 未压缩大小应从 extra 取');
+
+    const zipPath = path.join(TMP, 'zip64.zip');
+    fs.writeFileSync(zipPath, buf);
+    const file = new ZipFile(zipPath);
+    try {
+      assert(file.has('hello.txt'), 'ZipFile 应能认出 Zip64 条目');
+      assert(String(file.read('hello.txt')) === 'hello zip64 apkstart', 'ZipFile 内容应正确');
+      assert(file.entries.get('hello.txt').localOffset === 0, 'ZipFile 本地头偏移应从 extra 取');
     } finally {
       file.close();
     }
@@ -838,6 +915,34 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 资产挑选是纯函数式的，这里直接喂一个假的 check 结果验证兜底命名规则
     assert(/Setup\.exe$/i.test('ApkStart-0.3.2-Setup.exe'), '安装版资产名匹配');
     assert(/portable.*\.zip$/i.test('ApkStart-v0.3.2-win64-portable.zip'), '便携版资产名匹配');
+  });
+
+  await test('便携版不会把运行时整包（ApkStart-runtime-*.zip）当成更新包', async () => {
+    const { Updater } = require('../src/core/updater');
+    const dir = path.join(TMP, 'upd-asset');
+    fs.mkdirSync(dir, { recursive: true });
+    const exe = path.join(dir, 'ApkStart.exe');
+    fs.writeFileSync(exe, 'x');
+    const mk = (assets) => ({
+      version: '0.5.0', tag: 'v0.5.0', name: 'ApkStart v0.5.0', notes: '', htmlUrl: '',
+      publishedAt: '', sources: [], unreachable: [], assets,
+    });
+    const u = new Updater({ currentVersion: '0.3.4', exePath: exe, isPackaged: true, dataDir: dir });
+    // 两个资产同时存在 → 必须挑便携包
+    u.sources = { latest: async () => mk([
+      { name: 'ApkStart-runtime-v0.5.0.zip', url: 'https://x/runtime.zip', urls: ['https://x/runtime.zip'], sizes: {} },
+      { name: 'ApkStart-v0.5.0-win64-portable.zip', url: 'https://x/p.zip', urls: ['https://x/p.zip'], sizes: {} },
+    ]) };
+    let info = await u.check({ force: true });
+    assert(/portable/.test(info.asset.name), `应挑便携包，实际 ${info.asset.name}`);
+
+    // 只有运行时整包（便携包没传上去）→ 宁可不自动更新，也不能拿 1.5GB 运行时当程序包
+    u.sources = { latest: async () => mk([
+      { name: 'ApkStart-runtime-v0.5.0.zip', url: 'https://x/runtime.zip', urls: ['https://x/runtime.zip'], sizes: {} },
+    ]) };
+    info = await u.check({ force: true });
+    assert(!info.asset, '只有运行时整包时不应挑出更新资产');
+    assert(info.canAutoApply === false, '没有可用资产时不能自动更新');
   });
 
   await test('双源：候选地址含镜像前缀，自定义前缀优先于公共镜像', () => {
@@ -1408,6 +1513,127 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const rotated = lf.rotate(f, 256);
     assert(rotated === true, '应执行滚动');
     assert(!fs.existsSync(f) && fs.existsSync(path.join(TMP, 'rot.1.log')), '应变成 .1.log');
+  });
+
+  await test('日志文件名不以 .log 结尾时：宁可滚不动，也不能把日志删掉', () => {
+    const lf = require('../src/core/logfile');
+    const f = path.join(TMP, 'plain.txt');
+    fs.writeFileSync(f, 'x'.repeat(300 * 1024));
+    const rotated = lf.rotate(f, 256);
+    assert(rotated === false, 'bak 与源文件同名时必须放弃滚动');
+    assert(fs.existsSync(f), '日志文件不能被删掉');
+  });
+
+  await test('启动失败记录会落盘，重启后再导出诊断报告也能看到真实原因', () => {
+    const { EmulatorEngine } = require('../src/core/emulator');
+    const emu = new EmulatorEngine(path.join(__dirname, '..'));
+    emu.lastExitCode = 3221225477;
+    emu.lastDiagnosis = doctor.diagnose(['emulator exit 3221225477']);
+    emu.attempts = [{ plan: 'host / 硬件加速', diagnosis: 'ACCESS_VIOLATION', exitCode: 3221225477 }];
+    emu._persistFailure({ why: 'test' });
+    const back = emu.lastFailure();
+    assert(back && back.exitCode === 3221225477, '退出码应落盘');
+    assert(back.diagnosis && back.diagnosis.code === 'ACCESS_VIOLATION', '诊断结论应落盘');
+    assert(back.attempts.length === 1, '尝试记录应落盘');
+    emu._clearFailure();
+    assert(emu.lastFailure() === null, '启动成功后应清掉失败记录');
+  });
+
+  await test('.xapk 拆分包：流式解出分片、解析 base、失败时清理临时目录', async () => {
+    const crypto = require('crypto');
+    const { parseBundle } = require('../src/core/installer');
+    const { buildApkBytes, buildStoredZip } = require('./lib/make-apk');
+    const apk = buildApkBytes();
+
+    // 成功：包内两个分片（base + config），meta 来自可解析的那个
+    const okPath = path.join(TMP, 'ok.xapk');
+    fs.writeFileSync(okPath, buildStoredZip([
+      { name: 'base.apk', data: apk },
+      { name: 'split_config.arm64_v8a.apk', data: apk },
+      { name: 'manifest.json', data: Buffer.from('{}') },
+    ]));
+    const b = await parseBundle(okPath);
+    try {
+      assert(b.files.length === 2, `应解出 2 个分片，实际 ${b.files.length}`);
+      assert(b.files.every((f) => fs.existsSync(f)), '分片应落盘');
+      assert(b.meta.package === 'com.example.test', `包名 ${b.meta.package}`);
+    } finally {
+      b.cleanup();
+    }
+
+    // 失败：包里没有 APK 分片 → 明确报错，且不能把临时目录留在用户机器上
+    const badPath = path.join(TMP, 'bad.xapk');
+    fs.writeFileSync(badPath, buildStoredZip([{ name: 'readme.txt', data: Buffer.from('nope') }]));
+    let err = null;
+    try { await parseBundle(badPath); } catch (e) { err = e; }
+    assert(err && /没有找到 APK 分片/.test(err.message), `应报没有分片，实际 ${err && err.message}`);
+    const dir = path.join(os.tmpdir(), 'apkstart-bundle',
+      crypto.createHash('sha1').update(badPath).digest('hex').slice(0, 12));
+    assert(!fs.existsSync(dir), '失败时应清理临时目录');
+  });
+
+  await test('materializeImages：展开 .img.gz、已展开跳过、坏镜像上报失败且不留半截', async () => {
+    const zlib = require('zlib');
+    const store = require('../src/core/store');
+    const { Provisioner } = require('../src/core/provision');
+    const before = store.getSettings().runtime.dir;
+    const rt = path.join(TMP, 'rt-materialize');
+    const imgDir = path.join(rt, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64');
+    fs.mkdirSync(imgDir, { recursive: true });
+    fs.writeFileSync(path.join(imgDir, 'kernel-ranchu'), 'kernel');
+    // 40MB 全零：gzip 后只有几十 KB，但解压后 >32MB，正好能验证「已展开」的判定
+    fs.writeFileSync(path.join(imgDir, 'system.img.gz'), zlib.gzipSync(Buffer.alloc(40 * 1024 * 1024, 7)));
+    store.saveSettings({ runtime: { dir: rt } });
+    const prov = new Provisioner(path.join(__dirname, '..'));
+    try {
+      const n = await prov.materializeImages();
+      assert(n === 1, `应展开 1 个镜像，实际 ${n}`);
+      const img = path.join(imgDir, 'system.img');
+      assert(fs.statSync(img).size === 40 * 1024 * 1024, '展开大小应正确');
+      assert(fs.existsSync(path.join(imgDir, 'kernel-ranchu')), '非压缩组件应一并就位');
+      assert(!fs.existsSync(`${img}.part`), '成功时不应留下 .part');
+
+      const again = await prov.materializeImages();
+      assert(again === 0, `已展开时应跳过，实际展开了 ${again}`);
+
+      // 坏镜像：必须抛 MATERIALIZE_FAILED，并且清掉 .part（否则下次会被当成已完成）
+      fs.rmSync(img, { force: true });
+      fs.writeFileSync(path.join(imgDir, 'system.img.gz'), Buffer.from('not a gzip at all'));
+      let err = null;
+      try { await prov.materializeImages(); } catch (e) { err = e; }
+      assert(err && err.code === 'MATERIALIZE_FAILED', `坏镜像应失败，实际 ${err && err.message}`);
+      assert(!fs.existsSync(`${img}.part`), '失败后不应留下 .part');
+    } finally {
+      store.saveSettings({ runtime: { dir: before } });
+    }
+  });
+
+  await test('换下载源/整包地址后：provisioner 的地址缓存必须被清掉（否则要重启才生效）', () => {
+    const { Provisioner } = require('../src/core/provision');
+    const p = new Provisioner(path.join(__dirname, '..'));
+    // 模拟解析过一次整包地址 / 引擎地址后的缓存
+    p._cache.pack = { url: 'https://old.example/runtime.zip', tag: 'v1' };
+    p._cache.emulatorUrl = 'https://old.example/emulator.zip';
+    p._cache.sysimgUrl = 'https://old.example/sysimg.zip';
+    p.invalidateEnvCache();
+    assert(!p._cache.pack, '整包地址缓存应被清空');
+    assert(!p._cache.emulatorUrl && !p._cache.sysimgUrl, '引擎/镜像地址缓存应被清空');
+  });
+
+  await test('每轮启动只用本轮日志做诊断（上一轮的崩溃不能污染下一轮）', () => {
+    const { EmulatorEngine } = require('../src/core/emulator');
+    const emu = new EmulatorEngine(path.join(__dirname, '..'));
+    emu._log = [
+      { t: 1, line: 'Graphics backend: gfxstream' },
+      { t: 2, line: 'emulator exit 3221225477' },        // 第 1 轮：0xC0000005
+      { t: 3, line: '--- 第 2 轮 ---' },
+      { t: 4, line: 'Address already in use' },          // 第 2 轮：端口被占
+    ];
+    assert(doctor.diagnose(emu._attemptLines(0, 80)).code === 'ACCESS_VIOLATION', '第 1 轮应判崩溃');
+    assert(doctor.diagnose(emu._attemptLines(2, 80)).code === 'PORT_BUSY', '第 2 轮应判端口占用');
+    // 本轮没有任何日志时退回整体尾部，不能直接 UNKNOWN
+    const fallback = emu._attemptLines(emu._log.length, 80);
+    assert(fallback.length === emu._log.length, `空轮次应退回整体日志，实际 ${fallback.length} 行`);
   });
 
   console.log(results.join('\n'));

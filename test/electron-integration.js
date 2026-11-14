@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
 
   try {
     const { drawAppIcon } = require('../src/core/png');
-    const { pngToIco, writeShortcut, removeShortcut } = require('../src/core/shortcut');
+    const { pngToIco, writeShortcut, removeShortcut, iconToIco } = require('../src/core/shortcut');
     const { parseApk } = require('../src/core/apk');
 
     // 1. 程序图标 → PNG → ICO
@@ -29,6 +29,27 @@ app.whenReady().then(async () => {
     const ico = pngToIco(png);
     fs.writeFileSync(path.join(OUT, 'icon.ico'), ico);
     step('生成 ICO', !!ico && ico.length > 1000, `${ico ? ico.length : 0} bytes`);
+
+    // 1b. WebP 图标降级路径：nativeImage 解不了 WebP，必须能落到 decode 回调，
+    // 没有解码器时用品牌占位图并**如实回报**（安装时会把它变成一条软警告）。
+    {
+      // 1x1 的最小 WebP
+      const webp = Buffer.from('UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA', 'base64');
+      let noDecoder = '';
+      const placeholderIco = await iconToIco(webp, { onFallback: (why) => { noDecoder = why; } });
+      step('WebP 无解码器 → 合法 ICO 且回报占位降级',
+        !!placeholderIco && placeholderIco.length > 100 && /placeholder|webp-decode-failed/.test(noDecoder),
+        noDecoder || '(no callback)');
+
+      let decoded = 0;
+      const viaDecode = await iconToIco(webp, {
+        decode: async () => { decoded++; return png; },
+        onFallback: (why) => { throw new Error(`不该降级：${why}`); },
+      });
+      // nativeImage 若某天能直接解 WebP，decoded 会是 0，同样算通过；关键是产出合法 ICO
+      step('WebP 图标最终产出 ICO', !!viaDecode && viaDecode.readUInt16LE(2) === 1,
+        `decode 调用 ${decoded} 次，${viaDecode ? viaDecode.length : 0} bytes`);
+    }
 
     // 2. 快捷方式
     const lnk = path.join(OUT, 'test.lnk');

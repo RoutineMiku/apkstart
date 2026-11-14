@@ -409,9 +409,16 @@ class Sources {
       onProgress?.({ stage: 'probe', message: `正在测速 ${need.length} 个下载源…` });
       // 顺序测而不是并发测：并发会互相抢带宽，测出来的名次变成「谁抢得凶」，
       // 而不是「谁真的快」。每个源 256KB，正常也就一秒左右。
+      // 单个源最多等 6 秒就放弃（旧版 9 秒 × 4 个源 = 最长 36 秒没有任何字节进度，
+      // 用户看到的就是「卡在准备运行时」）；测速失败只会排到最后，不影响能下载。
+      let i = 0;
       for (const u of need) {
+        i += 1;
+        let host = u;
+        try { host = new URL(u).host; } catch (_) { /* 地址不合法就原样显示 */ }
+        onProgress?.({ stage: 'probe', message: `正在测速第 ${i}/${need.length} 个源：${host}…` });
         // eslint-disable-next-line no-await-in-loop
-        const r = await measure(u);
+        const r = await measure(u, { timeoutMs: 6000 });
         this._rankCache.set(u, { at: Date.now(), ok: r.ok, speed: r.speed });
       }
     }
