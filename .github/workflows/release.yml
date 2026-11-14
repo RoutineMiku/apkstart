@@ -80,7 +80,11 @@ jobs:
       # 用户点开就能解压；只有超限时 publish-gitee.js 才退回 .part1/.part2 分片。
       # Setup（1.4GB）与运行时整包（1.4GB）超限太多，只留在 GitHub ——
       # 应用端对「哪个源有资产」是取并集的，不影响更新。
+      # Gitee 同步「缺 token / 网络不通」只告警不阻断：否则整 build job 变红，
+      # 下面 needs: build 的 full job 会被整段跳过，连 GitHub 自己的 Setup / 运行时整包都发不出。
+      # 缺 token 时这一步仍会在日志里标红（continue-on-error 是「可见但非致命」），不静默。
       - name: 同步便携版到 Gitee
+        continue-on-error: true
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         shell: pwsh
