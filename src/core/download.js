@@ -407,6 +407,7 @@ async function downloadMulti(urls, dest, opt = {}) {
     pos: i * per,
     src: i % same.length,
     tries: 0,
+    rotates: 0,   // 必须显式初始化：undefined < 2 是 false，换源永远不会触发
   })).filter((c) => !doneSet.has(c.start));
 
   const saveMeta = () => {
@@ -437,6 +438,12 @@ async function downloadMulti(urls, dest, opt = {}) {
     });
   };
 
+  // 低速换源：某一块从某个源只跑到几十 KB/s 时，光等它下完会把整个下载拖成
+  // 「卡在 95% 不动」。跑够 slowAfterMs 且平均速度低于 slowBps 就中断、换下一个源
+  // （从断点继续，不丢数据）。每块最多换 2 次，避免在几个慢源之间来回横跳。
+  const slowAfterMs = Number(opt.slowAfterMs) > 0 ? Number(opt.slowAfterMs) : 45000;
+  const slowBps = Number(opt.slowBps) > 0 ? Number(opt.slowBps) : 120 * 1024;
+
   const fetchChunk = async (c) => {
     const url = same[c.src % same.length].url;
     const res = await openStream(url, { headers: { Range: `bytes=${c.pos}-${c.end}` } });
@@ -444,6 +451,11 @@ async function downloadMulti(urls, dest, opt = {}) {
       res.resume();
       throw new Error(`分块被拒绝 HTTP ${res.statusCode}`);
     }
+    const startPos = c.pos;
+    const startedAt = Date.now();
+    // 同一条连接 destroy 之后仍可能再收到已缓冲的包，会重复触发换源、把源跳过头，
+    // 所以每次请求只允许换一次。
+    let rotated = false;
     await new Promise((resolve, reject) => {
       // 空闲看门狗 + 「保证 settle」：连接建立了但一个字节都不来（常见的
       // 「TCP 通但被墙/被限」），光等 socket 超时要 30 秒；而 res.destroy(err)
@@ -472,6 +484,18 @@ async function downloadMulti(urls, dest, opt = {}) {
         got += buf.length;
         kick();
         tick(false);
+        // 还没下完就慢到不可接受 → 换源（c.pos 已前进，下次从断点继续）
+        const took = Date.now() - startedAt;
+        if (!rotated && took > slowAfterMs && (c.rotates || 0) < 2 && c.pos <= c.end) {
+          const bps = (c.pos - startPos) / (took / 1000);
+          if (bps < slowBps) {
+            rotated = true;
+            c.rotates = (c.rotates || 0) + 1;
+            // 这里不推进 c.src：换源统一由下面的 catch 做，否则一次失败会跳两个源
+            res.destroy();
+            finish(new Error(`该源速度过低（${(bps / 1024).toFixed(0)} KB/s），换源重试`));
+          }
+        }
       });
       res.on('end', () => finish());
       res.on('error', (e) => finish(e));

@@ -1075,6 +1075,59 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('下载器：某个源只跑到几十 KB/s 时换源，而不是卡在最后几 % 不动', async () => {
+    const http = require('http');
+    const { downloadMulti } = require('../src/core/download');
+    const MB = 1024 * 1024;
+    const total = 2 * MB;
+    const data = Buffer.alloc(total, 5);
+    // 慢源：每 100ms 才吐 4KB（≈40KB/s）
+    const slow = http.createServer((req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': total }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), total - 1);
+      res.writeHead(206, { 'Content-Range': `bytes ${a}-${b}/${total}`, 'Content-Length': b - a + 1 });
+      let pos = a;
+      const pump = () => {
+        if (pos > b) { res.end(); return; }
+        const chunk = data.slice(pos, Math.min(b + 1, pos + 4096));
+        pos += chunk.length;
+        res.write(chunk);
+        setTimeout(pump, 100);
+      };
+      pump();
+    });
+    const fast = http.createServer((req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': total }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), total - 1);
+      res.writeHead(206, { 'Content-Range': `bytes ${a}-${b}/${total}`, 'Content-Length': b - a + 1 });
+      res.end(data.slice(a, b + 1));
+    });
+    const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+    const s1 = await listen(slow);
+    const s2 = await listen(fast);
+    const out = path.join(TMP, 'slowrot.bin');
+    const t0 = Date.now();
+    try {
+      await downloadMulti(
+        [`http://127.0.0.1:${s1.address().port}/f`, `http://127.0.0.1:${s2.address().port}/f`],
+        out,
+        { connections: 2, minChunk: 512 * 1024, idleMs: 3000, slowAfterMs: 400, slowBps: 200 * 1024 },
+      );
+      const cost = Date.now() - t0;
+      assert(Buffer.compare(fs.readFileSync(out), data) === 0, '换源后内容必须正确');
+      // 全程走慢源的话 2MB / 40KB/s ≈ 50 秒；换源必须在几秒内完成
+      assert(cost < 15000, `应在低速时换源，实际用了 ${cost}ms`);
+    } finally {
+      s1.close(); s2.close();
+      fs.rmSync(out, { force: true });
+      fs.rmSync(`${out}.chunks.json`, { force: true });
+    }
+  });
+
   await test('多源并行下载：只有一条可用地址时退回单源分块', async () => {
     const http = require('http');
     const { downloadMulti } = require('../src/core/download');
