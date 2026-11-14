@@ -330,7 +330,7 @@ class Runtime {
       await this.prepare(client);
       // 快照改成「空闲时再存」：立刻存要写 1~3GB，会和用户刚点开的应用抢磁盘 I/O
       this._armSnapshotSave(20000);
-      return { ok: true, client, engine: 'emulator', serial: this.emuSerial, profile: st.profile };
+      return { ok: true, client, engine: 'emulator', serial: this.emuSerial, profile: st.profile, network: st.network || null };
     } catch (e) {
       // 把自动重试/诊断结论原样抛给 UI，避免再包一层含糊的「启动失败」
       return { ok: false, error: e.message, diagnosis: e.diagnosis, report: e.report, attempts: e.attempts };
@@ -864,7 +864,7 @@ class Runtime {
       await this.killOrphanEmulators({ onLog }).catch(() => {});
       try {
         const r = await this.boot({ onLog });
-        if (r.ok) return { ok: true, client: r.client, engine: 'emulator', profile: r.profile };
+        if (r.ok) return { ok: true, client: r.client, engine: 'emulator', profile: r.profile, network: r.network || null };
         return {
           ok: false, error: r.error, env,
           diagnosis: r.diagnosis, report: r.report, attempts: r.attempts, exitCode: r.exitCode,
@@ -1104,6 +1104,70 @@ class Runtime {
       return { ok: true, reclaimed, avdDir };
     } catch (e) {
       return { ok: false, reclaimed: 0, avdDir: '', error: e.message };
+    }
+  }
+
+  /**
+   * 等待虚拟机联网。
+   *
+   * 实测：`sys.boot_completed` 只代表系统起来了，Wi-Fi 关联 + DHCP 还要再等
+   * 十几秒到一分多钟才会拿到 10.0.2.16。红果这类应用一进去就拉首页数据，
+   * 没网时页面渲染成一整块黑底（隐私弹窗是本地页面所以正常显示），
+   * 用户看到的就是「点同意并继续之后一直黑屏」。所以拉起应用前先等网络就绪。
+   *
+   * @returns {Promise<{ok:boolean,reason:string,ip?:string,gateway?:string}>}
+   */
+  async waitForNetwork({ timeoutMs = 90000, onLog = () => {}, adbPath = '' } = {}) {
+    const t0 = Date.now();
+    let last = null;
+    let lastNotice = 0;
+    while (Date.now() - t0 < timeoutMs) {
+      // eslint-disable-next-line no-await-in-loop
+      last = await this.emulator.checkNetwork(adbPath || this.adbPath()).catch(() => null);
+      if (last && last.ok) return last;
+      if (Date.now() - lastNotice > 10000) {
+        lastNotice = Date.now();
+        onLog(`正在等待安卓虚拟机联网… ${Math.round((Date.now() - t0) / 1000)}s`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    return last || { ok: false, reason: 'timeout' };
+  }
+
+  /**
+   * 修复「安卓虚拟机没有网络」。
+   * 绝大多数情况只是 Wi-Fi 关联比开机完成慢，重启并等一会儿就能好，
+   * **不需要**清掉用户数据；只有在等待超时后才提示用户走「重置安卓数据」。
+   *
+   * @returns {Promise<{ok:boolean, network?:object, boot?:boolean, error?:string}>}
+   */
+  async repairNetwork({ onLog = () => {} } = {}) {
+    try {
+      onLog('正在修复虚拟机网络：重置安卓数据并重新开机（应用清单会保留，点开时自动重装）…');
+      if (this.vmRunning) await this.stop({ graceful: false }).catch(() => {});
+      // 这个 Android 14 镜像上，已有用户数据冷启时 Wi-Fi 经常一直 NO-CARRIER；
+      // 重置数据后的那次开机才能稳定连上，所以这里显式走 -wipe-data。
+      this.emulator.forceWipeOnNextStart();
+      const boot = await this.ensure({ onLog });
+      if (!boot || !boot.ok) {
+        return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false };
+      }
+      // Wi-Fi 关联 + DHCP 比 sys.boot_completed 晚很多（实测最长 2 分多钟），要给足时间。
+      const network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
+      if (network && network.ok) {
+        // 立刻把「网络正常」的状态存成快速启动快照，下次恢复时网卡状态一起还原。
+        try {
+          const saved = await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 });
+          onLog(saved ? '已把「网络正常」的状态存成快速启动快照。' : '快照没存下（不影响本次使用）。');
+        } catch (_) { /* ignore */ }
+        onLog(`网络已恢复（${network.ip || ''} 网关 ${network.gateway || '可达'}）。`);
+      } else {
+        onLog('等待超时，虚拟机仍没有网络。多半是宿主机网络/防火墙拦住了模拟器，请检查后重试。');
+      }
+      return { ok: !!(network && network.ok), network, boot: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
     }
   }
 

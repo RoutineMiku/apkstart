@@ -463,7 +463,11 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
 
     const cold = emu.buildArgs({ wipe: true }).join(' ');
     assert(/-wipe-data/.test(cold), 'wipe 时必须带 -wipe-data');
-    assert(/ -no-snapshot( |$)/.test(cold), 'wipe 时不能加载也不能保存快照');
+    // 重置数据时：不加载旧快照（数据对不上），但**允许保存**新快照。
+    // 「修复网络」依赖这条链路：重置后第一次开机有网 → 立刻存快照 → 下次恢复。
+    // 老实现这里推 -no-snapshot，会把保存一起关掉，导致修完网络存不下快照。
+    assert(/ -no-snapshot-load( |$)/.test(cold), 'wipe 时不该加载旧快照');
+    assert(!/ -no-snapshot( |$)/.test(cold), 'wipe 时仍要允许保存新快照（修复网络依赖它）');
   });
 
   await test('新版 emulator 写的 ram.bin 必须被认作完整快照（否则刚存好的 3GB 会被当空壳删掉）', () => {

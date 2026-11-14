@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('apkstart', {
   runtimeUsage: () => invoke('runtime:usage'),
   runtimeCleanup: (opts) => invoke('runtime:cleanup', opts || {}),
   runtimeResetData: () => invoke('runtime:resetData'),
+  runtimeRepairNetwork: () => invoke('runtime:repairNetwork'),
+  runtimeCheckNetwork: () => invoke('runtime:checkNetwork'),
   dataInfo: () => invoke('runtime:dataInfo'),
   setDataSize: (gb) => invoke('runtime:setDataSize', gb),
   confirm: (opts) => invoke('app:confirm', opts || {}),

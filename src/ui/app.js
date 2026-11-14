@@ -1141,6 +1141,48 @@ function bindSettings() {
     }
   });
 
+  // 修复网络：安卓里联网页面一直黑屏（红果点「同意并继续」后整屏黑）时用。
+  // 根因是虚拟机 /data 里的 Wi-Fi 配置坏了，wlan0 没起来、没有默认路由。
+  // Play Store 镜像不允许 root，只能整体重置 /data；应用清单保留，点开时会自动重装。
+  $('btnRepairNetwork').addEventListener('click', async () => {
+    const btn = $('btnRepairNetwork');
+    btn.disabled = true;
+    try {
+      const ok = await api.confirm({
+        type: 'warning',
+        title: '修复虚拟机网络？',
+        message: '应用里需要联网的页面一直黑屏/转圈，通常是安卓虚拟机没有网络。',
+        detail: '修复方式：重置安卓用户数据，让虚拟机重新获得网络。\n\n'
+          + '• 应用清单会保留，点开应用会自动重装，不用手动装\n'
+          + '• 应用内的登录态、追剧记录等运行时数据会丢失，需要重新登录\n'
+          + '• 只影响当前 AVD，系统镜像和本机 APK 缓存都不动\n\n'
+          + '整个过程约 30–90 秒（要重新冷启动一次）。是否继续？',
+        buttons: ['取消', '开始修复'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (!ok || ok.response !== 1) return;
+      const r = await api.runtimeRepairNetwork();
+      if (!r || !r.ok) {
+        toast({
+          title: '网络仍未恢复',
+          body: (r && r.error) || '重置后虚拟机还是没网，请检查本机网络/防火墙是否拦住了模拟器。',
+          type: 'error',
+        });
+        return;
+      }
+      toast({
+        title: '网络已恢复',
+        body: `网关 ${(r.network && r.network.gateway) || '可达'}。点开应用会自动重装，联网页面不会再黑屏。`,
+        type: 'ok',
+      });
+    } catch (e) {
+      toast({ title: '修复失败', body: e.message, type: 'error' });
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $('btnOpenShared').addEventListener('click', () => api.openSharedDir());
 
   // 重建快捷方式：桌面图标被误删 / 被安全软件拦掉时的兜底入口

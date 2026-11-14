@@ -1101,6 +1101,29 @@ function registerIpc() {
     }
   });
 
+  // 修复虚拟机网络：重置 /data（保留应用清单，点开应用会自动重装）。
+  // 典型场景：安卓里所有联网页面一直黑屏，其实是 wlan0 没起来、没有默认路由。
+  ipcMain.handle('runtime:repairNetwork', async () => {
+    try {
+      const r = await runtime.repairNetwork({
+        onLog: (m) => send('toast', { message: m, kind: 'info', timeout: 6000 }),
+      });
+      return r;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 只做网络体检，不动任何数据（设置页用来显示当前状态）
+  ipcMain.handle('runtime:checkNetwork', async () => {
+    try {
+      const network = await runtime.emulator.checkNetwork(runtime.adbPath());
+      return { ok: !!network.ok, network };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   // ---------------- 运行时自举 ----------------
 
   ipcMain.handle('provision:installEmulator', async () => {

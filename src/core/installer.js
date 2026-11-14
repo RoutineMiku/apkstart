@@ -413,6 +413,19 @@ class Installer {
     }
     // 分辨率要在拉起应用之前改，避免 wm size 触发配置变更把刚启动的 Activity 重建
     if (beforeStart) await beforeStart(rt).catch((e) => onLog(`显示适配跳过：${e.message}`));
+    // 冷启动时顺手做过网络体检：没网就直接说清楚。否则用户只会看到「这个应用一直黑屏」，
+    // 完全想不到是虚拟机没网（联网页面拿不到数据就是一块黑底）。
+    // 关键修复：Wi-Fi 关联往往比 sys.boot_completed 晚几十秒，红果一进去就拉首页数据，
+    // 没网时首页渲染成整块黑底 —— 这就是「点同意并继续后一直黑屏」的真正原因。
+    // 所以拉起应用前先等网络就绪（最多 90 秒），宁可多等几秒也不要给用户一块黑屏。
+    if (rt.engine === 'emulator' || rt.engine === 'builtin') {
+      const net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 150000 }).catch(() => null);
+      if (net && net.ok) {
+        onLog(`虚拟机网络就绪（${net.ip || ''}）`);
+      } else {
+        onLog('⚠ 虚拟机联网超时：需要联网的页面可能暂时黑屏，可在「设置 → 修复网络」重试。');
+      }
+    }
     const settings = store.getSettings();
     const start = () => rt.client.startApp(app ? app.package : pkg, app ? app.activity : null, {
       freeform: settings.freeform,
