@@ -1002,6 +1002,63 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('双源：版本结果缓存 10 分钟，force 时强制重查', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: {} }));
+    let calls = 0;
+    s.fetchReleases = async () => {
+      calls += 1;
+      return [{ source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v1.0.0', assets: [] } }];
+    };
+    await s.latest();
+    await s.latest();
+    assert(calls === 1, `缓存期内不应重复请求，实际请求 ${calls} 次`);
+    await s.latest({ force: true });
+    assert(calls === 2, 'force 必须绕过缓存');
+    s.reset();
+    await s.latest();
+    assert(calls === 3, 'reset 后应重新请求');
+  });
+
+  await test('双源：某个源 403 被限流后熔断跳过，不再每轮撞墙', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: {} }));
+    let giteeCalls = 0;
+    s.fetchReleases = async () => {
+      giteeCalls += 1;
+      return [
+        { source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v1.0.0', assets: [] } },
+        { source: 'gitee', name: 'Gitee', web: 'e', error: 'gitee.com 403 （被限流）' },
+      ];
+    };
+    // 第一次：Gitee 报 403，被记入熔断
+    await s.latest({ force: true });
+    assert(giteeCalls === 1, '第一轮应真实请求过');
+    const reason = s.blockedReason('gitee');
+    assert(!!reason, '403 必须触发熔断');
+    assert(s.blockedReason('github') === null, '没出错的源不应被熔断');
+    // 熔断期内的请求应被直接跳过（不再打网络）
+    assert(/暂时跳过/.test(reason), `跳过原因要能看懂，实际：${reason}`);
+    s.reset();
+    assert(s.blockedReason('gitee') === null, 'reset 后熔断应解除');
+  });
+
+  await test('双源：全部源不可达时退回上一次结果（标记 stale，不直接报错）', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: {} }));
+    s.fetchReleases = async () => [
+      { source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v1.2.3', assets: [] } },
+    ];
+    const first = await s.latest();
+    assert(first.tag === 'v1.2.3' && !first.stale, '第一次应正常');
+    s._relTtl = 0;   // 让缓存失效
+    s.fetchReleases = async () => [
+      { source: 'github', name: 'GitHub', web: 'g', error: '超时' },
+    ];
+    const second = await s.latest();
+    assert(second.tag === 'v1.2.3' && second.stale === true, '应退回旧结果并标记 stale');
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {

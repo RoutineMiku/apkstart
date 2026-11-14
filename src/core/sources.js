@@ -214,6 +214,20 @@ class Sources {
     this.settings = typeof settingsFn === 'function' ? settingsFn : () => ({});
     this._rankCache = new Map();   // url -> {at, speed, ok}
     this._rankTtl = 30 * 60 * 1000;
+    // 版本检查结果缓存：Gitee 的匿名调用限流很紧（连续几次就 403），
+    // 而「有没有新版本」本来也不需要秒级新鲜度。
+    this._relCache = { at: 0, key: '', value: null };
+    this._relTtl = 10 * 60 * 1000;
+    // 熔断：某个源被限流/报错后，一段时间内直接跳过它，不再每次启动都撞墙
+    this._blocked = new Map();     // sourceId -> until(ms)
+    this._blockMs = 15 * 60 * 1000;
+  }
+
+  /** 该源是否处于熔断期；返回 null 表示可用，否则返回给用户看的原因 */
+  blockedReason(id) {
+    const until = this._blocked.get(id) || 0;
+    if (until <= Date.now()) return null;
+    return `暂时跳过（${Math.ceil((until - Date.now()) / 60000)} 分钟内不再尝试）`;
   }
 
   /** 各源的最新 release（并发，任何一个失败都不影响另一个） */
@@ -230,6 +244,8 @@ class Sources {
 
     const jobs = ids.map(async (id) => {
       const s = SOURCES[id];
+      const skip = this.blockedReason(id);
+      if (skip) return { source: id, name: s.name, web: s.web, error: skip };
       try {
         const rel = await getJson(withToken(id, `${s.api}/releases/latest`), 9000);
         return { source: id, name: s.name, web: s.web, rel };
@@ -240,9 +256,11 @@ class Sources {
           const first = (Array.isArray(list) ? list : []).find((r) => r && !r.draft);
           if (first) return { source: id, name: s.name, web: s.web, rel: first };
         } catch (_) { /* 这个源彻底不可用 */ }
-        const hint = id === 'gitee' && !token
-          ? '（若是私有仓库请填 token；公开仓库通常只是被限流，稍后重试即可）'
-          : '';
+        const limited = /\b(403|429)\b/.test(e.message);
+        if (limited) this._blocked.set(id, Date.now() + this._blockMs);
+        const hint = limited
+          ? '（被限流，已暂停使用该源一段时间）'
+          : (id === 'gitee' && !token ? '（可稍后重试，或在设置里填只读 token 提高额度）' : '');
         return { source: id, name: s.name, web: s.web, error: `${e.message}${hint}` };
       }
     });
@@ -253,11 +271,26 @@ class Sources {
    * 合并两边的最新版本：版本号更高的胜出，但**资产列表取并集**，
    * 这样即使 Gitee 只放了元数据、资产在 GitHub，也能两条路都试。
    */
-  async latest() {
+  async latest({ force = false } = {}) {
+    const pref = String((this.settings().runtime || {}).sourcePreference || 'auto');
+    const cached = this._relCache;
+    if (!force && cached.value && cached.key === pref && Date.now() - cached.at < this._relTtl) {
+      return cached.value;
+    }
     const all = await this.fetchReleases();
+    // 被限流的源记入熔断（放在这里而不是 fetchReleases 内部，是为了让「谁来提供
+    // 结果」这件事可被替换/测试，同时保证任何入口拿到的 403 都会触发熔断）
+    for (const x of all) {
+      if (x && x.error && /\b(403|429)\b/.test(x.error)) {
+        this._blocked.set(x.source, Date.now() + this._blockMs);
+      }
+    }
     const ok = all.filter((x) => x && x.rel);
     if (!ok.length) {
       const why = all.map((x) => `${x.name || x.source}: ${x.error || '无数据'}`).join('；');
+      // 全挂了但手里有上一次的结果：宁可给一份「可能是旧的」版本信息，
+      // 也不要让界面直接报错 —— 用户至少还能看到当前版本和发布页入口。
+      if (cached.value) return { ...cached.value, stale: true, staleReason: why };
       throw new Error(`连不上更新服务器（${why}）`);
     }
     ok.sort((a, b) => cmpVer(b.rel.tag_name || b.rel.name, a.rel.tag_name || a.rel.name));
@@ -297,7 +330,7 @@ class Sources {
       assets.push(a);
     }
 
-    return {
+    const result = {
       version,
       tag,
       name: top.rel.name || tag,
@@ -309,6 +342,8 @@ class Sources {
       unreachable: all.filter((x) => x && x.error).map((x) => ({ source: x.source, name: x.name, error: x.error })),
       bySource: top.source,
     };
+    this._relCache = { at: Date.now(), key: pref, value: result };
+    return result;
   }
 
   /** 某个资产在所有源 + 镜像下的候选地址（去重、保序：源站优先，其次镜像） */
@@ -365,6 +400,8 @@ class Sources {
   /** 测速缓存清空（用户改了镜像前缀 / 换了网络后调用） */
   reset() {
     this._rankCache.clear();
+    this._relCache = { at: 0, key: '', value: null };
+    this._blocked.clear();
   }
 }
 

@@ -1440,7 +1440,8 @@ function registerIpc() {
 
   ipcMain.handle('app:updateCheck', async (_e, opts = {}) => {
     try {
-      const info = await updater.check();
+      // 用户主动点「检查更新」→ 跳过缓存，必定重新问一次两个源
+      const info = await updater.check({ force: opts.force !== false });
       updateInfo = info;
       return { ok: true, ...info };
     } catch (e) {

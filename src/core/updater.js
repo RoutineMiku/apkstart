@@ -66,8 +66,12 @@ class Updater {
    * 检查更新：GitHub / Gitee 并发问，取版本号更高的，资产取并集。
    * 具体下载地址在 prepare() 里再做一次真实测速排序。
    */
-  async check() {
-    const merged = await this.sources.latest();
+  /**
+   * @param {{force?:boolean}} [opts] force=true 时跳过 10 分钟的版本缓存
+   *        （用户主动点「检查更新」应该拿到最新结果；启动时的静默检查走缓存）
+   */
+  async check(opts = {}) {
+    const merged = await this.sources.latest({ force: !!opts.force });
     const pick = (re) => merged.assets.find((a) => re.test(String(a.name || '')));
 
     const wantSetup = this.flavor === 'setup';
