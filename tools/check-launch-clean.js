@@ -15,7 +15,9 @@ const { spawn } = require('child_process');
 const { WinAgent } = require('../src/core/agent');
 
 const ROOT = path.join(__dirname, '..');
-const ENGINE = path.join(ROOT, 'engine');
+// 与另两个窗口测试一样支持外部指定运行时/数据目录（用户的运行时常常在 D 盘）
+const ENGINE = path.resolve(process.env.APKSTART_RUNTIME || path.join(ROOT, 'engine'));
+const AVD_DIR = process.env.APKSTART_AVD_HOME || '';
 const ELECTRON = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
 const APK = process.argv[2] || path.join(os.tmpdir(), 'fdroid.apk');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -45,7 +47,7 @@ function launch(args, sandbox) {
   const appData = path.join(sandbox, 'apkstart');
   fs.mkdirSync(appData, { recursive: true });
   fs.writeFileSync(path.join(appData, 'settings.json'), JSON.stringify({
-    runtime: { dir: ENGINE }, engine: { prewarm: true },
+    runtime: { dir: ENGINE, avdDir: AVD_DIR }, engine: { prewarm: true },
   }));
 
   const agent = new WinAgent();
@@ -67,8 +69,11 @@ function launch(args, sandbox) {
     if (p.exitCode !== null) break;
   }
   check(!!pkg, `安装完成：${pkg || '（超时）'}`);
+  // 必须等第一个实例**真正退出**再起第二个：单实例锁还在的话，第二个会立刻退出，
+  // 表现为「窗口一直不出现」，而不是启动失败（实测踩过，排查了很久）。
   try { p.kill(); } catch (_) { /* ignore */ }
-  await sleep(2500);
+  for (let i = 0; i < 30 && p.exitCode === null; i += 1) await sleep(500);
+  await sleep(2000);
 
   if (!pkg) {
     agent.dispose();
@@ -82,7 +87,8 @@ function launch(args, sandbox) {
   let leaked = 0;
   let sawAppWin = false;
   const titles = new Set();
-  for (let i = 0; i < 120; i += 1) {
+  // 冷启动 23s + 应用拉起 ~17s，留足 120 秒；之前 60 秒在慢机器上会假失败
+  for (let i = 0; i < 240; i += 1) {
     await sleep(500);
     const r = await agent.call({ cmd: 'windows' }, 5000).catch(() => null);
     const list = ((r && r.list) || []);
@@ -106,11 +112,22 @@ function launch(args, sandbox) {
   check(leaked === 0, `模拟器/控制台窗口始终不可见（累计 ${leaked} 次）`);
   check(sawAppWin, `应用窗口已出现（说明画面被嵌进窗口，而不是独立的模拟器窗口）`);
   console.log('  可见窗口标题：', JSON.stringify([...titles].slice(0, 12)));
+  if (!pass) {
+    console.log('--- app.log 末尾 ---');
+    try {
+      const log = fs.readFileSync(path.join(appData, 'logs', 'app.log'), 'utf8').trim().split('\n');
+      console.log(log.slice(-12).join('\n'));
+    } catch (_) { console.log('（没有 app.log）'); }
+  }
 
   try { p.kill(); } catch (_) { /* ignore */ }
   agent.dispose();
   await sleep(1500);
-  try { fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 3 }); } catch (_) { /* ignore */ }
+  if (pass) {
+    try { fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 3 }); } catch (_) { /* ignore */ }
+  } else {
+    console.log(`  沙盒保留在：${sandbox}`);
+  }
   console.log('');
   console.log(`结果：${pass ? '通过' : '失败'}`);
   process.exit(pass ? 0 : 1);

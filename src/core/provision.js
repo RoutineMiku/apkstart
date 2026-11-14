@@ -207,9 +207,16 @@ class Provisioner {
     const explicitAvd = String(store.getSettings().runtime.avdDir || '').trim();
     const writable = explicitAvd || path.join(store.DATA_DIR, 'avd');
     const insideData = root.toLowerCase().startsWith(store.DATA_DIR.toLowerCase());
-    // 单文件发行版的镜像会展开到用户目录（见 materializeImages），那里有就用那里的
+    // 系统镜像放哪儿：**运行时目录优先**。
+    // 之前的顺序是「用户数据目录优先」，后果是——用户把运行时目录改到 D 盘省 C 盘空间，
+    // 1.4GB 的整包解到 D 盘以后，materializeImages 又把 3.3GB 的 system.img 展开回
+    // C://Users//...//AppData//Roaming//apkstart//system-images，C 盘照样被吃掉，而且
+    // 同一套镜像在两处各存一份（实测 1.2GB + 3.3GB 并存）。
+    // 现在：运行时目录里已经有 system-images（整包解压的产物）就用它；
+    // 没有才回退到用户数据目录（老版本、单文件发行版都是这种布局）。
+    const rootImg = path.join(root, 'system-images');
     const dataImg = path.join(store.DATA_DIR, 'system-images');
-    const sysRoot = fs.existsSync(dataImg) ? dataImg : path.join(root, 'system-images');
+    const sysRoot = fs.existsSync(rootImg) ? rootImg : dataImg;
     return {
       root,
       qemuDir: path.join(root, 'qemu'),
@@ -709,7 +716,9 @@ class Provisioner {
    */
   async materializeImages(onLog = () => {}) {
     const srcRoot = path.join(this.root, 'system-images');
-    const destRoot = path.join(store.DATA_DIR, 'system-images');
+    // 展开目标必须和 paths().sysImgRoot 用同一套规则，否则会出现
+    // 「整包解到 D 盘、镜像又展开回 C 盘 APPDATA」的重复占用（实测 1.2GB + 3.3GB）。
+    const destRoot = this.paths().sysImgRoot;
     const jobs = [];
     const copies = []; // 压缩镜像之外的文件（kernel-ranchu / ramdisk / 未压缩 .img 等）必须一并落到展开目录
     const found = new Map(); // dest -> job（同镜像 .xz/.gz 并存时优先 .xz）
@@ -737,6 +746,7 @@ class Provisioner {
     // 先补齐非镜像文件（模拟器靠 kernel-ranchu 等定位/引导，缺了会报"还差系统镜像"）
     for (const c of copies) {
       try {
+        if (path.resolve(c.src) === path.resolve(c.dest)) continue;   // 原地展开，无需复制
         const have = fileSize(c.dest);
         if (have > 0 && have === fileSize(c.src)) continue;
         fs.mkdirSync(path.dirname(c.dest), { recursive: true });
