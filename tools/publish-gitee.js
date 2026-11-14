@@ -118,7 +118,20 @@ async function upload(releaseId, file) {
     console.log('   已存在 id =', rel.id);
   }
 
-  console.log('2) 切分便携包（Gitee 单文件上限 100MB）');
+  // 重发同一版本时（改过代码重新打包），旧附件必须先删掉，否则页面上会同时挂着
+  // 新旧两套 part1/part2，客户端按名字取到的是哪一份完全看运气。
+  if (process.argv.includes('--replace')) {
+    console.log('2) 清理同名旧附件');
+    const list = await api('GET', `/releases/${rel.id}/attach_files`);
+    const olds = (Array.isArray(list) ? list : []).filter((a) => /^ApkStart-.*\.zip(\.part\d+)?$/i.test(a.name || ''));
+    for (const a of olds) {
+      // eslint-disable-next-line no-await-in-loop
+      await api('DELETE', `/releases/${rel.id}/attach_files/${a.id}`);
+      console.log('   删除', a.name);
+    }
+  }
+
+  console.log('3) 切分便携包（Gitee 单文件上限 100MB）');
   const parts = splitFile(zip, PART_LIMIT);
   const files = parts.length ? parts : [zip];
   for (const f of files) {

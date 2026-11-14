@@ -1264,6 +1264,38 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(second.tag === 'v1.2.3' && second.stale === true, '应退回旧结果并标记 stale');
   });
 
+  await test('系统镜像落点：全新安装必须落在运行时目录（CI 组装运行时靠这个）', () => {
+    const fs2 = require('fs');
+    const os2 = require('os');
+    const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'sysroot-'));
+    const oldAppData = process.env.APPDATA;
+    process.env.APPDATA = path.join(tmp, 'appdata');
+    try {
+      const store = require('../src/core/store');
+      const { Provisioner } = require('../src/core/provision');
+      const root = path.join(tmp, 'rt');
+      store.saveSettings({ runtime: { dir: root } });
+      const p = new Provisioner(path.join(__dirname, '..'));
+
+      // 1) 全新安装：运行时目录与用户数据目录都没有 system-images → 落运行时目录
+      assert(p.paths().sysImgRoot === path.join(root, 'system-images'),
+        `全新安装应落运行时目录，实际 ${p.paths().sysImgRoot}`);
+
+      // 2) 运行时目录里已经有（整包解压的产物）→ 优先它
+      fs2.mkdirSync(path.join(root, 'system-images'), { recursive: true });
+      assert(p.paths().sysImgRoot === path.join(root, 'system-images'), '已有应优先运行时目录');
+
+      // 3) 只有用户数据目录有（老版本布局）→ 用它
+      fs2.rmSync(path.join(root, 'system-images'), { recursive: true, force: true });
+      fs2.mkdirSync(path.join(store.DATA_DIR, 'system-images'), { recursive: true });
+      assert(p.paths().sysImgRoot === path.join(store.DATA_DIR, 'system-images'),
+        `老布局应回退到用户数据目录，实际 ${p.paths().sysImgRoot}`);
+    } finally {
+      if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData;
+      fs2.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {

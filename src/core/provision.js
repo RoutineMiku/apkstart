@@ -216,7 +216,12 @@ class Provisioner {
     // 没有才回退到用户数据目录（老版本、单文件发行版都是这种布局）。
     const rootImg = path.join(root, 'system-images');
     const dataImg = path.join(store.DATA_DIR, 'system-images');
-    const sysRoot = fs.existsSync(rootImg) ? rootImg : dataImg;
+    // 三种情况：
+    //  1) 运行时目录里已经有镜像（整包解压的产物）→ 用它的；
+    //  2) 老用户/单文件发行版把镜像放在用户数据目录 → 用那里的；
+    //  3) 全新安装（两处都没有）→ 落在运行时目录，因为用户数据目录可能是被
+    //     重定向过的临时目录（CI 组装运行时就是这种情况，写歪会直接校验失败）。
+    const sysRoot = fs.existsSync(rootImg) ? rootImg : (fs.existsSync(dataImg) ? dataImg : rootImg);
     return {
       root,
       qemuDir: path.join(root, 'qemu'),
