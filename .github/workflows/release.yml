@@ -32,12 +32,17 @@ jobs:
       - name: 打包便携版
         run: npm run pack
 
-      - name: 压缩产物
+      # 用 7-Zip 而不是 Compress-Archive：同一个目录，.NET deflate 压出来 105MB，
+      # 7-Zip -mx=9 只要 99.6MB —— 差这 5MB 就决定 Gitee 上放的是「一个能直接解压的
+      # zip」还是「两个必须手工拼接的 part」。build/zip.js 还带体积闸门：超过
+      # 100MiB 直接让 job 失败，避免以后又悄悄退回分片包。
+      - name: 压缩产物（7-Zip，体积闸门 100MiB）
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
-          Compress-Archive -Path dist/ApkStart-win64-portable/* -DestinationPath "ApkStart-$tag-win64-portable.zip" -CompressionLevel Optimal
+          node build/zip.js dist/ApkStart-win64-portable "ApkStart-$tag-win64-portable.zip" --limit-mb 100
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Item "ApkStart-$tag-win64-portable.zip" | Select-Object Name, Length
 
       # 创建 Release 并上传轻量便携版（壳层极小，运行时首次启动按需下载）
@@ -71,8 +76,8 @@ jobs:
           gh release view $tag --json assets --jq '.assets[].name'
 
       # 同步到 Gitee：国内直连 GitHub 只有几十 KB/s，Gitee 通常能跑几 MB/s。
-      # Gitee 附件单文件上限 100MB，所以 publish-gitee.js 会把便携包切成 .part1/.part2；
-      # 应用端 updater 会自动识别分片、逐片选源下载再拼回整包。
+      # 便携包压紧后约 99.6MB，在 Gitee 单文件上限（100MB）以内，直接放一个整包，
+      # 用户点开就能解压；只有超限时 publish-gitee.js 才退回 .part1/.part2 分片。
       # Setup（1.4GB）与运行时整包（1.4GB）超限太多，只留在 GitHub ——
       # 应用端对「哪个源有资产」是取并集的，不影响更新。
       - name: 同步便携版到 Gitee

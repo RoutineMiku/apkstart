@@ -43,7 +43,7 @@
 安装包：
 
 - **`ApkStart-v*-Setup.exe`**（约 1.3 GB）：**一个 EXE 包含全部运行时**（adb / Android Emulator / 系统镜像），装完首次启动自动把镜像展开到用户目录，**之后不再联网下载任何东西**。装到当前用户目录、不要求管理员权限。
-- 另有轻量版 `ApkStart-v*-win64-portable.zip`（约 100 MB）：首次启动才在后台下载运行时。运行时的下载源就是**本项目的 GitHub Release**（`ApkStart-runtime-*.zip` 整包），不走 dl.google.com；整包拿不到时才自动退回官方源。
+- 另有轻量版 `ApkStart-v*-win64-portable.zip`（**95 MB**，解压后约 226 MB）：首次启动才在后台下载运行时。运行时的下载源就是**本项目的 GitHub Release**（`ApkStart-runtime-*.zip` 整包），不走 dl.google.com；整包拿不到时才自动退回官方源。
 
 ### 在线更新（自动选较快的源）
 
@@ -62,7 +62,9 @@
 
 设置里的「下载与更新源」可以强制只用某一边（企业网络只放行一个域名时用），
 也可以关掉公共加速镜像、或改用自建镜像前缀。Gitee 附件单文件上限 100MB，
-所以便携包在 Gitee 上以 `.part1/.part2` 形式发布，客户端会自动拼装。
+便携包换用 7-Zip 的 deflate（`-mx=9`）压缩后是 **95.0MB**，所以 Gitee 上也是
+一个能直接双击解压的整包（以前要切成 `.part1/.part2` 手工拼接，那版已经废弃）。
+两个源的同名包体积并不完全一样，客户端按测速结果只挑一个源下完，不会混拼。
 
 两个仓库都是公开的，Gitee 的发行版列表匿名就能读，不需要填任何 token。
 （只有在 Gitee 限流返回 403/429 时，才需要在设置里填一个只读 token 提高额度。）
@@ -91,6 +93,8 @@ npm run assoc:on
 # 4. 打包便携版（免安装，可直接分发）
 npm run pack
 # 产出 dist/ApkStart-win64-portable/ApkStart.exe
+# 5. 压成 zip 发布（必须用这个脚本，别用 Compress-Archive：体积会大 5MB、塞不进 Gitee）
+node build/zip.js dist/ApkStart-win64-portable ApkStart-win64-portable.zip
 ```
 
 ### 单文件 EXE（内置完整运行时，装完不再联网）

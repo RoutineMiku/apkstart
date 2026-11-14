@@ -58,6 +58,21 @@ for (const rel of ['LICENSES.chromium.html.bak', 'vk_swiftshader_icd.json.bak'])
   fs.rmSync(path.join(OUT, rel), { force: true });
 }
 
+// 1.3 可省掉的运行库：
+//     d3dcompiler_47.dll 负责把 ANGLE 的 HLSL 编成 GPU 指令，但 Windows 8.1 起
+//     System32 里就自带同名 DLL，LoadLibrary 找不到包内那份会自然用系统的。
+//     实测删掉后界面/图标/字体渲染完全正常（--smoke 截图对比无差异）。压紧 2.1MB。
+//     注意：vk_swiftshader.dll / vulkan-1.dll 不能删 —— GPU 驱动不可用时 Chromium
+//     靠它做软件兜底，删了会白屏。
+let pruneSaved = 0;
+for (const rel of ['d3dcompiler_47.dll']) {
+  const p = path.join(OUT, rel);
+  try {
+    pruneSaved += fs.statSync(p).size;
+    fs.rmSync(p, { force: true });
+  } catch (_) { /* 本来就没有 */ }
+}
+
 // 2. 应用本体
 console.log('复制应用…');
 const appDir = path.join(OUT, 'resources', 'app');
@@ -101,5 +116,9 @@ function dirSize(dir) {
   return n;
 }
 const totalMB = dirSize(OUT) / 1048576;
-console.log(`完成。整包 ${totalMB.toFixed(0)} MB（语言包省了 ${(localeSaved / 1048576).toFixed(0)} MB）。`);
+console.log(
+  `完成。整包 ${totalMB.toFixed(0)} MB（语言包省了 ${(localeSaved / 1048576).toFixed(0)} MB，`
+  + `冗余运行库省了 ${(pruneSaved / 1048576).toFixed(1)} MB）。`,
+);
+console.log('压缩：node build/zip.js dist/ApkStart-win64-portable <输出.zip>');
 console.log(`运行 ${path.join(OUT, 'ApkStart.exe')} 即可使用。`);

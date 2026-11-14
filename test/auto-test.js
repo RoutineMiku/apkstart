@@ -958,6 +958,63 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(m.assets.length === 1 && m.assets[0].url === 'gh://a', '旧版本同名资产不能覆盖新版本');
   });
 
+  await test('双源：同名整包两边都有时，两个地址都要留着（否则 Gitee 永远轮不到）', async () => {
+    const { Sources } = require('../src/core/sources');
+    const s = new Sources(() => ({ runtime: { autoMirror: false } }));
+    const gh = 'https://github.com/o/r/releases/download/v0.3.3/a.zip';
+    const ge = 'https://gitee.com/o/r/releases/download/v0.3.3/a.zip';
+    s.fetchReleases = async () => [
+      { source: 'github', name: 'GitHub', web: 'g', rel: { tag_name: 'v0.3.3', assets: [{ name: 'ApkStart-v0.3.3-win64-portable.zip', size: 108200693, browser_download_url: gh }] } },
+      // Gitee 的资产没有 size（实测），不能拿 GitHub 的大小冒充它
+      { source: 'gitee', name: 'Gitee', web: 'e', rel: { tag_name: 'v0.3.3', assets: [{ name: 'ApkStart-v0.3.3-win64-portable.zip', browser_download_url: ge }] } },
+    ];
+    const m = await s.latest();
+    assert(m.assets.length === 1, `同名资产要合并成 1 个，实际 ${m.assets.length}`);
+    const a = m.assets[0];
+    assert(a.urls.length === 2 && a.urls[1] === ge, `两个源的地址都要留着，实际 ${JSON.stringify(a.urls)}`);
+    assert(a.sizes[gh] === 108200693 && !a.sizes[ge], '大小按地址分开记，未知就是未知');
+    const cands = s.candidates(a);
+    assert(cands.length === 2 && cands[0] === gh, `候选地址应含两个源，实际 ${JSON.stringify(cands)}`);
+  });
+
+  await test('多源并行下载：两个源体积不同时，跟最快的源走（不能固定挑体积大的）', async () => {
+    const http = require('http');
+    const { downloadMulti } = require('../src/core/download');
+    const MB = 1024 * 1024;
+    const small = Buffer.alloc(3 * MB);   // 排在前面的源（已按速度排好序）
+    const big = Buffer.alloc(5 * MB);
+    for (let i = 0; i < small.length; i += 1) small[i] = i % 251;
+    for (let i = 0; i < big.length; i += 1) big[i] = (i * 7) % 251;
+    const serve = (data) => (req, res) => {
+      const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+      if (!r) { res.writeHead(200, { 'Content-Length': data.length }); res.end(data); return; }
+      const a = Number(r[1]);
+      const b = Math.min(Number(r[2]), data.length - 1);
+      res.writeHead(206, {
+        'Content-Range': `bytes ${a}-${b}/${data.length}`,
+        'Content-Length': b - a + 1,
+      });
+      res.end(data.slice(a, b + 1));
+    };
+    const mk = (data) => new Promise((resolve) => {
+      const srv = http.createServer(serve(data));
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    const s1 = await mk(small);
+    const s2 = await mk(big);
+    const out = path.join(TMP, 'mixed-size.bin');
+    try {
+      // 列表顺序 = rank() 的速度序：第一个就是最快的源
+      await downloadMulti([`http://127.0.0.1:${s1.address().port}/f`, `http://127.0.0.1:${s2.address().port}/f`], out, { connections: 4 });
+      const got = fs.readFileSync(out);
+      assert(got.length === small.length && Buffer.compare(got, small) === 0,
+        `应下最快的源那一份（${small.length} 字节），实际 ${got.length} 字节`);
+    } finally {
+      s1.close(); s2.close();
+      fs.rmSync(out, { force: true });
+    }
+  });
+
   await test('分片更新包：按顺序拼回整包，大小不符立刻中止', async () => {
     const http = require('http');
     const { Updater } = require('../src/core/updater');

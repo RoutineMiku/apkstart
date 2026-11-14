@@ -368,8 +368,13 @@ async function downloadMulti(urls, dest, opt = {}) {
   if (!usable.length) {
     return downloadAnyParallel(list, dest, opt);
   }
-  // 只保留「总大小和最大那一组一致」的源
-  const total = Math.max(...usable.map((p) => p.total));
+  // 只混用「声明总大小一致」的源，否则会拼出坏文件。
+  // 基准取**实测最快那个源的总大小**（usable 的顺序就是 rank() 排好的速度序，
+  // 探测是 Promise.all 但结果按输入顺序返回）：
+  // GitHub 与 Gitee 各自压出来的包字节数不同（差几 MB 很正常），
+  // 以前固定取 Math.max，等于永远去下体积更大的那个源 —— 国内网络下
+  // 反而是「更快的 Gitee 包被排除、被迫走慢的 GitHub 包」。
+  const total = usable[0].total;
   const same = usable.filter((p) => p.total === total);
   if (same.length === 1 || total < minChunk * 2) {
     return downloadParallel(same[0].url, dest, opt);

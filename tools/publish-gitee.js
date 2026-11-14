@@ -2,10 +2,13 @@
 /**
  * 把一版发布同步到 Gitee。
  *
- * 为什么需要这个脚本：Gitee 发行版附件单文件上限 100MB，而便携包约 105MB，
- * 所以发布时切成 `xxx.zip.part1` / `.part2`（各 ≤95MB），应用端 updater 会自动
- * 识别分片、逐片选源下载再拼回整包。安装版 Setup（1.4GB）与运行时整包（1.4GB）
- * 超限太多，继续留在 GitHub —— 应用端对「哪个源有资产」是并集处理，不影响更新。
+ * 为什么需要这个脚本：Gitee 发行版附件单文件上限 100MB（实测 104,857,600 字节，
+ * 104,800,000 的上传能成功）。便携包用 7-Zip 压出来约 99.6MB，现在可以直接放
+ * 一个完整 zip，用户点开就能解压 —— 不再切 part1/part2（那种包必须按顺序拼接，
+ * 手动下载的人根本用不了）。只有真的超过上限时才会退回分片，应用端 updater
+ * 两套都认。
+ * 安装版 Setup（1.4GB）与运行时整包（1.4GB）超限太多，继续留在 GitHub ——
+ * 应用端对「哪个源有资产」是并集处理，不影响更新。
  *
  * 用法：
  *   GITEE_TOKEN=xxxx node tools/publish-gitee.js v0.3.3 D:/dist
@@ -20,7 +23,8 @@ const path = require('path');
 const OWNER = 'daily-miku';
 const REPO = 'apkstart';
 const API = `https://gitee.com/api/v5/repos/${OWNER}/${REPO}`;
-const PART_LIMIT = 95 * 1024 * 1024;   // 留 5MB 余量给 multipart 头
+const HARD_LIMIT = 100 * 1024 * 1024;  // Gitee 附件单文件上限（100MiB，实测可用）
+const PART_LIMIT = 99 * 1024 * 1024;   // 真要分片时的单片大小，留 1MB 给 multipart 头
 
 function arg(name, def = '') {
   const i = process.argv.indexOf(name);
@@ -68,16 +72,44 @@ function splitFile(file, limit) {
   return out;
 }
 
-async function upload(releaseId, file) {
+/**
+ * 上传单个附件。
+ * 95MB 的整包是一次 POST 传完的（Gitee 没有分片上传接口），国内链路上很容易
+ * 传到一半就 fetch failed —— 以前这里没有重试，一次抖动就得整条命令重跑，
+ * 而重跑还要先删干净旧附件，很折腾。所以这里带 3 次重试 + 递增等待。
+ */
+async function upload(releaseId, file, attempts = 3) {
   const token = process.env.GITEE_TOKEN;
+  const name = path.basename(file);
   const buf = fs.readFileSync(file);
-  const fd = new FormData();
-  fd.append('access_token', token);
-  fd.append('file', new Blob([buf]), path.basename(file));
-  const res = await fetch(`${API}/releases/${releaseId}/attach_files`, { method: 'POST', body: fd });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`上传 ${path.basename(file)} 失败：${res.status} ${text.slice(0, 200)}`);
-  return JSON.parse(text);
+  let lastErr = null;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      const fd = new FormData();
+      fd.append('access_token', token);
+      fd.append('file', new Blob([buf]), name);
+      // eslint-disable-next-line no-await-in-loop
+      const res = await fetch(`${API}/releases/${releaseId}/attach_files`, { method: 'POST', body: fd });
+      // eslint-disable-next-line no-await-in-loop
+      const text = await res.text();
+      if (res.ok) return JSON.parse(text);
+      // 4xx（除 429）不值得重试：token 失效、文件名冲突之类重传也没用
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        throw new Error(`上传 ${name} 失败：${res.status} ${text.slice(0, 200)}`);
+      }
+      lastErr = new Error(`${res.status} ${text.slice(0, 120)}`);
+    } catch (e) {
+      lastErr = e;
+      if (/^上传 .* 失败/.test(e.message)) throw e;
+    }
+    if (i < attempts) {
+      const wait = i * 8;
+      console.warn(`   第 ${i} 次上传失败（${lastErr.message}），${wait} 秒后重试…`);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, wait * 1000));
+    }
+  }
+  throw new Error(`上传 ${name} 失败（已试 ${attempts} 次）：${lastErr && lastErr.message}`);
 }
 
 (async () => {
@@ -131,9 +163,30 @@ async function upload(releaseId, file) {
     }
   }
 
-  console.log('3) 切分便携包（Gitee 单文件上限 100MB）');
+  const zipSize = fs.statSync(zip).size;
+  if (zipSize > HARD_LIMIT) {
+    console.warn(`⚠️  便携包 ${(zipSize / 1048576).toFixed(1)} MB 超过 Gitee 单文件上限，只能切成分片；`
+      + '手动下载的人需要按顺序拼接才能解压，建议先用 `node build/zip.js` 压紧、或给包瘦身。');
+  }
+  console.log('3) 准备上传（整包优先，超限才切分）');
   const parts = splitFile(zip, PART_LIMIT);
   const files = parts.length ? parts : [zip];
+
+  // 同一个版本可能换过打包方式（整包 ↔ 分片）：把另一种形式的同名附件删掉，
+  // 否则发行版里同时挂着 `x.zip` 和 `x.zip.part1/part2`，客户端取哪个全看运气。
+  // --replace 会连别的版本号一起清，这里只清「当前这个包名」的另一种形态。
+  {
+    const base = path.basename(zip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const other = parts.length ? new RegExp(`^${base}$`, 'i') : new RegExp(`^${base}\\.part\\d+$`, 'i');
+    const list = await api('GET', `/releases/${rel.id}/attach_files`);
+    for (const a of Array.isArray(list) ? list : []) {
+      if (!other.test(a.name || '')) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await api('DELETE', `/releases/${rel.id}/attach_files/${a.id}`);
+      console.log('   删除上一版式的旧附件', a.name);
+    }
+  }
+
   for (const f of files) {
     console.log(`   上传 ${path.basename(f)} (${(fs.statSync(f).size / 1048576).toFixed(1)} MB)`);
     // eslint-disable-next-line no-await-in-loop

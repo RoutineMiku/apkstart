@@ -325,12 +325,26 @@ class Sources {
     const grouped = groupParts(raw);
     const wholeNames = new Set(grouped.list.filter((a) => !a.partial).map((a) => a.name));
     raw = grouped.list.filter((a) => !(a.partial && wholeNames.has(a.name)));
+
+    // 同名资产两个源都有（整包不再切分片以后就是这种常态）：把地址都留着当候选。
+    // 以前是「按名字去重、谁先来用谁」—— GitHub 排在前面，Gitee 的地址就被丢掉了，
+    // 「自动选网络更好的源」实际退化成只走 GitHub。现在按实测速度挑（见 rank()）。
+    // 每个地址的大小单独记：两个源的包不是同一份字节（压缩器/构建机不同，能差几 MB），
+    // downloadMulti 只会混用「声明总大小一致」的地址，所以绝不能把两者的大小平均掉。
     const assets = [];
-    const seen = new Set();
+    const byName = new Map();
     for (const a of raw) {
-      if (seen.has(a.name)) continue;
-      seen.add(a.name);
-      assets.push(a);
+      const hit = byName.get(a.name);
+      if (!hit) {
+        const item = { ...a, urls: a.url ? [a.url] : [], sizes: {} };
+        if (a.url && a.size) item.sizes[a.url] = a.size;
+        byName.set(a.name, item);
+        assets.push(item);
+        continue;
+      }
+      if (a.url && !hit.urls.includes(a.url)) hit.urls.push(a.url);
+      if (a.url && a.size) hit.sizes[a.url] = a.size;
+      if (!hit.size && a.size) hit.size = a.size;
     }
 
     const result = {
@@ -355,17 +369,25 @@ class Sources {
    * 把 Gitee 的链接拼上去只会得到一个 403，白白多测一次速。
    */
   candidates(assetOrUrl) {
-    const url = typeof assetOrUrl === 'string' ? assetOrUrl : assetOrUrl.url;
+    // 支持三种入参：单个地址、资产对象（url）、合并后的资产对象（urls 数组，含两个源）
+    const urls = (typeof assetOrUrl === 'string'
+      ? [assetOrUrl]
+      : (assetOrUrl && (assetOrUrl.urls && assetOrUrl.urls.length ? assetOrUrl.urls : [assetOrUrl.url])))
+      .filter(Boolean);
     const out = [];
-    if (!url) return out;
-    out.push(url);
-    let host = '';
-    try { host = new URL(url).host.toLowerCase(); } catch (_) { return out; }
-    const isGithub = /(^|\.)github\.com$/.test(host) || /(^|\.)githubusercontent\.com$/.test(host);
-    if (!isGithub) return out;
-    for (const m of mirrorList(this.settings())) {
-      const u = withMirror(url, m);
-      if (u && !out.includes(u)) out.push(u);
+    if (!urls.length) return out;
+    const mirrors = mirrorList(this.settings());
+    for (const url of urls) {
+      if (out.includes(url)) continue;
+      out.push(url);
+      let host = '';
+      try { host = new URL(url).host.toLowerCase(); } catch (_) { continue; }
+      const isGithub = /(^|\.)github\.com$/.test(host) || /(^|\.)githubusercontent\.com$/.test(host);
+      if (!isGithub) continue;
+      for (const m of mirrors) {
+        const u = withMirror(url, m);
+        if (u && !out.includes(u)) out.push(u);
+      }
     }
     return out;
   }

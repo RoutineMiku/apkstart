@@ -92,6 +92,10 @@ class Updater {
           name: asset.name,
           size: asset.size,
           url: asset.url,
+          // 同名资产在 GitHub / Gitee 都有：两个地址都带着，prepare() 里测速择快。
+          // sizes 是「每个地址各自的大小」——两个源压出来的字节数并不相同。
+          urls: asset.urls,
+          sizes: asset.sizes,
           source: asset.source,
           parts: asset.parts,
           partial: asset.partial,
@@ -120,7 +124,7 @@ class Updater {
     const dir = path.join(this.updateDir, it.version);
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, it.asset.name);
-    const total = it.asset.size || 0;
+    let total = it.asset.size || 0;
     const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
 
     // Gitee 附件单文件上限 100MB，所以发布时会把包切成 .part1/.part2。
@@ -135,6 +139,12 @@ class Updater {
       // 按域名猜没用，同一天不同时段差别很大。
       const cands = this.sources.candidates(it.asset);
       const ranked = await this.sources.rank(cands, { onProgress: (p) => this.onProgress(p) }).catch(() => cands);
+      // 进度用的总大小要取「真正在下那个源」的：GitHub 与 Gitee 的包不是同一份字节
+      // （压缩器不同，能差好几 MB），拿错就会一直显示 92% 再突然跳到完成。
+      const sizes = it.asset.sizes || {};
+      for (const u of ranked) {
+        if (sizes[u]) { total = sizes[u]; break; }
+      }
       // downloadMulti：分块同时从「GitHub 直连」和「镜像」拉，带宽叠加；
       // 只有一个源可用或对方不支持 Range 时，它自己退回单源分块。
       await downloadMulti(ranked, file, {
