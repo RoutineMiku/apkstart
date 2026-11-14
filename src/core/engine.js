@@ -1038,11 +1038,73 @@ class Runtime {
 
   usage() { return require('./layers').summary(this.provisioner.paths().root); }
 
-  cleanup({ apply = false, aggressive = false } = {}) {
-    // 运行时正在跑时不能删它的快照，否则可能把当前会话写坏
-    return require('./layers').prune(this.provisioner.paths().root, {
-      apply, aggressive, keepSnapshots: this.vmRunning,
+  /**
+   * 回收运行时里的旧镜像 / 旧 AVD / 锁文件 / 快照。
+   * 之前「点清理却清不掉」的根因：运行时正在跑时 keepSnapshots 把当前 AVD 的
+   * 快速启动快照（≈几 GB 的 ram.img）排除掉了，单 AVD 环境下几乎没有可清项。
+   * 现在调用方可以显式传 includeSnapshots：先停运行时再裁，快照就能真正回收。
+   */
+  async cleanup({ apply = false, aggressive = false, includeSnapshots = false } = {}) {
+    let stoppedVm = false;
+    if (includeSnapshots && this.vmRunning) {
+      await this.stop().catch(() => {});
+      stoppedVm = true;
+    }
+    const report = require('./layers').prune(this.provisioner.paths().root, {
+      apply, aggressive, keepSnapshots: !includeSnapshots && this.vmRunning,
     });
+    // 预览阶段若停了机，给用户一个提示：清完可手动重启运行时
+    return { ...report, apply, stoppedVm };
+  }
+
+  /**
+   * 彻底重置安卓数据（清空 /data 用户分区 + 已装应用 + 快速启动快照），
+   * 把 AVD 还原成「刚装好系统、没有任何第三方 app」的干净状态。
+   * 这一项会真实删除 8–16GB 的用户数据镜像，必须二次确认（UI 负责），且只动
+   * 当前活动 AVD（apkstart.avd），不动只读基础镜像、不动其它 AVD。
+   * 保留 config.ini / hardware-qemu.ini，AVD 仍有效，下次点开应用会重新冷启动建数据。
+   * @returns {{ok:boolean, reclaimed:number, avdDir:string, error?:string}}
+   */
+  async resetAndroidData() {
+    const fs = require('fs');
+    const path = require('path');
+    try {
+      if (this.vmRunning) await this.stop().catch(() => {});
+      const avdDir = path.join(this.provisioner.paths().avdHome, 'apkstart.avd');
+      let reclaimed = 0;
+      if (fs.existsSync(avdDir)) {
+        for (const e of fs.readdirSync(avdDir, { withFileTypes: true })) {
+          const p = path.join(avdDir, e.name);
+          // 删除：用户数据镜像（含 qcow2 差量 + 基址）、快速启动快照、残留锁文件/锁目录。
+          // 保留：config.ini / hardware-qemu.ini / AVD.conf / cache.img / encryptionkey* / initrd /
+          //       modem_simulator / 各类 *.ini / *.txt / *.cache —— 它们是 AVD 的身份与基础设施，
+          //       删了 AVD 直接失效或下次开机异常。下次点开应用，模拟器会按 -wipe-data 语义重建 /data。
+          const isUserdata = /^userdata(-qemu)?(-[0-9]+)?\.img(\.qcow2)?$/.test(e.name)
+            || /^userdata\.img(\.qcow2)?\.\d+$/.test(e.name);
+          const isSnapshot = /^snapshots(\.stale-\d+)?$/.test(e.name);
+          const isLock = /\.lock$/.test(e.name);
+          if (!e.isDirectory() && !isUserdata && !isLock) continue;
+          if (e.isDirectory() && !isSnapshot && !isLock) continue;
+          try {
+            if (e.isDirectory()) {
+              const s = require('./layers').dirSize(p);
+              fs.rmSync(p, { recursive: true, force: true });
+              reclaimed += s;
+            } else {
+              const s = fs.statSync(p).size;
+              fs.rmSync(p, { force: true });
+              reclaimed += s;
+            }
+          } catch (_) { /* 占用中的暂跳，下次再清 */ }
+        }
+      }
+      // 用户数据镜像被删后，用户侧「已安装 app」的记录也要清掉，
+      // 否则桌面/启动器还显示着其实已不存在的 app。
+      try { store.saveApps([]); } catch (_) { /* ignore */ }
+      return { ok: true, reclaimed, avdDir };
+    } catch (e) {
+      return { ok: false, reclaimed: 0, avdDir: '', error: e.message };
+    }
   }
 
   dispose() {

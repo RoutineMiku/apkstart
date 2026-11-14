@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   installVcRedist: () => invoke('runtime:installVcRedist'),
   runtimeUsage: () => invoke('runtime:usage'),
   runtimeCleanup: (opts) => invoke('runtime:cleanup', opts || {}),
+  runtimeResetData: () => invoke('runtime:resetData'),
   dataInfo: () => invoke('runtime:dataInfo'),
   setDataSize: (gb) => invoke('runtime:setDataSize', gb),
   confirm: (opts) => invoke('app:confirm', opts || {}),

@@ -149,8 +149,13 @@
           <div class="row">
             <span class="inline-note" id="usageText">正在统计…</span>
             <button class="btn ghost sm" id="btnCleanup">清理可回收文件</button>
+            <button class="btn ghost sm danger" id="btnResetData" title="清空安卓 /data 用户数据 + 已装应用 + 快速启动快照，还原成刚装好系统的干净状态">重置安卓数据</button>
           </div>
-          <span class="sub">系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照、日志和锁文件都可回收。日志超过上限会自动滚动，不会无限增长。</span>
+          <label class="checkbox-inline">
+            <input type="checkbox" id="chkCleanSnapshots" />
+            <span>连当前 AVD 的快速启动快照也一起清（会先停运行时，能真正回收几 GB 快照）</span>
+          </label>
+          <span class="sub">系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照、日志和锁文件都可回收。日志超过上限会自动滚动，不会无限增长。「重置安卓数据」会真实删除数 GB 用户数据，仅保留系统本身。</span>
         </div>
         <div class="runtime-actions">
           <button class="btn ghost sm" id="btnDiagnostics">导出诊断报告</button>

@@ -1070,14 +1070,15 @@ function bindSettings() {
 
   $('btnCleanup').addEventListener('click', async () => {
     const btn = $('btnCleanup');
+    const includeSnapshots = $('chkCleanSnapshots') && $('chkCleanSnapshots').checked;
     btn.disabled = true;
     try {
-      const preview = await api.runtimeCleanup({ apply: false });
+      const preview = await api.runtimeCleanup({ apply: false, includeSnapshots });
       if (!preview.candidates.length) {
         toast({ title: '已经是精简状态', body: '没有可回收的旧镜像或快照。', type: 'ok' });
         return;
       }
-      const r = await api.runtimeCleanup({ apply: true });
+      const r = await api.runtimeCleanup({ apply: true, includeSnapshots });
       if (r.cancelled) return;
       toast({
         title: '清理完成',
@@ -1088,6 +1089,53 @@ function bindSettings() {
       $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
     } catch (e) {
       toast({ title: '清理失败', body: e.message, type: 'error' });
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // 重置安卓数据：二级确认（先确认意图，再确认不可撤销），清完刷新占用统计
+  $('btnResetData').addEventListener('click', async () => {
+    const btn = $('btnResetData');
+    btn.disabled = true;
+    try {
+      const first = await api.confirm({
+        type: 'warning',
+        title: '重置安卓数据？',
+        message: '这会把安卓系统还原成「刚装好系统」的干净状态：',
+        detail: '• 删除全部已安装的第三方 app（含红果、游戏等）及其数据、登录态\n'
+          + '• 删除当前 AVD 的快速启动快照\n'
+          + '• 系统镜像本身不受影响，重新打开应用会再次冷启动建数据\n\n'
+          + '此操作不可撤销。是否继续？',
+        buttons: ['取消', '继续'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (!first || first.response !== 1) return;
+      const second = await api.confirm({
+        type: 'warning',
+        title: '再确认一次',
+        message: '已安装的 app 和它们的数据将被永久删除，确定要重置吗？',
+        detail: '可放心的是：系统镜像、其它 AVD、本机的 APK 缓存和图标都不会动。',
+        buttons: ['取消', '确定重置'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (!second || second.response !== 1) return;
+      const r = await api.runtimeResetData();
+      if (!r || !r.ok) {
+        toast({ title: '重置失败', body: (r && r.error) || '请重试', type: 'error' });
+        return;
+      }
+      toast({
+        title: '安卓数据已重置',
+        body: `释放约 ${r.reclaimedMB} MB，已安装应用记录已清空。`,
+        type: 'ok',
+      });
+      const u = await api.runtimeUsage();
+      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+    } catch (e) {
+      toast({ title: '重置失败', body: e.message, type: 'error' });
     } finally {
       btn.disabled = false;
     }

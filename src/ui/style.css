@@ -149,6 +149,8 @@ body {
 .btn.primary:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
 .btn.ghost { background: transparent; }
 .btn.ghost:hover { background: #eef1f4; }
+.btn.ghost.danger { color: var(--danger); border-color: var(--danger); }
+.btn.ghost.danger:hover { background: rgba(220,53,69,.08); }
 .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
 .btn.lg { height: 38px; padding: 0 18px; border-radius: 11px; }
 .btn:disabled { opacity: .55; cursor: default; }
@@ -434,6 +436,7 @@ body {
 .field input:focus, .field select:focus { border-color: #b9c6d4; box-shadow: 0 0 0 3px rgba(22,163,74,.08); }
 .field input[readonly] { color: var(--muted); }
 .field .row { display: flex; gap: 8px; }
+.checkbox-inline { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 12px; color: var(--faint); }
 .field .row input { flex: 1; }
 .field.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 

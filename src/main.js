@@ -1070,8 +1070,9 @@ function registerIpc() {
 
   ipcMain.handle('runtime:cleanup', async (_e, opts = {}) => {
     // 明确两次确认：先给清单，用户确认后才真正删；且只清理 ApkStart 自己的运行时目录
-    if (!opts.apply) return runtime.cleanup({ apply: false, aggressive: !!opts.aggressive });
-    const preview = runtime.cleanup({ apply: false, aggressive: !!opts.aggressive });
+    const pass = { apply: false, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots };
+    if (!opts.apply) return runtime.cleanup(pass);
+    const preview = await runtime.cleanup(pass);
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
       buttons: ['取消', `清理 ${preview.candidates.length} 项`],
@@ -1079,11 +1080,25 @@ function registerIpc() {
       cancelId: 0,
       title: '确认清理运行时缓存',
       message: `将释放约 ${(preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0)} MB`,
-      detail: '只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。'
+      detail: (opts.includeSnapshots
+        ? '会先停止运行时，再删除旧镜像、当前 AVD 的快速启动快照、锁文件和非活动 AVD 的缓存。已安装的应用本身保留（只清快照），'
+        : '只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。')
         + '此操作不可撤销，建议先导出诊断报告。',
     });
     if (response !== 1) return { ...preview, cancelled: true };
-    return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive });
+    return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots });
+  });
+
+  // 彻底重置安卓数据：清空 /data 用户分区 + 已装应用 + 快速启动快照，
+  // AVD 还原成「刚装好系统」的干净状态。会真实删除数 GB 数据，UI 必须二次确认。
+  ipcMain.handle('runtime:resetData', async () => {
+    try {
+      const r = await runtime.resetAndroidData();
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, reclaimed: r.reclaimed, reclaimedMB: Math.round(r.reclaimed / 1048576) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   // ---------------- 运行时自举 ----------------
