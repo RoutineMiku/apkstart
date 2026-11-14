@@ -958,6 +958,21 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(m.assets.length === 1 && m.assets[0].url === 'gh://a', '旧版本同名资产不能覆盖新版本');
   });
 
+  await test('窗口代理：scope 用分号拼目录、滤空项（窗口归属判定的唯一输入）', async () => {
+    const { WinAgent } = require('../src/core/agent');
+    const a = new WinAgent();
+    const sent = [];
+    // 不真起代理进程：只验证发给它的协议内容
+    a.call = async (obj) => { sent.push(obj); return { ok: true, n: 1 }; };
+    const r = await a.scope(['C:////runtime', '', null, 'D:////repo////engine']);
+    assert(sent.length === 1 && sent[0].cmd === 'scope', `只应发一条 scope，实际 ${JSON.stringify(sent)}`);
+    assert(sent[0].dirs === 'C:////runtime;D:////repo////engine', `空项要滤掉，实际 ${sent[0].dirs}`);
+    assert(r.ok === true, 'scope 成功要返回 ok');
+    // 传空数组也不能抛：那等于「什么都不压制」，由调用方决定要不要告警
+    const empty = await a.scope([]);
+    assert(sent[1].dirs === '' && empty.ok === true, '空范围也要能下发（代理收到后一个窗口都不动）');
+  });
+
   await test('双源：同名整包两边都有时，两个地址都要留着（否则 Gitee 永远轮不到）', async () => {
     const { Sources } = require('../src/core/sources');
     const s = new Sources(() => ({ runtime: { autoMirror: false } }));

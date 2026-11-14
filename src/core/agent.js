@@ -137,6 +137,22 @@ class WinAgent extends EventEmitter {
 
   // ---------------- 便捷方法 ----------------
 
+  /**
+   * 声明「哪些目录里的进程才算我们的」。
+   * 必须在 bootHide / embed 之前调用：窗口代理只允许碰这些进程创建的窗口。
+   * 不传（或传空）时代理一个窗口都不动 —— 宁可偶尔漏一个黑窗，
+   * 也绝不把别的 Qt 应用（微信 4.x 就是 Qt6、MuMu、音乐播放器）的窗口藏掉或嵌进来。
+   * @param {string[]} dirs 运行时根目录 / 随包的 engine 目录
+   * @param {number} [appPid] 主进程 pid：代理只允许把窗口嵌进这个进程的窗口，
+   *        并以此为据决定「鼠标事件的当前窗口是不是我们的」（防止句柄被回收复用）
+   */
+  async scope(dirs, appPid) {
+    const list = (Array.isArray(dirs) ? dirs : [dirs]).filter(Boolean);
+    const req = { cmd: 'scope', dirs: list.join(';') };
+    if (Number(appPid) > 0) req.pid = Number(appPid);
+    return this.call(req, 4000).catch(() => ({ ok: false, n: 0 }));
+  }
+
   /** 把模拟器窗口嵌进宿主窗口，并摆到 x,y,w,h（宿主客户区坐标） */
   async embed(hostHwnd, rect) {
     return this.call({

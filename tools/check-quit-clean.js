@@ -43,6 +43,7 @@ const bad = (w) => {
 
   const agent = new WinAgent();
   await agent.ensure();
+  await agent.scope([ENGINE]);
   console.log('agent ready, port=', agent.port);
 
   // 这个环境里全局设了 ELECTRON_RUN_AS_NODE=1（Electron 会退化成纯 Node），

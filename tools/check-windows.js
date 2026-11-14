@@ -42,6 +42,8 @@ const bad = (w) => {
     return (r && r.list) || [];
   };
 
+  // 代理只碰「运行时目录里的进程」建的窗口：先声明范围，否则它什么都不藏
+  await agent.scope([ROOT]);
   await agent.bootHide();
   console.log('常驻压制已开启');
 

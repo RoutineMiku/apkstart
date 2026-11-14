@@ -21,6 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   const agent = new WinAgent();
   await agent.ensure();
+  await agent.scope([ROOT]);
   console.log('agent ready, port=', agent.port);
 
   const list = async () => {

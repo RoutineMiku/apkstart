@@ -52,6 +52,7 @@ function launch(args, sandbox) {
 
   const agent = new WinAgent();
   await agent.ensure();
+  await agent.scope([ENGINE]);
 
   let pass = true;
   const check = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) pass = false; };

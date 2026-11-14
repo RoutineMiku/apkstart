@@ -30,6 +30,8 @@ public class ApkAgent
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] public struct MSLLHOOKSTRUCT { public POINT Pt; public int MouseData; public int Flags; public int Time; public IntPtr Extra; }
     [StructLayout(LayoutKind.Sequential)] public struct MSG { public IntPtr Hwnd; public uint Message; public IntPtr WParam; public IntPtr LParam; public uint Time; public int X; public int Y; }
+    // Minimal PROCESS_BASIC_INFORMATION: enough to read InheritedFromUniqueProcessId.
+    [StructLayout(LayoutKind.Sequential)] public struct PBI { public IntPtr R1; public IntPtr Peb; public IntPtr R2a; public IntPtr R2b; public IntPtr Pid; public IntPtr ParentPid; }
 
     public delegate bool EnumProc(IntPtr h, IntPtr p);
     public delegate IntPtr HookProc(int code, IntPtr wp, IntPtr lp);
@@ -65,6 +67,10 @@ public class ApkAgent
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, ref PBI pbi, int len, out int ret);
 
     const int GWL_STYLE = -16;
     const int GWL_EXSTYLE = -20;
@@ -112,6 +118,20 @@ public class ApkAgent
     // 断线后的「守卫」截止时间（TickCount）。见 Serve() 里 sock == null 的分支。
     static long _lingerUntil = 0;
 
+    // Which windows count as "ours": only those created by a process whose exe lives
+    // inside one of these directories (the runtime root / bundled engine dir).
+    // This is the whole fix for "ApkStart conflicts with WeChat": WeChat 4.x is Qt 6
+    // too (its windows are QWindowIcon / QWindowToolSaveBits), so any matching that
+    // relied on window class names alone could hide or even re-parent WeChat's own
+    // windows. Class names are never unique; the owning process's path is.
+    static readonly System.Collections.Generic.List<string> _scopeDirs = new System.Collections.Generic.List<string>();
+    static readonly System.Collections.Generic.Dictionary<uint, bool> _oursCache = new System.Collections.Generic.Dictionary<uint, bool>();
+    // PID of the ApkStart main process. The only window we are ever allowed to embed
+    // into / swallow clicks for. Guard against a recycled HWND: if _host later belongs
+    // to somebody else, the mouse hook must pass events through instead of eating them.
+    static uint _appPid = 0;
+    static uint _hostPid = 0;
+
     // Hook options. All three default to OFF: an "hook on" without options must
     // never swallow anybody's clicks. JS sends the real config on every enable.
     static volatile int _optRight = 0;
@@ -125,6 +145,101 @@ public class ApkAgent
     static int _wheelDx = 0, _wheelDy = 0;
     static double _wheelNx = 0.5, _wheelNy = 0.5;
     static long _wheelFirst = 0, _wheelLast = 0;
+
+    // ------------------------------------------------------------------ ownership
+    // Scope is set by the JS side before anything is hidden ("scope" command).
+    // With no scope the agent refuses to touch any window: leaving one black console
+    // around is a cosmetic bug, hiding a user's WeChat window is not.
+    static void SetScope(string raw)
+    {
+        _scopeDirs.Clear();
+        string[] pieces = (raw == null ? "" : raw).Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (string piece in pieces)
+        {
+            string d = piece.Trim();
+            if (d.Length == 0) continue;
+            try { d = System.IO.Path.GetFullPath(d); } catch { }
+            if (!d.EndsWith("\\")) d += "\\";
+            _scopeDirs.Add(d.ToLowerInvariant());
+        }
+        lock (_oursCache) { _oursCache.Clear(); }
+    }
+
+    static bool IsOurs(uint pid)
+    {
+        if (pid == 0 || _scopeDirs.Count == 0) return false;
+        lock (_oursCache)
+        {
+            bool hit;
+            if (_oursCache.TryGetValue(pid, out hit)) return hit;
+        }
+        bool ours = false;
+        try
+        {
+            using (Process p = Process.GetProcessById((int)pid))
+            {
+                string file = null;
+                try { file = p.MainModule.FileName; } catch { file = null; }
+                if (!string.IsNullOrEmpty(file))
+                {
+                    string low = file.ToLowerInvariant();
+                    for (int i = 0; i < _scopeDirs.Count; i++)
+                        if (low.StartsWith(_scopeDirs[i], StringComparison.Ordinal)) { ours = true; break; }
+                }
+            }
+        }
+        catch { ours = false; }
+        lock (_oursCache)
+        {
+            // PIDs get recycled; a bounded cache is enough (one entry per live process).
+            if (_oursCache.Count > 400) _oursCache.Clear();
+            _oursCache[pid] = ours;
+        }
+        return ours;
+    }
+
+    static uint ParentOf(uint pid)
+    {
+        IntPtr h = IntPtr.Zero;
+        try
+        {
+            h = OpenProcess(0x1000, false, pid);   // PROCESS_QUERY_LIMITED_INFORMATION
+            if (h == IntPtr.Zero) return 0;
+            PBI pbi = new PBI();
+            int len;
+            if (NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf(typeof(PBI)), out len) != 0) return 0;
+            return (uint)pbi.ParentPid.ToInt64();
+        }
+        catch { return 0; }
+        finally { if (h != IntPtr.Zero) CloseHandle(h); }
+    }
+
+    // Console windows belong to conhost.exe, not to the program that owns the console,
+    // so the window pid is never the emulator's. Walk conhost's parents instead.
+    static bool ConsoleOwnedByUs(uint pid)
+    {
+        uint p = ParentOf(pid);
+        for (int i = 0; i < 3 && p != 0; i++)
+        {
+            if (IsOurs(p)) return true;
+            p = ParentOf(p);
+        }
+        return false;
+    }
+
+    static bool IsOurConsole(IntPtr h)
+    {
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        if (IsOurs(pid) || ConsoleOwnedByUs(pid)) return true;
+        if (_scopeDirs.Count == 0) return false;
+        // Windows titles a console with the image path it launched, so the runtime
+        // directory shows up verbatim. Precise enough to never match a stray terminal.
+        string title = TitleOf(h).ToLowerInvariant();
+        for (int i = 0; i < _scopeDirs.Count; i++)
+            if (title.IndexOf(_scopeDirs[i], StringComparison.Ordinal) >= 0) return true;
+        return false;
+    }
 
     // ------------------------------------------------------------------ window discovery
     static string ClassOf(IntPtr h)
@@ -154,6 +269,12 @@ public class ApkAgent
         long bestScore = long.MinValue;
         EnumWindows(delegate(IntPtr h, IntPtr p)
         {
+            // Ownership comes first. "QWindowIcon" is the class of EVERY Qt top level
+            // window, and WeChat 4.x / MuMu / music players are Qt too -- matching on
+            // the class alone is how the wrong window ended up hidden or re-parented.
+            uint owner;
+            GetWindowThreadProcessId(h, out owner);
+            if (!IsOurs(owner)) return true;
             string cls = ClassOf(h);
             if (cls.IndexOf("QWindowIcon", StringComparison.Ordinal) < 0) return true;
             string title = TitleOf(h);
@@ -211,6 +332,11 @@ public class ApkAgent
             if (!IsWindowVisible(h)) return true;
             string cls = ClassOf(h);
             if (cls.IndexOf("QWindowTool", StringComparison.Ordinal) < 0) return true;
+            // QWindowToolSaveBits is what Qt uses for menus, tooltips and popup panels --
+            // WeChat's emoji panel / right-click menu included. Only hide our own.
+            uint owner;
+            GetWindowThreadProcessId(h, out owner);
+            if (!IsOurs(owner)) return true;
             RECT r;
             if (!GetWindowRect(h, out r)) return true;
             if ((r.R - r.L) > 200) return true;   // the framebuffer window also uses this class
@@ -228,6 +354,8 @@ public class ApkAgent
     // 现在改成「pid 命中 或 窗口标题命中（标题就是被启动的 exe 路径）」，两条路任一生效即隐藏。
     static void HideConsoleWindows()
     {
+        if (_scopeDirs.Count == 0) return;   // no scope: never touch anybody's terminal
+
         // 先扫一遍有哪些控制台窗口；一个都没有就别去枚举进程（GetProcessesByName 不便宜）
         var consoles = new System.Collections.Generic.List<IntPtr>();
         EnumWindows(delegate(IntPtr h, IntPtr p)
@@ -241,27 +369,13 @@ public class ApkAgent
         }, IntPtr.Zero);
         if (consoles.Count == 0) return;
 
-        var pids = new System.Collections.Generic.HashSet<uint>();
-        try {
-            // netsimd 是模拟器的「网络模拟器」守护进程（wifi / 蓝牙通路），
-            // 它自己是个控制台程序，被拉起时会弹一个黑窗，窗口里全是 netsim 日志。
-            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64-headless")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("emulator-headless")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("netsimd")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("crashpad_handler")) pids.Add((uint)p.Id);
-        } catch { }
+        // 老实现还有一条「标题里含 emulator / qemu / netsim 就算我们的」，
+        // 那会把用户自己开的终端（标题是某个路径，比如 D://Android//emulator）也一起藏掉。
+        // 现在只认两种证据：conhost 的父进程链能走到我们运行时目录里，
+        // 或者标题里出现我们运行时目录的绝对路径（Windows 会把镜像路径当控制台标题）。
         foreach (IntPtr h in consoles)
         {
-            uint pid;
-            GetWindowThreadProcessId(h, out pid);
-            string title = TitleOf(h);
-            bool ours = pids.Contains(pid)
-                || title.IndexOf("emulator", StringComparison.OrdinalIgnoreCase) >= 0
-                || title.IndexOf("qemu", StringComparison.OrdinalIgnoreCase) >= 0
-                || title.IndexOf("netsim", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (ours) ShowWindow(h, 0);
+            if (IsOurConsole(h)) ShowWindow(h, 0);
         }
     }
 
@@ -270,14 +384,6 @@ public class ApkAgent
     static string ListConsoles()
     {
         var sb = new StringBuilder();
-        var pids = new System.Collections.Generic.HashSet<uint>();
-        try
-        {
-            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("qemu-system-x86_64-headless")) pids.Add((uint)p.Id);
-            foreach (var p in Process.GetProcessesByName("emulator")) pids.Add((uint)p.Id);
-        }
-        catch { }
         EnumWindows(delegate(IntPtr h, IntPtr p)
         {
             if (!IsWindowVisible(h)) return true;
@@ -288,9 +394,7 @@ public class ApkAgent
             uint pid;
             GetWindowThreadProcessId(h, out pid);
             string title = TitleOf(h);
-            bool ours = pids.Contains(pid)
-                || title.IndexOf("emulator", StringComparison.OrdinalIgnoreCase) >= 0
-                || title.IndexOf("qemu", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool ours = IsOurConsole(h);
             if (sb.Length > 0) sb.Append(",");
             sb.Append("{\"ours\":").Append(ours ? "true" : "false")
               .Append(",\"pid\":").Append(pid)
@@ -328,14 +432,20 @@ public class ApkAgent
         if (!embedded && e != IntPtr.Zero) _bootHideUntil = Environment.TickCount + 5000;
     }
 
+    // Only our own runtime counts. The old version returned true for ANY process named
+    // "emulator" -- other emulators (MuMu / LDPlayer ship their own) kept the guard alive.
     static bool AnyEmulatorProcess()
     {
+        if (_scopeDirs.Count == 0) return false;
         try
         {
-            if (Process.GetProcessesByName("qemu-system-x86_64").Length > 0) return true;
-            if (Process.GetProcessesByName("qemu-system-x86_64-headless").Length > 0) return true;
-            if (Process.GetProcessesByName("emulator").Length > 0) return true;
-            if (Process.GetProcessesByName("emulator-headless").Length > 0) return true;
+            string[] names = { "qemu-system-x86_64", "qemu-system-x86_64-headless", "emulator", "emulator-headless", "netsimd" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                Process[] all = Process.GetProcessesByName(names[i]);
+                for (int j = 0; j < all.Length; j++)
+                    if (IsOurs((uint)all[j].Id)) return true;
+            }
         }
         catch { }
         return false;
@@ -435,6 +545,12 @@ public class ApkAgent
     {
         if (_emu == IntPtr.Zero) _emu = FindEmulator();
         if (_emu == IntPtr.Zero) return;
+        // keybd_event feeds the SYSTEM input queue, so if we are not the foreground
+        // window the Ctrl+Left lands in whatever the user is typing in (WeChat's input
+        // box, a browser, ...). Rotate is a user action in our own window; if we are
+        // not foreground, do nothing instead of typing into someone else's app.
+        IntPtr fg = GetForegroundWindow();
+        if (_host == IntPtr.Zero || (fg != IntPtr.Zero && GetAncestor(fg, 2) != _host)) return;
         IntPtr host = _host != IntPtr.Zero ? _host : GetParent(_emu);
 
         uint emuTid, hostTid, dummy;
@@ -485,6 +601,11 @@ public class ApkAgent
         r = new RECT();
         IntPtr fg = GetForegroundWindow();
         if (fg == IntPtr.Zero || _host == IntPtr.Zero) return false;
+        // HWNDs get recycled. If "our" host is gone (or now belongs to another process)
+        // the hook must not swallow anything -- otherwise right click / wheel silently
+        // stop working in whichever app inherited the handle.
+        if (!IsWindow(_host)) return false;
+        if (_appPid != 0 && _hostPid != 0 && _hostPid != _appPid) return false;
         if (GetAncestor(fg, 2) != _host) return false;   // 2 = GA_ROOT
         IntPtr e = _emu;
         if (e != IntPtr.Zero && GetWindowRect(e, out r))
@@ -758,18 +879,43 @@ public class ApkAgent
                     if (line.Length == 0) continue;
 
                     string cmd = S(line, "cmd");
-                    if (cmd == "embed")
+                    if (cmd == "scope")
+                    {
+                        // Whitelist of "our" directories. Must arrive before boothide /
+                        // embed; the sweeps refuse to touch anything outside it.
+                        SetScope(S(line, "dirs"));
+                        long appPid = L(line, "pid");
+                        _appPid = appPid > 0 ? (uint)appPid : 0;
+                        _hostPid = 0;
+                        Reply(sock, "{\"ok\":true,\"n\":" + _scopeDirs.Count + "}");
+                    }
+                    else if (cmd == "embed")
                     {
                         // 嵌入即代表「用户要看画面了」。压制不关（它只藏非嵌入窗口
                         // 与控制台黑窗），但要先把窗口从隐藏状态正确地交给 SetParent，
                         // 再由 Fit 的 SWP_SHOWWINDOW 显示出来。
-                        _host = new IntPtr(L(line, "host"));
-                        _emu = FindEmulator();
-                        bool ok = Embed(_host, _emu);
-                        _embedAt = Environment.TickCount;
-                        _lastToolSweep = 0;
-                        Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), true);
-                        Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + ",\"emu\":" + _emu.ToInt64() + "}");
+                        IntPtr want = new IntPtr(L(line, "host"));
+                        uint wantPid = 0;
+                        if (want != IntPtr.Zero) GetWindowThreadProcessId(want, out wantPid);
+                        // Never re-parent into a foreign window: a stale handle could
+                        // point at another app (the exact way "ApkStart ate WeChat's
+                        // window" can happen).
+                        if (want == IntPtr.Zero || (_appPid != 0 && wantPid != _appPid))
+                        {
+                            Reply(sock, "{\"ok\":false,\"error\":\"host-not-ours\"}");
+                            Thread.Sleep(1);
+                        }
+                        else
+                        {
+                            _host = want;
+                            _hostPid = wantPid;
+                            _emu = FindEmulator();
+                            bool ok = Embed(_host, _emu);
+                            _embedAt = Environment.TickCount;
+                            _lastToolSweep = 0;
+                            Fit((int)L(line, "x"), (int)L(line, "y"), (int)L(line, "w"), (int)L(line, "h"), true);
+                            Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + ",\"emu\":" + _emu.ToInt64() + "}");
+                        }
                     }
                     else if (cmd == "fit")
                     {

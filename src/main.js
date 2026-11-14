@@ -177,6 +177,9 @@ const ICON_PNG = loadBrandIcon().toPNG();
 let mainWindow = null;
 let tray = null;
 let runtime = null;
+// 「哪些窗口算我们的」由 whenReady 里赋值（见 agentScope）。放模块级是因为
+// runLaunch / 预热定时器都早于那段代码定义，闭包里的 const 在它们的作用域外看不到。
+let armAgent = async () => ({ ok: false });
 let installer = null;
 let sharer = null;
 let quitting = false;
@@ -610,7 +613,7 @@ async function runLaunch(pkg) {
     // 开机阶段把模拟器主窗 + qemu / netsimd 的控制台黑窗藏起来，避免任何闪现。
     // 压制是常驻的（embed 后它会自动跳过被嵌入的那一个窗口，见 appwin.embed）。
     // 这里必须 await：不等压制生效就往下走，黑窗会在启动瞬间露出来。
-    if (winAgent) { try { await winAgent.bootHide(); } catch (_) { /* ignore */ } }
+    if (winAgent) { try { await armAgent(winAgent); } catch (_) { /* ignore */ } }
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
 
     const r = await installer.launch(pkg, {
@@ -651,7 +654,7 @@ async function runLaunch(pkg) {
     try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
     // 启动失败也把模拟器窗口继续压住（不要让它以「独立的模拟器窗口」形式露出来），
     // 下次点应用还是走同一条隐藏 → embed 的路径。
-    if (winAgent) winAgent.bootHide().catch(() => {});
+    if (winAgent) armAgent(winAgent).catch(() => {});
     showWindow();
     send('toast', { type: 'error', message: `启动失败：${e.message}` });
     return { ok: false, error: e.message };
@@ -1531,6 +1534,25 @@ if (!gotLock) {
       runtime?.endApp(pkg, { onIdle: onContainerActive }).catch(() => {});
     });
 
+    // 「哪些窗口才算我们的」= 运行时目录 + 随包的 engine 目录。
+    // 窗口代理只允许碰这些进程创建的窗口 —— 别的 Qt 应用（微信 4.x 就是 Qt6，
+    // 窗口类名和模拟器一模一样）一个都不许动，见 agent.ps1 的 SetScope。
+    const agentScope = () => {
+      const dirs = [];
+      try { dirs.push(runtime.provisioner.root); } catch (_) { /* ignore */ }
+      try { dirs.push(path.join(APP_ROOT, 'engine')); } catch (_) { /* ignore */ }
+      return dirs.filter(Boolean);
+    };
+    // 范围存在代理进程的内存里，代理一重建就没了 —— 所以每次开机压制前都重发一次。
+    armAgent = async (agent) => {
+      if (!agent) return { ok: false };
+      const dirs = agentScope();
+      // 第二个参数是本进程 pid：代理据此拒绝把窗口嵌进「不是我们的」窗口
+      await agent.scope(dirs, process.pid).catch(() => null);
+      if (!dirs.length) appLog('agent scope 为空：不压制任何窗口（避免误伤其他软件）');
+      return agent.bootHide().catch(() => ({ ok: false }));
+    };
+
     // 代理进程意外退出后会重建，事件监听必须一起重新挂上（旧版会在这里丢掉
     // 右键返回与滚轮，表现是「用一会儿就没反应了」）。
     const attachAgentEvents = (agent) => {
@@ -1544,6 +1566,8 @@ if (!gotLock) {
         winAgent = next;
         appWin.agent = next;
         attachAgentEvents(next);
+        // 新代理没有范围信息，不补这一下它就什么窗口都不敢碰
+        armAgent(next).catch(() => {});
       });
     };
     attachAgentEvents(winAgent);
@@ -1553,11 +1577,11 @@ if (!gotLock) {
     // qemu 控制台窗口创建出来了 —— 用户看到的就是一次一闪而过的黑框。
     runtime.emulator.onBeforeSpawn = async () => {
       if (!winAgent) return;
-      await winAgent.bootHide();
+      await armAgent(winAgent);
     };
     // 窗口代理是个 PowerShell 常驻进程，冷启动约 300~600ms。
     // 提前拉起，别等到真正要藏窗口的那一刻才开始等。
-    winAgent.ensure().then(() => winAgent.bootHide()).catch(() => {});
+    winAgent.ensure().then(() => armAgent(winAgent)).catch(() => {});
 
     registerIpc();
     createWindow({ show: !parseArgs(process.argv).silent });
@@ -1611,7 +1635,7 @@ if (!gotLock) {
           }
           // 开机阶段把模拟器窗口与 qemu 控制台藏起来，用户不该看到任何窗
           // 注意要 await：不等它生效就去 spawn，黑窗一定会露出来。
-          if (winAgent) { try { await winAgent.bootHide(); } catch (_) { /* ignore */ } }
+          if (winAgent) { try { await armAgent(winAgent); } catch (_) { /* ignore */ } }
           const t0 = Date.now();
           appLog('prewarm start');
           const r = await runtime.prewarm({ onLog: (m) => appLog(`prewarm ${m}`) });
@@ -1620,7 +1644,7 @@ if (!gotLock) {
             appLog(`prewarm failed: ${r && (r.error || r.skipped)}`);
             // 预热失败也继续压住模拟器窗口：它可能只是慢，过一会儿就起来了，
             // 用户不该因为「预热失败」在桌面上看到一台模拟器。
-            if (winAgent) winAgent.bootHide().catch(() => {});
+            if (winAgent) armAgent(winAgent).catch(() => {});
           }
         } catch (e) { appLog(`prewarm error: ${e && e.message}`); /* 预热失败不影响后续正常打开 */ }
       }, 1200).unref?.();
