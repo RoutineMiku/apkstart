@@ -269,15 +269,21 @@ class Runtime {
     this.vmStarting = true;
     try {
       // probe 交给 EmulatorEngine 的开机循环：进程退出/致命日志时它会换一组参数重试
+      // 每轮只发一次 adb 命令：以前是 get-state + getprop + pm path 三次进程拉起，
+      // 快照恢复时一轮就差 300~500ms，正好卡在「点开应用」的观感上。
       const probe = async ({ serial }) => {
         if (!this.emulator.running()) return 'fatal';
-        const c = new AdbClient({ adbPath: this.adbPath(), serial });
+        if (!this._probeClient || this._probeClient.serial !== serial) {
+          this._probeClient = new AdbClient({ adbPath: this.adbPath(), serial });
+        }
+        const c = this._probeClient;
         try {
-          if (!(await c.isOnline())) return 'pending';
-          const boot = await c.shell('getprop sys.boot_completed', { timeout: 8000 }).catch(() => '');
-          if (String(boot).trim() !== '1') return 'booting';
-          const pm = await c.shell('pm path android', { timeout: 8000 }).catch(() => '');
-          return /package:/.test(pm) ? 'ok' : 'pending';
+          const out = String(await c.shell('getprop sys.boot_completed; pm path android', { timeout: 8000 }));
+          const lines = out.split(/\r?\n/).map((l) => l.trim());
+          const booted = lines[0] === '1' || /^1$/.test(lines[0] || '');
+          const pmReady = lines.some((l) => /^package:/.test(l));
+          if (booted && pmReady) return 'ok';
+          return booted ? 'pending' : 'booting';
         } catch (_) {
           return 'pending';
         }
@@ -292,8 +298,8 @@ class Runtime {
       this.emuSerial = st.serial || this.emulator.serial;
       const client = this.client(this.emuSerial);
       await this.prepare(client);
-      // 开机成功后存一份快照，下次打开走 quickboot
-      this.emulator.saveSnapshotSoon(this.adbPath());
+      // 快照改成「空闲时再存」：立刻存要写 1~3GB，会和用户刚点开的应用抢磁盘 I/O
+      this._armSnapshotSave(20000);
       return { ok: true, client, engine: 'emulator', serial: this.emuSerial, profile: st.profile };
     } catch (e) {
       // 把自动重试/诊断结论原样抛给 UI，避免再包一层含糊的「启动失败」
@@ -301,6 +307,56 @@ class Runtime {
     } finally {
       this.vmStarting = false;
     }
+  }
+
+  // ---------------- 预热（像 WSA 一样让环境常驻） ----------------
+
+  /** 空闲时保存 quickboot 快照：只在没有应用窗口时写盘，避免和应用启动抢 I/O */
+  _armSnapshotSave(delay = 20000) {
+    if (!this.emulator.running()) return;
+    this.emulator.scheduleSnapshotSave(this.adbPath(), {
+      delay,
+      isIdle: () => this._activeApps.size === 0,
+    });
+  }
+
+  /** 供安装器等外部调用：装完应用后重新存一份快照，下次开机仍是秒进 */
+  scheduleSnapshotSave(delay = 12000) { this._armSnapshotSave(delay); }
+
+  /**
+   * 预热：在用户点开应用之前，先把安卓环境在后台引导好。
+   * WSA / 应用宝电脑版都是这个思路 —— 环境常驻，点图标时只剩一次 am start。
+   *  - 完全静默：不弹窗、不报错，失败不影响正常打开应用；
+   *  - 幂等：正在开机或已就绪时复用同一个 Promise，不会重复拉起第二台；
+   *  - 省资源：开机完成后把 qemu 降到最低优先级停放。
+   */
+  prewarm({ onLog = () => {} } = {}) {
+    if (this._prewarmPromise) return this._prewarmPromise;
+    if (this._activeApps.size > 0) return Promise.resolve({ ok: true, skipped: 'busy' });
+    // 高级模式是复用别人家已经跑起来的运行时，不该再替用户开一台自己的
+    if (this.settings.engine.mode === 'attach') return Promise.resolve({ ok: false, skipped: 'attach' });
+    const t0 = Date.now();
+    const p = (async () => {
+      try {
+        const env = await this.provisioner.checkEnv();
+        if (!(env.adb.ok && env.emulator.ok && env.sysimg.ok)) return { ok: false, skipped: 'not-ready' };
+        const r = await this.ensure({ onLog: (m) => onLog(`预热：${m}`) });
+        if (r && r.ok) {
+          // 预热期间用户可能已经点开了应用：这时不能把它摁到 idle 优先级
+          if (this._activeApps.size === 0) await this.emulator.setPriority('idle').catch(() => {});
+          const ms = Date.now() - t0;
+          this.log(`预热完成（${Math.round(ms / 1000)}s）`);
+          return { ok: true, bootMs: ms };
+        }
+        return { ok: false, error: r && r.error };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    })();
+    this._prewarmPromise = p;
+    const clear = () => { if (this._prewarmPromise === p) this._prewarmPromise = null; };
+    p.then(clear, clear);
+    return p;
   }
 
   async bootQemu({ install = false, env, onLog = () => {} } = {}) {
@@ -689,7 +745,20 @@ class Runtime {
     return this.emulator.killOrphanProcesses({ onLog });
   }
 
+  /**
+   * 幂等入口：预热与用户点击可能同时发生，共用一个 Promise，
+   * 避免两边各判断一次「没在线」后各自拉起一台模拟器（AVD 锁冲突 + 双倍内存）。
+   */
   async ensure({ onLog = () => {} } = {}) {
+    if (this._ensurePromise) return this._ensurePromise;
+    const p = this._ensureInner({ onLog });
+    this._ensurePromise = p;
+    const clear = () => { if (this._ensurePromise === p) this._ensurePromise = null; };
+    p.then(clear, clear);
+    return p;
+  }
+
+  async _ensureInner({ onLog = () => {} } = {}) {
     const client = this.client();
     if (await client.isOnline()) {
       await this.prepare(client);
@@ -803,6 +872,8 @@ class Runtime {
     const perf = s.engine && s.engine.priorityMode === 'performance';
 
     if (first) {
+      // 有应用要开了：把「空闲存快照」推迟，别在应用启动时抢磁盘
+      this.emulator.cancelSnapshotSave();
       await this.emulator.setPriority(perf ? 'normal' : 'below').catch(() => {});
       try { onActive(true); } catch (_) { /* 轮询启动失败不影响打开应用 */ }
     }
@@ -836,6 +907,8 @@ class Runtime {
       const cmds = container.buildIdleCommands({ deep: !!(s.engine && s.engine.deepTrim) });
       await this.client().shell(cmds.join(' ; '), { timeout: 15000 }).catch(() => '');
       await this.emulator.setPriority('idle').catch(() => {});
+      // 现在最空闲：把内存状态存成快照，下次开机走恢复而不是冷启动
+      this._armSnapshotSave(8000);
       try { onIdle(true); } catch (_) { /* ignore */ }
       this.log('容器已停放（Android 常驻，0 个应用进程，qemu 最低优先级）');
     }
@@ -918,6 +991,7 @@ class Runtime {
   dispose() {
     if (this._watchdog) clearInterval(this._watchdog);
     if (this._client && this._client.disposeInput) this._client.disposeInput();
+    this.emulator.cancelSnapshotSave();
     if (this.emulator.running()) {
       try { this.emulator.proc.kill(); } catch (_) { /* ignore */ }
     }

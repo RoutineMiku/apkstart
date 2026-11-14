@@ -344,6 +344,22 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     assert(['provision', 'install'].includes(r.needsSetup), `needsSetup=${r.needsSetup}`);
   });
 
+  await test('预热与点击并发时只拉起一次运行时（幂等，不重复开机器）', async () => {
+    const rt = new Runtime(TMP);
+    rt.provisioner.checkEnv = async () => ({ adb: { ok: true }, emulator: { ok: true }, sysimg: { ok: true } });
+    rt.emulator.setPriority = async () => 0;
+    let calls = 0;
+    rt._ensureInner = async () => {
+      calls += 1;
+      await new Promise((r) => setTimeout(r, 60));
+      return { ok: true, engine: 'emulator' };
+    };
+    // 预热（启动 4 秒后自动跑）与用户点开应用（ensure）会同时发生
+    const [a, b] = await Promise.all([rt.prewarm({}), rt.ensure({})]);
+    assert(calls === 1, `底层开机被触发 ${calls} 次，应只拉起一台模拟器`);
+    assert(a && a.ok && b && b.ok, '两条路径都应拿到就绪结果');
+  });
+
   await test('启动就绪判定：必须等到 boot_completed + 包管理器', async () => {
     const rt = new Runtime(TMP);
     const calls = [];

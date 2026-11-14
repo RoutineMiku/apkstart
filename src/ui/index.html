@@ -253,6 +253,13 @@
           </div>
           <input type="checkbox" id="setDeepTrim" class="switch" />
         </div>
+        <div class="field switch-field">
+          <div>
+            <label>开机预热（推荐）</label>
+            <span class="sub">启动 ApkStart 后就在后台把安卓环境引导好（窗口全程隐藏，不会看到模拟器）。之后点任何应用只剩一次「打开」，实测从 20 多秒降到几乎不用等。代价是空闲时常驻约 1GB 内存，关掉后第一次打开应用需要冷启动。</span>
+          </div>
+          <input type="checkbox" id="setPrewarm" class="switch" />
+        </div>
         <div class="field">
           <span class="sub">安卓环境只开机一次并常驻；之后打开应用不再重跑整个系统，只启动该应用并停掉其他应用进程。关掉最后一个窗口会清后台、停放容器，下次点开仍是秒进。</span>
         </div>

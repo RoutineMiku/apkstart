@@ -228,6 +228,7 @@ class Installer {
     // 真正的 LAUNCHER 入口，直接用它启动会跳过应用的初始化页导致闪退。
     let launchActivity = meta.launchActivity;
     try {
+      client.clearLauncherCache?.(meta.package);
       const resolved = await client.resolveLauncher(meta.package);
       if (resolved) launchActivity = resolved;
     } catch (_) { /* 保留 APK 解析结果 */ }
@@ -274,6 +275,9 @@ class Installer {
       warnings.push(`此应用要求 Android ${meta.minSdk}+，高于当前运行时，可能无法正常运行。`);
     }
     client.batteryOptimizeOff(meta.package).catch(() => {});
+    // 装应用时作废了旧快照，这里补排一次：空闲时把「已装好新应用」的状态存下来，
+    // 否则下次开机要重新冷启动（20 多秒）。
+    try { this.runtime.scheduleSnapshotSave?.(12000); } catch (_) { /* ignore */ }
 
     onProgress({ stage: 'done', message: `${app.label} 安装完成`, app });
     return { app, warnings, engine: rt.engine };
@@ -413,17 +417,19 @@ class Installer {
       let aliveSince = 0;
       let seen = false;
       while (Date.now() - t0 < 25000) {
-        // eslint-disable-next-line no-await-in-loop
-        await sleep(1000);
+        // 先查再睡：常驻容器里热启动往往 1 秒内就能看到进程，
+        // 先 sleep 1 秒等于把最快的那条路径硬生生拖慢一秒。
         // eslint-disable-next-line no-await-in-loop
         const pid = await rt.client.shell(`pidof ${pkg}`, { timeout: 6000 }).catch(() => '');
         if (!String(pid).trim()) {
           if (seen) return false; // 起来过又消失 = 真的崩了
-          continue; // 还在加载，继续等
+        } else {
+          seen = true;
+          if (!aliveSince) aliveSince = Date.now();
+          if (Date.now() - aliveSince >= 4000) return true;
         }
-        seen = true;
-        if (!aliveSince) aliveSince = Date.now();
-        if (Date.now() - aliveSince >= 5000) return true;
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(700);
       }
       return seen; // 一直没见过进程才算失败
     };

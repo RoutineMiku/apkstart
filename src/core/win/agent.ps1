@@ -566,6 +566,10 @@ public class ApkAgent
                     string cmd = S(line, "cmd");
                     if (cmd == "embed")
                     {
+                        // 嵌入即代表「用户要看画面了」：立刻关掉开机隐藏。
+                        // 否则周期扫描可能在 embed 之后、bootShow 之前又把窗口藏起来，
+                        // 表现就是一个全黑的应用窗口（预热场景下更容易碰上）。
+                        _bootHide = false;
                         _host = new IntPtr(L(line, "host"));
                         _emu = FindEmulator();
                         bool ok = Embed(_host, _emu);

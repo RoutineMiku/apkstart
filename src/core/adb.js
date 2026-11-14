@@ -79,6 +79,9 @@ function friendlyLaunchError(raw, pkg) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 已解析过的启动入口（adbPath|pkg → activity），10 分钟有效 */
+const LAUNCHER_CACHE = new Map();
+
 /**
  * Windows 版 adb 对非 ASCII 路径处理不稳定（中文用户名/中文下载目录很常见）。
  * 安装前把 APK 复制到纯 ASCII 的临时目录，装完即删。
@@ -437,13 +440,27 @@ class AdbClient {
   }
 
   /** 从系统解析真正的启动 Activity（清单里解析不出来时的兜底） */
+  /** 应用升级后入口可能变，解析前先把这个包从缓存里摘掉 */
+  clearLauncherCache(pkg) {
+    if (!pkg) { LAUNCHER_CACHE.clear(); return; }
+    LAUNCHER_CACHE.delete(`${this.adbPath}|${pkg}`);
+  }
+
   async resolveLauncher(pkg) {
+    // 解析入口 Activity 要一次 adb 往返（~200-400ms），而它在一个启动会话里不会变。
+    // 缓存起来，第二次点同一个应用直接跳过；10 分钟后自然失效，重装应用也不会用错入口。
+    const key = `${this.adbPath}|${pkg}`;
+    const hit = LAUNCHER_CACHE.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
     try {
       const out = await this.shell(
         `cmd package resolve-activity --brief ${pkg}`, { timeout: 10000 },
       );
       const m = /([\w.]+\/[.\w$]+)/.exec(String(out).split('\n').pop() || out);
-      if (m && m[1].startsWith(`${pkg}/`)) return m[1];
+      if (m && m[1].startsWith(`${pkg}/`)) {
+        LAUNCHER_CACHE.set(key, { value: m[1], at: Date.now() });
+        return m[1];
+      }
     } catch (_) { /* 落到 monkey */ }
     return null;
   }
@@ -573,16 +590,16 @@ class AdbClient {
 
   /** 开启 freeform（独立窗口）支持，失败不影响主流程 */
   async ensureFreeform() {
-    const cmds = [
-      'settings put global enable_freeform_support 1',
-      'settings put global force_resizable_activities 1',
-      'settings put global development_settings_enabled 1',
-    ];
-    for (const c of cmds) {
-      try { await this.shell(c); } catch (_) { /* ignore */ }
-    }
-    const v = await this.shell('settings get global enable_freeform_support').catch(() => '0');
-    return v.trim() === '1';
+    // 合成为一次 adb shell：4 次独立 execFile 在 Windows 上要 600ms+，
+    // 而这段正好在「点开应用」的等待里。
+    const out = await this.shell(
+      'settings put global enable_freeform_support 1 ; '
+      + 'settings put global force_resizable_activities 1 ; '
+      + 'settings put global development_settings_enabled 1 ; '
+      + 'settings get global enable_freeform_support',
+      { timeout: 12000 },
+    ).catch(() => '0');
+    return String(out).trim().split(/\r?\n/).pop().trim() === '1';
   }
 
   async wmSize() {
@@ -697,16 +714,16 @@ class AdbClient {
       if (m && m[2] === 'false') denied.push(m[1]);
     }
     const granted = [];
-    for (const p of denied) {
-      // eslint-disable-next-line no-await-in-loop
-      const r = await this.shell(`pm grant ${pkg} ${p}`, { timeout: 8000 }).catch(() => null);
-      if (r !== null) granted.push(p);
-    }
+    // 授权一次发完：pm grant 每条一次进程在 Windows 上要 150ms+，
+    // 四五个权限就是 1 秒，而这些命令本身没有任何依赖关系。
+    const cmds = [];
+    for (const p of denied) cmds.push(`pm grant ${pkg} ${p}`);
     // 特殊权限走 appops，否则仍然会弹窗
     const ops = ['MANAGE_EXTERNAL_STORAGE', 'SYSTEM_ALERT_WINDOW', 'REQUEST_INSTALL_PACKAGES', 'WRITE_SETTINGS'];
-    for (const op of ops) {
-      // eslint-disable-next-line no-await-in-loop
-      await this.shell(`cmd appops set ${pkg} ${op} allow`, { timeout: 8000 }).catch(() => {});
+    for (const op of ops) cmds.push(`cmd appops set ${pkg} ${op} allow`);
+    if (cmds.length) {
+      await this.shell(cmds.join(' ; '), { timeout: 20000 }).catch(() => '');
+      granted.push(...denied);
     }
     return granted;
   }
@@ -719,6 +736,8 @@ class AdbClient {
    * 全部是 settings 级命令，一次几百毫秒，重复调用无害。
    */
   async prepareForeground() {
+    // 以前是 7 条命令串行发，每条都要新起一个 adb 进程（Windows 上 150~250ms），
+    // 合计 1~1.7 秒，全压在「点开应用」的等待里。合成一条 shell 后只剩一次往返。
     const cmds = [
       'wm dismiss-keyguard',
       'settings put global policy_control immersive.status=*',
@@ -728,10 +747,7 @@ class AdbClient {
       'settings put global animator_duration_scale 0',
       'settings put system screen_off_timeout 2147483647',
     ];
-    for (const c of cmds) {
-      // eslint-disable-next-line no-await-in-loop
-      await this.shell(c, { timeout: 8000 }).catch(() => {});
-    }
+    await this.shell(cmds.join(' ; '), { timeout: 15000 }).catch(() => {});
     return true;
   }
 

@@ -102,11 +102,71 @@ function fileSize(p) {
   try { return fs.statSync(p).size; } catch (_) { return 0; }
 }
 
+/**
+ * 环境探测结果的落盘缓存。
+ *
+ * `emulator -version` 与 `emulator -accel-check` 每次都要新起一个 emulator 进程，
+ * 在 Windows 上实测 1~3 秒；而这两项在「引擎/驱动没变」时结果恒定。
+ * 以前只在内存里缓存 30 秒，等于每次冷启动都要重付一遍，而且这几秒正好卡在
+ * 用户点开应用的那一刻。这里按「exe 大小+修改时间 + AEHD 驱动时间 + WHPX 组件」
+ * 做指纹落到 %APPDATA%，软硬件一换自动失效。
+ */
+const ENV_CACHE_TTL = 6 * 60 * 60 * 1000;
+const ENV_CACHE_NEG_TTL = 10 * 60 * 1000; // 加速「不可用」只信 10 分钟：用户可能刚去开了虚拟化
+
+function envCacheFile() {
+  return path.join(store.DATA_DIR, 'cache', 'env.json');
+}
+
+function statKey(p) {
+  try {
+    const s = fs.statSync(p);
+    return `${s.size}:${Math.round(s.mtimeMs)}`;
+  } catch (_) { return ''; }
+}
+
 class Provisioner {
   constructor(appRoot) {
     this.appRoot = appRoot;
     this._hypervisor = null;
     this._cache = { adbVersion: '', qemuVersion: '' };
+  }
+
+  /** 缓存指纹：引擎文件与加速驱动任一变化就换 key */
+  _envKey(exe) {
+    const aehd = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'aehd.sys');
+    return [
+      String(exe || '').replace(/\\/g, '/').toLowerCase(),
+      statKey(exe),
+      statKey(aehd),
+      fs.existsSync('C:\\Windows\\System32\\WinHvPlatform.dll') ? '1' : '0',
+    ].join('|');
+  }
+
+  envCacheGet(exe) {
+    try {
+      const j = JSON.parse(fs.readFileSync(envCacheFile(), 'utf8'));
+      if (!j || j.key !== this._envKey(exe)) return null;
+      return j;
+    } catch (_) { return null; }
+  }
+
+  envCacheSet(exe, patch) {
+    try {
+      const key = this._envKey(exe);
+      let cur = {};
+      try { cur = JSON.parse(fs.readFileSync(envCacheFile(), 'utf8')) || {}; } catch (_) { /* 首次 */ }
+      const base = cur.key === key ? cur : { key, version: null, accel: null, accelAt: 0 };
+      const next = { ...base, ...patch, key, at: Date.now() };
+      fs.mkdirSync(path.dirname(envCacheFile()), { recursive: true });
+      fs.writeFileSync(envCacheFile(), JSON.stringify(next));
+    } catch (_) { /* 缓存写不进去不影响主流程 */ }
+  }
+
+  /** 开机失败（加速/镜像类问题）时调用：下次启动重新探测，避免一直用错的结论 */
+  invalidateEnvCache() {
+    this._cache = { adbVersion: '', qemuVersion: '' };
+    try { fs.rmSync(envCacheFile(), { force: true }); } catch (_) { /* ignore */ }
   }
 
   // ---------------- 路径 ----------------
@@ -470,6 +530,13 @@ class Provisioner {
     const candidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe')];
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
+      // 上一次会话探测过、且引擎文件没变：直接用落盘结果（省掉一次 1s+ 的进程拉起）
+      const cached = this.envCacheGet(c);
+      if (cached && cached.version && cached.version.ok && Date.now() - (cached.at || 0) < ENV_CACHE_TTL) {
+        this._cache.emulatorVersion = cached.version;
+        this._cache.emulatorVerAt = Date.now();
+        return cached.version;
+      }
       // eslint-disable-next-line no-await-in-loop
       const r = await run(c, ['-version'], { timeout: 20000 });
       const text = `${r.stdout}${r.stderr}`;
@@ -477,6 +544,7 @@ class Provisioner {
       if (m) {
         this._cache.emulatorVersion = { ok: true, path: c, version: m[1] };
         this._cache.emulatorVerAt = Date.now();
+        this.envCacheSet(c, { version: this._cache.emulatorVersion });
         return this._cache.emulatorVersion;
       }
     }
@@ -619,6 +687,18 @@ class Provisioner {
       : path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe');
     if (!fs.existsSync(exe)) return { ok: false, kind: 'none', note: '未安装 emulator' };
 
+    // 落盘缓存：冷启动时不再为这一项拉起 emulator 进程。
+    // 「不可用」结论只信 10 分钟 —— 用户可能刚去开了虚拟化/装了 AEHD，要能立刻反映。
+    const cached = this.envCacheGet(exe);
+    if (cached && cached.accel) {
+      const ttl = cached.accel.ok ? ENV_CACHE_TTL : ENV_CACHE_NEG_TTL;
+      if (Date.now() - (cached.accelAt || 0) < ttl) {
+        this._cache.accel = cached.accel;
+        this._cache.accelAt = Date.now();
+        return cached.accel;
+      }
+    }
+
     const aehdSys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'aehd.sys');
     const hasAehdFile = fs.existsSync(aehdSys) || fs.existsSync(path.join(p.aehdDir, 'aehd.sys'));
     const hv = await this.hypervisor();
@@ -652,6 +732,7 @@ class Provisioner {
     }
     this._cache.accel = result;
     this._cache.accelAt = Date.now();
+    this.envCacheSet(exe, { accel: result, accelAt: Date.now() });
     return result;
   }
 

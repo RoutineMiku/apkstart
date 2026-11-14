@@ -284,11 +284,24 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       assert(/-no-snapshot/.test(fresh), '没有快照时必须是 -no-snapshot');
       assert(!/-snapshot apkstart/.test(fresh), '没有快照时不能传 -snapshot');
     }
-    // 快照确实存在时才走 quickboot
+    // 快照确实存在时才走 quickboot。注意要真的「像一个完整快照」：
+    // 保存中断会留下只有几十字节 snapshot.pb 的空壳，那种必须判定为没有快照，
+    // 否则 emulator 会尝试加载、失败，再回退冷启动，白等几秒。
     const avdDir = path.join(emu.provisioner.paths().avdHome, 'apkstart.avd');
     const snapDir = path.join(avdDir, 'snapshots');
     const created = !fs.existsSync(snapDir);
     fs.mkdirSync(path.join(snapDir, 'apkstart'), { recursive: true });
+
+    // 空壳（12 字节 pb + 没有 ram.img）必须当作「没有快照」
+    fs.writeFileSync(path.join(snapDir, 'apkstart', 'snapshot.pb'), 'x'.repeat(12));
+    assert(!emu.hasSnapshot(), '不完整的快照不能被当成可用快照');
+    const broken = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
+    assert(/-no-snapshot/.test(broken) && !/-snapshot apkstart/.test(broken), '空壳快照必须回退冷启动');
+
+    // 完整快照：pb 有内容 + ram.img 有数据（上一步的空壳会被 hasSnapshot 顺手清掉）
+    fs.mkdirSync(path.join(snapDir, 'apkstart'), { recursive: true });
+    fs.writeFileSync(path.join(snapDir, 'apkstart', 'snapshot.pb'), 'x'.repeat(2048));
+    fs.writeFileSync(path.join(snapDir, 'apkstart', 'ram.img'), Buffer.alloc(2 * 1024 * 1024));
     const withSnap = emu.buildArgs({ gpu: 'software', memoryMB: 2048, cores: 2, snapshot: true }).join(' ');
     assert(/-snapshot apkstart/.test(withSnap), '有快照时应使用 quickboot 快照');
     if (created) fs.rmSync(snapDir, { recursive: true, force: true });

@@ -1256,6 +1256,8 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     store.ensureDirs();
     runtime = new Runtime(APP_ROOT);
+    // 启动即留一行痕迹：出问题时用户把 app.log 发过来就能看到版本与数据目录
+    appLog(`start v${app.getVersion()} data=${store.DATA_DIR} pid=${process.pid}`);
     const l = launcherInfo();
     installer = new Installer(runtime, {
       launcherTarget: l.target,
@@ -1332,6 +1334,34 @@ if (!gotLock) {
     const args = parseArgs(process.argv);
     if (args.apk) runInstall(args.apk).catch(() => {});
     else if (args.launch) await runLaunch(args.launch);
+
+    // 预热：像 WSA / 应用宝电脑版那样把安卓环境常驻。
+    // 打开 ApkStart 时就在后台把它引导好（窗口全程隐藏），之后点应用只剩一次 am start。
+    // 只有「已经装过应用 + 有可用运行时」才预热，避免第一次使用/纯管理场景白占内存。
+    const prewarmEnabled = store.getSettings().engine.prewarm !== false;
+    if (prewarmEnabled && !args.launch && store.getApps().length > 0) {
+      setTimeout(async () => {
+        try {
+          const env = await runtime.provisioner.checkEnv();
+          if (!(env.adb.ok && env.emulator.ok && env.sysimg.ok)) {
+            appLog(`prewarm skipped: not ready (adb=${env.adb.ok} emu=${env.emulator.ok} img=${env.sysimg.ok})`);
+            return;
+          }
+          // 开机阶段把模拟器窗口与 qemu 控制台藏起来，用户不该看到任何窗
+          if (winAgent) winAgent.bootHide().catch(() => {});
+          const t0 = Date.now();
+          appLog('prewarm start');
+          const r = await runtime.prewarm({ onLog: (m) => appLog(`prewarm ${m}`) });
+          if (r && r.ok) appLog(`prewarm ready in ${Date.now() - t0}ms`);
+          else {
+            appLog(`prewarm failed: ${r && (r.error || r.skipped)}`);
+            if (winAgent) winAgent.bootShow().catch(() => {});
+          }
+        } catch (e) { appLog(`prewarm error: ${e && e.message}`); /* 预热失败不影响后续正常打开 */ }
+      }, 4000).unref?.();
+    } else {
+      appLog(`prewarm off (enabled=${prewarmEnabled} launch=${!!args.launch} apps=${store.getApps().length})`);
+    }
 
     // 首次运行的组件部署延后 20 秒：冷启动那段时间磁盘/CPU 已经打满，
     // 再并发下载解压只会让桌面更卡。真有应用要打开时 ensure() 自会准备。

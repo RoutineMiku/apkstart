@@ -40,6 +40,9 @@ const DEFAULT_SETTINGS = {
     mouseSideButtons: false, // 侧键返回/前进：默认关闭，开启才多装一项映射
     deepTrim: false,         // 深度裁剪系统后台包（Play 商店/向导等），默认不动系统
     priorityMode: 'balanced', // balanced=让出前台 | performance=qemu 用 Normal 优先级
+    // 预热：启动 ApkStart 后在后台把安卓环境引导好，第一次点应用几乎不用等。
+    // 代价是常驻约 1GB 内存（和 WSA / 应用宝电脑版一样的取舍），可随时关掉。
+    prewarm: true,
   },
   runtime: {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime
