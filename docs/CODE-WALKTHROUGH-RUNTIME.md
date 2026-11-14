@@ -1,6 +1,6 @@
 # 运行时栈代码走读（sources / download / provision / updater / store / layers / 小工具）
 
-> 代码版本：`package.json` = **0.3.4**，`main` = `src/main.js`。
+> 代码版本：`package.json` = **0.3.5**，`main` = `src/main.js`。
 > 行号对应当前工作副本（`D:\apkstart-dsh\apkstart`），文件可能已变动，引用前请以函数名为准再核一次行号。
 > 阅读范围：`src/core/{sources,download,provision,updater,store,layers,logfile,notify,android,display}.js`，
 > 顺带读了调用方 `src/main.js` / `src/core/{engine,emulator,installer}.js` 与 `test/`。
