@@ -385,7 +385,7 @@ class EmulatorEngine {
   /** emulator 自带 qemu-img.exe：把原始镜像文件撑到目标大小（稀疏，瞬间完成） */
   _qemuImg(...args) {
     const exe = path.join(path.dirname(this.locate().emulatorExe), 'qemu-img.exe');
-    const r = spawnSync(exe, ['-f', 'raw', ...args], {
+    const r = spawnSync(exe, [args[0], '-f', 'raw', ...args.slice(1)], {
       cwd: path.dirname(exe), windowsHide: true, encoding: 'utf8',
     });
     if (r.status !== 0) throw new Error(`qemu-img ${args[0]} 失败: ${(r.stderr || '').trim() || r.status}`);
