@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   pin: (pkg, pinned) => invoke('app:pin', { pkg, pinned }),
   revealApk: (pkg) => invoke('app:revealApk', pkg),
   revealApkDir: () => invoke('apk:reveal'),
+  openDir: () => invoke('dialog:openDir'),
 
   getSettings: () => invoke('settings:get'),
   setSettings: (patch) => invoke('settings:set', patch),
@@ -30,6 +31,8 @@ contextBridge.exposeInMainWorld('apkstart', {
   runtimeLog: () => invoke('runtime:log'),
   doctorProfile: () => invoke('doctor:profile'),
   doctorReport: () => invoke('doctor:report'),
+  vcRedist: () => invoke('runtime:vcRedist'),
+  installVcRedist: () => invoke('runtime:installVcRedist'),
   runtimeUsage: () => invoke('runtime:usage'),
   runtimeCleanup: (opts) => invoke('runtime:cleanup', opts || {}),
   displayState: () => invoke('display:state'),

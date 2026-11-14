@@ -291,7 +291,9 @@ class EmulatorEngine {
     const args = [
       '-avd', AVD_NAME,
       '-port', String(port),
-      '-no-audio',
+      // 音频：默认开启（让安卓应用的提示音/视频声音能放出来）。
+      // 仅当用户在设置里显式关闭时才传 -no-audio 省一点 CPU。
+      ...(this.settings?.engine?.audio === false ? ['-no-audio'] : []),
       '-no-boot-anim',
       '-no-metrics',
       // 关掉崩溃上报：一旦历史崩溃报告存在，emulator 会弹「同意上传」模态框，

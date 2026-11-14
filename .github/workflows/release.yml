@@ -95,8 +95,25 @@ jobs:
           XZ_PRESET: '6'
           XZ_TIMEOUT_MS: '3600000'
 
+      # 内置微软 VC++ 2015-2022 x64 运行库：安卓模拟器（Qt6）与 qemu 都依赖它，
+      # 缺了在「其他电脑」上会直接起不来（0xc0000135 / MSVCP140 缺失）。
+      # 放到 build/runtime 内，随 extraResources 一起打进安装包；离线也能一键安装。
+      - name: 下载 VC++ 运行库（离线内置）
+        shell: pwsh
+        run: |
+          $dir = "build\runtime"
+          if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+          $out = "$dir\vc_redist.x64.exe"
+          Write-Output "下载 VC++ 2015-2022 x64 运行库…"
+          curl.exe -L -o $out "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          if (-not (Test-Path $out) -or (Get-Item $out).Length -lt 1MB) { Write-Error "vc_redist 下载失败" }
+          Get-Item $out | Select-Object Name, Length
+
+      # 不打 git tag 时 electron-builder 不会隐式发布；打了 tag 也会因为本 job 没有
+      # GH_TOKEN 而报 "GitHub Personal Access Token is not set" 后退出 1（之前完整版一直失败的根因）。
+      # 这里显式 --publish never，安装包由后面「上传完整版到 Release」步骤用 gh release upload 上传。
       - name: 构建完整版安装包
-        run: npx electron-builder --win nsis
+        run: npx electron-builder --win nsis --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 

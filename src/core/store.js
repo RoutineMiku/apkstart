@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = {
     headless: false,
     gpuMode: 'auto',         // auto = 按 emulator 版本自动挑后端并逐级降级
     forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
+    audio: true,             // 安卓应用的声音（提示音/视频）。关闭可省一点 CPU
     // ---- 轻量容器（默认全开省资源，用户可逐项关掉）----
     liteMode: true,          // 收敛 vCPU 配额，避免 qemu 占满物理核拖慢 Windows
     // 鼠标键位：左键由模拟器原生映射为「确认/点击」，无需开关。

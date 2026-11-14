@@ -925,6 +925,10 @@ class Runtime {
       try { this.vmProc.kill(); } catch (_) { /* ignore */ }
       this.vmProc = null;
     }
+    // 退出时务必清掉 detached 的 qemu 进程：它独立于 ApkStart 存活（为了下次秒开），
+    // 不在此强杀会一直锁住安装目录里的文件，导致卸载不干净、第三方粉碎工具也删不掉。
+    // 仅在本进程真正退出时调用，不影响「关窗口→托盘常驻→下次秒开」的体验。
+    this.emulator.killOrphanProcesses().catch(() => {});
   }
 
   get bootLog() { return this._bootLog.slice(-60); }

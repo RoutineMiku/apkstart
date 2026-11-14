@@ -46,10 +46,17 @@ win:
   requestedExecutionLevel: asInvoker
 
 nsis:
-  oneClick: true
+  # 不再是「一键装到 C 盘默认目录」：改为标准向导，允许用户选择安装位置
+  # （装到非系统盘可减轻 C 盘压力；运行时数据目录另在设置里单独指定）。
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: true
+  displayLanguageSelector: false
   createDesktopShortcut: true
   artifactName: ApkStart-${version}-Setup.exe
+  # 卸载前先结束仍在运行的运行时进程，避免文件被锁导致无法删除
+  # （火绒等粉碎工具删不掉，多半是 qemu/adb 进程还驻留）。
+  include: build/installer.nsh
   # 安装包本身已含完整运行时（emulator + 系统镜像 .gz），装完首次启动
   # 自动把镜像展开到用户目录，之后不再联网下载任何东西。
 

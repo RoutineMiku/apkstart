@@ -113,6 +113,14 @@
       <a class="status-item powered-link" href="https://github.com/RoutineMiku/apkstart" target="_blank" rel="noopener">Powered by RoutineMiku</a>
     </div>
   </footer>
+
+  <div id="vcRedistWarn" hidden style="display:flex;align-items:center;gap:12px;margin:10px 14px;padding:10px 14px;border-radius:10px;background:#3a1d1d;color:#ffd9d9;border:1px solid #6b2b2b;">
+    <div style="flex:1;">
+      <strong style="display:block;">缺少 VC++ 运行库（x64）</strong>
+      <span style="font-size:12px;opacity:.9;">安卓运行时依赖微软 VC++ 2015-2022。未安装会导致模拟器无法启动——这是「其他电脑装不上/起不来」最常见的原因。</span>
+    </div>
+    <button class="btn small" id="btnInstallVcRedist">一键安装（需管理员）</button>
+  </div>
 </main>
 
 <!-- 安装进度 -->
@@ -227,6 +235,13 @@
 
       <div class="group">
         <div class="group-title">性能与轻量容器</div>
+        <div class="field switch-field">
+          <div>
+            <label>安卓声音</label>
+            <span class="sub">让应用提示音、视频声音正常播放。仅在你完全不需要声音、想再省一点 CPU 时关闭。</span>
+          </div>
+          <input type="checkbox" id="setAudio" class="switch" />
+        </div>
         <div class="field switch-field">
           <div>
             <label>轻量容器（推荐）</label>
@@ -432,11 +447,13 @@
           <button class="btn ghost sm" id="btnAssoc">检查中…</button>
         </div>
         <div class="field">
-          <label>数据目录</label>
+          <label>运行时数据目录（系统镜像 · 已装应用 · 快照）</label>
           <div class="row">
-            <input id="setDataDir" type="text" readonly />
+            <input id="setRuntimeDir" type="text" readonly placeholder="默认：C 盘用户数据目录" />
+            <button class="btn ghost sm" id="btnBrowseRuntimeDir">浏览</button>
             <button class="btn ghost sm" id="btnOpenData">打开</button>
           </div>
+          <span class="sub">这里占用空间最大（数 GB）。改到非系统盘可大幅减轻 C 盘压力；修改后需重启软件，已存在的数据不会自动搬移（请手动复制后删除旧目录）。</span>
         </div>
       </div>
       <div class="group" id="aboutGroup">

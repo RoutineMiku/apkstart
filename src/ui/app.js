@@ -629,6 +629,7 @@ function fillSettings(s) {
   $('setMemory').value = s.engine.memoryMB;
   $('setCores').value = s.engine.cores;
   $('setIdle').value = s.engine.idleShutdownMinutes;
+  $('setAudio').checked = s.engine.audio !== false;
   $('setLiteMode').checked = s.engine.liteMode !== false;
   $('setPriorityMode').value = s.engine.priorityMode === 'performance' ? 'performance' : 'balanced';
   $('setDeepTrim').checked = !!s.engine.deepTrim;
@@ -653,7 +654,7 @@ async function openSettings() {
   state.settings = await api.getSettings();
   fillSettings(state.settings);
   const info = await api.info();
-  $('setDataDir').value = info.dataDir;
+  $('setRuntimeDir').value = info.runtimeDir || info.dataDir;
   const verEl = document.getElementById('aboutVer');
   if (verEl && info.version) verEl.textContent = `v${info.version}`;
   const assoc = await api.assocStatus();
@@ -693,6 +694,7 @@ function bindSettings() {
   $('setMemory').addEventListener('change', (e) => save({ engine: { memoryMB: Number(e.target.value) || 0 } }));
   $('setCores').addEventListener('change', (e) => save({ engine: { cores: Number(e.target.value) || 0 } }));
   $('setIdle').addEventListener('change', (e) => save({ engine: { idleShutdownMinutes: Number(e.target.value) || 0 } }));
+  $('setAudio').addEventListener('change', (e) => save({ engine: { audio: e.target.checked } }));
   $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
   $('setPriorityMode').addEventListener('change', (e) => save({ engine: { priorityMode: e.target.value } }));
   const savePointer = async (patch) => {
@@ -825,7 +827,16 @@ function bindSettings() {
   })();
   $('btnOpenData').addEventListener('click', async () => {
     const info = await api.info();
-    window.open(`file:///${info.dataDir.replace(/\\/g, '/')}`);
+    const dir = info.runtimeDir || info.dataDir;
+    window.open(`file:///${dir.replace(/\\/g, '/')}`);
+  });
+  $('btnBrowseRuntimeDir').addEventListener('click', async () => {
+    const info = await api.info();
+    const picked = await api.openDir();
+    if (!picked) return;
+    await api.setSettings({ runtime: { dir: picked } });
+    $('setRuntimeDir').value = picked;
+    toast({ title: '数据目录已更新', body: '请重启 ApkStart 使其生效（旧数据不会自动搬移）', type: 'ok', sticky: true });
   });
 
   $('btnProbe').addEventListener('click', async () => {
@@ -875,6 +886,24 @@ function bindSettings() {
 /* ---------------- 事件绑定 ---------------- */
 
 function bindEvents() {
+  // VC++ 运行库：一键提权安装（内置安装包优先，否则提示去官网）
+  const btnVc = document.getElementById('btnInstallVcRedist');
+  if (btnVc) btnVc.addEventListener('click', async () => {
+    btnVc.disabled = true;
+    const r = await api.installVcRedist().catch(() => ({ ok: false }));
+    if (r && r.ok) {
+      document.getElementById('vcRedistWarn').hidden = true;
+      toast({ title: 'VC++ 运行库已安装', body: '现在可以启动运行时了', type: 'ok' });
+    } else if (r && r.reason === 'no-installer') {
+      api.openExternal('https://learn.microsoft.com/zh-CN/cpp/windows/latest-supported-vc-redist?view=msvc-170#visual-studio-2015-2017-2019-and-2022');
+      toast({ title: '未找到内置安装包', body: '已打开微软官方下载页，请下载 x64 版本', type: 'info' });
+      btnVc.disabled = false;
+    } else {
+      toast({ title: '安装未完成', body: '可能被取消或需要管理员权限，请重试', type: 'error' });
+      btnVc.disabled = false;
+    }
+  });
+
   // 链接统一走系统浏览器
   document.addEventListener('click', (e) => {
     const a = e.target.closest && e.target.closest('a[href^="http"]');
@@ -1039,8 +1068,22 @@ async function init() {
   await refreshStatus();
   await refreshApps();
   refreshAndroid();
+  checkVcRedist();
   setInterval(refreshStatus, 6000);
   setInterval(refreshApps, 15000);
+}
+
+// VC++ 运行库检测：缺失时显示横幅，提供一键提权安装
+async function checkVcRedist() {
+  const warn = document.getElementById('vcRedistWarn');
+  if (!warn) return;
+  try {
+    const r = await api.vcRedist();
+    if (r && r.ok) { warn.hidden = true; return; }
+    warn.hidden = false;
+    warn._hasInstaller = !!r.path;
+    document.getElementById('btnInstallVcRedist').disabled = !r.path;
+  } catch (_) { /* 检测失败不阻断主流程 */ }
 }
 
 init().catch((e) => {

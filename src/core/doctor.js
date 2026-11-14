@@ -404,10 +404,29 @@ function writeReport({ dataDir, profile, logLines = [], extra = {} }) {
   return { file, diagnosis: d };
 }
 
+/**
+ * 检测微软 VC++ 2015-2022 x64 运行库是否安装。
+ * 安卓模拟器（Qt6）与 qemu 都依赖它；缺了在「其他电脑」上会直接起不来
+ * （报 0xc0000135 / MSVCP140 缺失）。安装版我们已内置 vc_redist.x64.exe，
+ * 这里只做检测，供启动前给出明确提示与一键安装入口。
+ */
+function vcRedistOk() {
+  if (process.platform !== 'win32') return true;
+  const key = 'HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64';
+  for (const k of [key, key.replace('SOFTWARE\\', 'SOFTWARE\\WOW6432Node\\')]) {
+    try {
+      const out = execFileSync('reg', ['query', k, '/v', 'Installed'],
+        { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+      if (/Installed\s+REG_DWORD\s+0x1/i.test(out)) return true;
+    } catch (_) { /* 键不存在 = 没装 */ }
+  }
+  return false;
+}
+
 module.exports = {
   hostInfo, freeDiskMB, isAsciiPath, shortPath, lcdFor, liteProfile,
   versionNumbers, gpuCandidates, chooseProfile, planVariants,
   overridesFromSettings, autoProfile,
   freePortPair, freeAdbPort, snapshotKey,
-  diagnose, describeProfile, writeReport,
+  diagnose, describeProfile, writeReport, vcRedistOk,
 };

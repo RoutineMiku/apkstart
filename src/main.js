@@ -533,9 +533,21 @@ function registerIpc() {
     version: app.getVersion(),
     isDev: IS_DEV,
     dataDir: store.DATA_DIR,
+    runtimeDir: runtime.provisioner.paths().root,
     exe: process.execPath,
     packaged: app.isPackaged,
   }));
+
+  // 选文件夹（用于把运行时/镜像/已装应用挪到非系统盘）
+  ipcMain.handle('dialog:openDir', async (_e, defaultPath) => {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: '选择数据存放目录',
+      defaultPath: defaultPath || store.DATA_DIR,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths[0]) return null;
+    return r.filePaths[0];
+  });
 
   ipcMain.handle('apps:list', async () => {
     const apps = store.getApps();
@@ -697,6 +709,36 @@ function registerIpc() {
     const r = await runtime.diagnostics();
     shell.showItemInFolder(r.file);
     return r;
+  });
+
+  // 微软 VC++ 2015-2022 x64 运行库：安卓模拟器（Qt6）与 qemu 都依赖它。
+  // 缺了在「其他电脑」上会直接起不来（0xc0000135 / MSVCP140 缺失）。
+  function vcRedistInstaller() {
+    const p = runtime.provisioner.paths();
+    const cands = [
+      path.join(p.root, 'vc_redist.x64.exe'),
+      path.join(process.resourcesPath || '', 'runtime', 'vc_redist.x64.exe'),
+    ];
+    return cands.find((c) => c && fs.existsSync(c)) || null;
+  }
+  ipcMain.handle('runtime:vcRedist', () => {
+    const doctor = require('./core/doctor');
+    return { ok: doctor.vcRedistOk(), path: vcRedistInstaller() };
+  });
+  ipcMain.handle('runtime:installVcRedist', async () => {
+    const file = vcRedistInstaller();
+    if (!file) return { ok: false, reason: 'no-installer' };
+    const { spawn } = require('child_process');
+    await new Promise((resolve) => {
+      // 用 RunAs 提权安装（VC++ 是系统级组件，需要管理员）；/quiet 静默 /norestart 不重启
+      const ps = spawn('powershell.exe', ['-NoProfile', '-Command',
+        `Start-Process -FilePath "${file}" -ArgumentList '/quiet','/norestart' -Verb RunAs -Wait`],
+      { windowsHide: true, stdio: 'ignore' });
+      ps.on('exit', () => resolve());
+      ps.on('error', () => resolve());
+    });
+    const doctor = require('./core/doctor');
+    return { ok: doctor.vcRedistOk() };
   });
 
   ipcMain.handle('runtime:usage', () => runtime.usage());

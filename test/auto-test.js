@@ -309,6 +309,19 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/-no-window/.test(headless) && !/-no-skin/.test(headless));
   });
 
+  await test('音频：默认开启（不带 -no-audio），关闭后才带 -no-audio', () => {
+    const { EmulatorEngine } = require('../src/core/emulator');
+    const emu = new EmulatorEngine(path.join(__dirname, '..'));
+    // 覆盖 settings getter：默认开启不应有 -no-audio
+    Object.defineProperty(emu, 'settings', { configurable: true, get: () => ({ engine: { audio: true } }) });
+    const on = emu.buildArgs({ headless: false, gpu: 'software' }).join(' ');
+    assert(!/-no-audio/.test(on), 'audio=true 时不应传 -no-audio');
+    // 关闭后才应带 -no-audio
+    Object.defineProperty(emu, 'settings', { configurable: true, get: () => ({ engine: { audio: false } }) });
+    const off = emu.buildArgs({ headless: false, gpu: 'software' }).join(' ');
+    assert(/-no-audio/.test(off), 'audio=false 时应传 -no-audio');
+  });
+
   await test('旧配置强制迁移：无头与「启动后退出」不再生效', () => {
     const store = require('../src/core/store');
     store.saveSettings({ engine: { headless: true }, hideAfterLaunch: true });
