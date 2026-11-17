@@ -1734,6 +1734,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const { downloadMulti } = require('../src/core/download');
     const data = Buffer.alloc(3 * 1024 * 1024);
     for (let i = 0; i < data.length; i += 1) data[i] = i % 251;
+    const expectSha256 = require('crypto').createHash('sha256').update(data).digest('hex');
     const handler = (req, res) => {
       const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
       if (!r) { res.writeHead(200, { 'Content-Length': data.length }); res.end(data); return; }
@@ -1758,7 +1759,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     ];
     const out = path.join(TMP, 'multi.bin');
     try {
-      const r = await downloadMulti(urls, out, { connections: 6, minChunk: 512 * 1024 });
+      const r = await downloadMulti(urls, out, { connections: 6, minChunk: 512 * 1024, expectSha256 });
       const got = fs.readFileSync(out);
       assert(Buffer.compare(got, data) === 0, '多源拼装后内容必须与源文件完全一致');
       assert(r.sources === 2 && r.parallel >= 2, `应同时用到 2 个源，实际 ${JSON.stringify(r)}`);
@@ -1776,6 +1777,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const total = 3 * MB;
     const data = Buffer.alloc(total);
     for (let i = 0; i < total; i += 1) data[i] = i % 251;
+    const expectSha256 = require('crypto').createHash('sha256').update(data).digest('hex');
     let ranged = 0;
     const handler = (req, res) => {
       const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
@@ -1804,7 +1806,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       fs.closeSync(fd);
       fs.writeFileSync(`${out}.chunks.json`, JSON.stringify({ total, n: 3, done: [0, per] }));
 
-      const r = await downloadMulti(urls, out, { connections: 3, minChunk: MB });
+      const r = await downloadMulti(urls, out, { connections: 3, minChunk: MB, expectSha256 });
       assert(r.resumed === true, '应识别出这是断点续传');
       assert(ranged === 1, `只应补下 1 个块，实际请求 ${ranged} 块`);
       assert(Buffer.compare(fs.readFileSync(out), data) === 0, '续传后的文件必须与源完全一致');
@@ -1865,6 +1867,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const MB = 1024 * 1024;
     const total = 2 * MB;
     const data = Buffer.alloc(total, 5);
+    const expectSha256 = require('crypto').createHash('sha256').update(data).digest('hex');
     // 慢源：每 100ms 才吐 4KB（≈40KB/s）
     const slow = http.createServer((req, res) => {
       const r = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
@@ -1899,7 +1902,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       await downloadMulti(
         [`http://127.0.0.1:${s1.address().port}/f`, `http://127.0.0.1:${s2.address().port}/f`],
         out,
-        { connections: 2, minChunk: 512 * 1024, idleMs: 3000, slowAfterMs: 400, slowBps: 200 * 1024 },
+        { connections: 2, minChunk: 512 * 1024, idleMs: 3000, slowAfterMs: 400, slowBps: 200 * 1024, expectSha256 },
       );
       const cost = Date.now() - t0;
       assert(Buffer.compare(fs.readFileSync(out), data) === 0, '换源后内容必须正确');

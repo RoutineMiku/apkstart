@@ -442,6 +442,16 @@ async function downloadMulti(urls, dest, opt = {}) {
   if (!list.length) throw new Error('没有可用的下载地址');
   if (list.length === 1) return downloadParallel(list[0], dest, opt);
 
+  // [PR2] 无独立可信摘要：禁止跨源身份混块。同声明总长不证明同字节
+  // （GitHub zip 与 Gitee 重打包字节不同；同长异容镜像是 BUG-NOANCHOR）。
+  // 退化为「单一 ranked 源 + 整源回退」：downloadAnyParallel 逐源整包尝试
+  // （每源 = downloadParallel 单源分块，含严格 206/validRange），换源前
+  // discardPartial —— 成功必然来自某一个源的全部字节，且不读/写 .chunks.json。
+  if (!opt.expectSha256) {
+    const r = await downloadAnyParallel(list, dest, opt);
+    return { ...r, sources: 1, multi: false, resumed: false };
+  }
+
   // 1) 并行探测：总大小 + 是否支持 Range
   const probes = await Promise.all(list.map(async (u) => {
     try {

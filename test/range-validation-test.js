@@ -169,6 +169,125 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // ===== PR2 / BUG-NOANCHOR：无独立可信摘要时禁止跨源混块 =====
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-noanchor-'));
+  let server2;
+  try {
+    // 16 字节、同声明总长；POISON 与 FIRST 字节完全不同（合法 206，仍是毒镜像）。
+    const CONTENT16 = 'abcdefghijklmnop';
+    const POISON16 = 'ABCDEFGHIJKLMNOP';
+    const sha16 = crypto.createHash('sha256').update(CONTENT16).digest('hex');
+    const serveBody = (content, req, res) => {
+      const r = req.headers.range;
+      if (r === 'bytes=0-0') {
+        res.writeHead(206, { 'Content-Range': 'bytes 0-0/16', 'Content-Length': '1' });
+        res.end(content[0]);
+      } else if (r) {
+        const m = /bytes=(\d+)-(\d+)/.exec(r);
+        const s = Number(m[1]); const e = Number(m[2]);
+        const body = content.slice(s, e + 1);
+        res.writeHead(206, { 'Content-Range': `bytes ${s}-${e}/16`, 'Content-Length': String(body.length) });
+        res.end(body);
+      } else {
+        res.writeHead(200, { 'Content-Length': '16' });
+        res.end(content);
+      }
+    };
+    server2 = await serve((req, res) => {
+      if (req.url.startsWith('/mirror')) {
+        serveBody(req.url.includes('mirror=poison') ? POISON16 : CONTENT16, req, res);
+      } else if (req.url.startsWith('/only')) {
+        // 不支持 Range 的整源：永远 200 整包（回退用例用，避免旧实现把 stale dest 当续传）
+        res.writeHead(200, { 'Content-Length': '16' });
+        res.end(CONTENT16);
+      } else if (req.url.startsWith('/fail')) {
+        res.writeHead(500, { 'Content-Length': '0' });
+        res.end();
+      } else if (req.url === '/slow') {
+        // 先吐 4 字节再挂住连接，等客户端 abort
+        res.writeHead(200, { 'Content-Length': '16' });
+        res.write(CONTENT16.slice(0, 4));
+      } else {
+        serveBody(CONTENT16, req, res);
+      }
+    });
+    const base2 = baseOf(server2);
+    const options2 = { connections: 2, minChunk: 2, retries: 1 };
+
+    await atest('PR2-1 无锚同长异容镜像退化为单源整源，不混块', async () => {
+      const out = path.join(dir2, 'noanchor-mixed');
+      const r = await downloadMulti(
+        [`${base2}/mirror?mirror=one`, `${base2}/mirror?mirror=poison`], out, options2,
+      );
+      assert.equal(fs.readFileSync(out, 'utf8'), CONTENT16, '必须是排名首源的整份原始字节');
+      assert.equal(r.multi, false);
+      assert.equal(r.sources, 1);
+      assert.equal(fs.existsSync(`${out}.chunks.json`), false, '无锚路径不应产生边车');
+    });
+
+    await atest('PR2-2 无锚首源失败整源回退次源并清理预置边车', async () => {
+      const out = path.join(dir2, 'noanchor-fallback');
+      fs.writeFileSync(out, 'stale');
+      fs.writeFileSync(`${out}.chunks.json`, JSON.stringify({ total: 16, n: 2, done: [0] }));
+      await downloadMulti([`${base2}/fail`, `${base2}/only`], out, options2);
+      assert.equal(fs.readFileSync(out, 'utf8'), CONTENT16);
+      assert.equal(fs.existsSync(`${out}.chunks.json`), false, 'stale 边车应被清理');
+    });
+
+    await atest('PR2-3 无锚 stale 边车不可复用，整源重下且非 resumed', async () => {
+      const out = path.join(dir2, 'noanchor-stale');
+      // done:[0] 指向的 0-7 段是异源毒字节；旧实现跳过它直接拼进成品。
+      fs.writeFileSync(out, 'XXXXXXXXXXXXXXXX');
+      fs.writeFileSync(`${out}.chunks.json`, JSON.stringify({ total: 16, n: 2, done: [0] }));
+      const r = await downloadMulti(
+        [`${base2}/mirror?mirror=one`, `${base2}/mirror?mirror=poison`], out, options2,
+      );
+      assert.equal(fs.readFileSync(out, 'utf8'), CONTENT16, '毒字节不得被当作已完成块复用');
+      assert.equal(r.multi, false, '必须退化为单源，而不是续传多源拼块');
+      assert.equal(r.resumed, false);
+      assert.equal(fs.existsSync(`${out}.chunks.json`), false, 'stale 边车应被清除');
+    });
+
+    await atest('PR2-4 有锚同容双镜像仍走多源（能力保留）', async () => {
+      const out = path.join(dir2, 'anchor-ok');
+      const r = await downloadMulti(
+        [`${base2}/mirror?mirror=one`, `${base2}/mirror?mirror=two`], out, { ...options2, expectSha256: sha16 },
+      );
+      assert.equal(fs.readFileSync(out, 'utf8'), CONTENT16);
+      assert.equal(r.multi, true);
+    });
+
+    await atest('PR2-5 无锚全源失败：拒绝且不留 dest/边车', async () => {
+      const out = path.join(dir2, 'noanchor-allfail');
+      fs.writeFileSync(out, 'stale');
+      fs.writeFileSync(`${out}.chunks.json`, JSON.stringify({ total: 16, n: 2, done: [0] }));
+      await assert.rejects(
+        downloadMulti([`${base2}/fail?a=1`, `${base2}/fail?a=2`], out, options2),
+      );
+      assert.equal(fs.existsSync(out), false, '失败后不得留目标文件');
+      assert.equal(fs.existsSync(`${out}.chunks.json`), false, '失败后不得留边车');
+    });
+
+    await atest('PR2-6 单流 cancel：abort 后拒绝并清理残片', async () => {
+      const out = path.join(dir2, 'cancel');
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 80);
+      try {
+        await assert.rejects(download(`${base2}/slow`, out, { signal: ac.signal, retries: 1 }));
+      } finally {
+        clearTimeout(timer);
+        server2.closeAllConnections();
+      }
+      assert.equal(fs.existsSync(out), false, '取消后不得留下残片');
+    });
+  } finally {
+    if (server2) {
+      server2.closeAllConnections();
+      await new Promise((r) => server2.close(r));
+    }
+    fs.rmSync(dir2, { recursive: true, force: true });
+  }
+
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
