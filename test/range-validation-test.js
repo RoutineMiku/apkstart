@@ -12,6 +12,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { download, downloadParallel, downloadMulti, validRange } = require('../src/core/download');
 
 let passed = 0;
@@ -63,14 +64,16 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
       if (req.url === '/416') {
         if (r) { res.writeHead(416, { 'Content-Range': 'bytes */4' }); res.end(); }
         else { res.writeHead(200, { 'Content-Length': '4' }); res.end('good'); }
-      } else if (req.url === '/ok') {
-        if (r === 'bytes=0-0') { res.writeHead(206, { 'Content-Range': 'bytes 0-0/8', 'Content-Length': '1' }); res.end('a'); }
+      } else if (req.url === '/ok' || req.url.startsWith('/ok?')) {
+        // 同样的总长度和合法 Range 头不保证两个镜像是同一字节对象。
+        const content = req.url.includes('mirror=poison') ? 'abcdWXYZ' : 'abcdefgh';
+        if (r === 'bytes=0-0') { res.writeHead(206, { 'Content-Range': 'bytes 0-0/8', 'Content-Length': '1' }); res.end(content[0]); }
         else if (r) {
           const m = /bytes=(\d+)-(\d+)/.exec(r);
-          const s = Number(m[1]); const e = Number(m[2]); const body = 'abcdefgh'.slice(s, e + 1);
+          const s = Number(m[1]); const e = Number(m[2]); const body = content.slice(s, e + 1);
           res.writeHead(206, { 'Content-Range': `bytes ${s}-${e}/8`, 'Content-Length': String(body.length) });
           res.end(body);
-        } else { res.writeHead(200, { 'Content-Length': '8' }); res.end('abcdefgh'); }
+        } else { res.writeHead(200, { 'Content-Length': '8' }); res.end(content); }
       } else {
         if (r === 'bytes=0-0') { res.writeHead(206, { 'Content-Range': 'bytes 0-0/8', 'Content-Length': '1' }); res.end('a'); }
         else { res.writeHead(206, { 'Content-Range': 'bytes 0-3/8', 'Content-Length': '4' }); res.end('abcd'); }
@@ -106,6 +109,51 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
           downloadMulti([`${base}/bad1`, `${base}/bad2`], out, { connections: 2, minChunk: 2, retries: 1 }),
           /范围/,
         );
+      });
+
+      // 负控：摘要验证必须覆盖并行/多源出口，不能只覆盖单流。
+      const goodSha = crypto.createHash('sha256').update('abcdefgh').digest('hex');
+      const options = { connections: 2, minChunk: 2, retries: 1 };
+      await atest('downloadParallel 错误 SHA-256 必须拒绝并删除坏文件', async () => {
+        const out = path.join(dir, 'parallel-bad-digest');
+        await assert.rejects(
+          downloadParallel(`${base}/ok`, out, { ...options, expectSha256: '0'.repeat(64) }),
+          /校验失败/,
+        );
+        assert.equal(fs.existsSync(out), false, '摘要错误时不应留下坏成品');
+      });
+
+      await atest('downloadParallel 正确 SHA-256 保持原字节', async () => {
+        const out = path.join(dir, 'parallel-good-digest');
+        await downloadParallel(`${base}/ok`, out, { ...options, expectSha256: goodSha });
+        assert.equal(fs.readFileSync(out, 'utf8'), 'abcdefgh');
+      });
+
+      const mirrors = [`${base}/ok?mirror=one`, `${base}/ok?mirror=two`];
+      await atest('downloadMulti 错误 SHA-256 必须拒绝并删除坏文件', async () => {
+        const out = path.join(dir, 'multi-bad-digest');
+        await assert.rejects(
+          downloadMulti(mirrors, out, { ...options, expectSha256: '0'.repeat(64) }),
+          /校验失败/,
+        );
+        assert.equal(fs.existsSync(out), false, '摘要错误时不应留下坏成品');
+      });
+
+      await atest('downloadMulti 正确 SHA-256 保持原字节', async () => {
+        const out = path.join(dir, 'multi-good-digest');
+        await downloadMulti(mirrors, out, { ...options, expectSha256: goodSha });
+        assert.equal(fs.readFileSync(out, 'utf8'), 'abcdefgh');
+      });
+
+      await atest('同大小但不同内容的镜像不可拼成通过校验的整包', async () => {
+        const out = path.join(dir, 'multi-poisoned-mirror');
+        const badMirrors = [`${base}/ok?mirror=one`, `${base}/ok?mirror=poison`];
+        await assert.rejects(
+          downloadMulti(badMirrors, out, { ...options, expectSha256: goodSha }),
+          /校验失败/,
+        );
+        assert.equal(fs.existsSync(out), false, '混入污染镜像时不应保留坏文件');
+        assert.equal(fs.existsSync(`${out}.chunks.json`), false, '不能留下可复用的坏边车');
       });
 
       await atest('合法范围下载仍然成功（无回归）', async () => {
