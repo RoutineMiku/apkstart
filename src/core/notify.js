@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../i18n');
 /**
  * 安卓通知 → Windows 原生通知。
  *
@@ -119,10 +120,10 @@ class NotifyBridge {
     try {
       if (!Notification.isSupported()) return;
       const label = this.getAppLabel ? this.getAppLabel(n.pkg) : n.pkg;
-      const body = [n.title, n.text].filter(Boolean).join(' · ') || '新通知';
+      const body = [n.title, n.text].filter(Boolean).join(' · ') || t('新通知');
       const iconPath = this.getAppIcon ? this.getAppIcon(n.pkg) : '';
       const note = new Notification({
-        title: label || '安卓应用',
+        title: label || t('安卓应用'),
         body: body.slice(0, 260),
         silent: false,
         icon: iconPath ? nativeImage.createFromPath(iconPath) : undefined,

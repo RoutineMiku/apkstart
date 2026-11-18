@@ -8,7 +8,19 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { t } = require('../i18n');
 const store = require('./store');
+const { autoRotateSetting } = require('./orientation');
+
+/**
+ * 镜像内「自动旋转」开关要写进 guest 的值（'1' 开 / '0' 关）。
+ * 面板方向不由它决定 —— setOrientation / resetDisplayOverrides 里紧跟的
+ * `wm user-rotation lock 0` + `wm set-ignore-orientation-request` 才是方向权威。
+ * 这里只是让系统设置里的开关显示为「开」，满足应用读取该 setting 的期望。
+ */
+function guestAutoRotate() {
+  try { return autoRotateSetting(store.getSettings()); } catch (_) { return '1'; }
+}
 
 /**
  * 平板排版的逻辑密度。
@@ -24,13 +36,16 @@ function tabletDensity() {
   }
 }
 
+/**
+ * 系统里可能存在的 adb 位置。**故意只列 Android SDK 与常见手动安装目录**：
+ * 第三方模拟器自带的 adb（MuMu / 雷电 / 蓝叠）不在这里 —— 用它们的 adb 会连带
+ * 继承别人的 server 状态（端口、授权、offline 抖动），与「独立运行」冲突。
+ * 自己那份 adb 在运行时目录里，优先级永远最高（见 engine.adbPath）。
+ */
 const COMMON_ADB_PATHS = [
   path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
-  'C:\\Android\\platform-tools\\adb.exe',
-  'C:\\adb\\adb.exe',
-  'C:\\LDPlayer\\LDPlayer9\\adb.exe',
-  'C:\\Program Files\\Netease\\MuMuPlayer-12.0\\shell\\adb.exe',
-  'C:\\Program Files\\BlueStacks_nxt\\HD-Adb.exe',
+  'C:/Android/platform-tools/adb.exe',
+  'C:/adb/adb.exe',
 ];
 
 /**
@@ -42,54 +57,51 @@ function friendlyInstallError(raw) {
   const tag = code ? code[0] : '';
   const table = {
     INSTALL_FAILED_NO_MATCHING_ABIS:
-      '安装失败：这个应用只提供 ARM 原生库（多数国产应用如此），'
-      + '当前系统镜像没有 ARM 转译层。ApkStart 会自动切换到内置新版翻译层的兼容镜像并重试。',
+      t('安装失败：这个应用只提供 ARM 原生库（多数国产应用如此），当前系统镜像没有 ARM 转译层。ApkStart 会自动切换到内置新版翻译层的兼容镜像并重试。'),
     INSTALL_FAILED_OLDER_SDK:
-      '安装失败：应用要求的 Android 版本高于当前运行时（需更高系统镜像）。',
+      t('安装失败：应用要求的 Android 版本高于当前运行时（需更高系统镜像）。'),
     INSTALL_PARSE_FAILED_NO_CERTIFICATES:
-      '安装失败：APK 没有有效签名，无法安装。',
+      t('安装失败：APK 没有有效签名，无法安装。'),
     INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES:
-      '安装失败：与已安装版本签名不一致，请先卸载旧版再装。',
+      t('安装失败：与已安装版本签名不一致，请先卸载旧版再装。'),
     INSTALL_FAILED_VERSION_DOWNGRADE:
-      '安装失败：设备上已安装更高版本，不能降级覆盖。',
+      t('安装失败：设备上已安装更高版本，不能降级覆盖。'),
     INSTALL_FAILED_INSUFFICIENT_STORAGE:
-      '安装失败：运行时磁盘空间不足，请清理后重试。',
+      t('安装失败：运行时磁盘空间不足，请清理后重试。'),
     INSTALL_FAILED_INVALID_APK:
-      '安装失败：APK 文件损坏或不完整（可能下载未完成），请重新获取。',
-    INSTALL_FAILED_INVALID_URI: '安装失败：APK 路径含特殊字符，请把文件移到纯英文路径后重试。',
-    INSTALL_FAILED_ALREADY_EXISTS: '安装失败：已存在同名应用且签名不同，请先卸载。',
-    INSTALL_FAILED_UPDATE_INCOMPATIBLE: '安装失败：与已安装版本签名不一致，请先卸载旧版。',
+      t('安装失败：APK 文件损坏或不完整（可能下载未完成），请重新获取。'),
+    INSTALL_FAILED_INVALID_URI: t('安装失败：APK 路径含特殊字符，请把文件移到纯英文路径后重试。'),
+    INSTALL_FAILED_ALREADY_EXISTS: t('安装失败：已存在同名应用且签名不同，请先卸载。'),
+    INSTALL_FAILED_UPDATE_INCOMPATIBLE: t('安装失败：与已安装版本签名不一致，请先卸载旧版。'),
     INSTALL_FAILED_DEPRECATED_SDK_VERSION:
-      '安装失败：这是面向很老 Android 版本的应用（targetSdk 过低），Android 14 默认禁止安装。'
-      + 'ApkStart 会自动用官方绕过参数重试。',
-    INSTALL_FAILED_TEST_ONLY: '安装失败：这是仅供测试的应用包，已自动加上测试包参数重试。',
-    INSTALL_FAILED_MISSING_SHARED_LIBRARY: '安装失败：应用依赖的设备特性（如特定厂商库）在当前运行时不存在。',
-    INSTALL_FAILED_USER_RESTRICTION: '安装失败：系统限制了安装，请重启运行时后重试。',
-    INSTALL_FAILED_CONFLICTING_PROVIDER: '安装失败：与已有应用的 ContentProvider 冲突，请卸载冲突应用。',
-    INSTALL_FAILED_INTERNAL_ERROR: '安装失败：系统内部错误（常见于存储空间不足或开机未完成），请重启运行时后重试。',
+      t('安装失败：这是面向很老 Android 版本的应用（targetSdk 过低），Android 14 默认禁止安装。ApkStart 会自动用官方绕过参数重试。'),
+    INSTALL_FAILED_TEST_ONLY: t('安装失败：这是仅供测试的应用包，已自动加上测试包参数重试。'),
+    INSTALL_FAILED_MISSING_SHARED_LIBRARY: t('安装失败：应用依赖的设备特性（如特定厂商库）在当前运行时不存在。'),
+    INSTALL_FAILED_USER_RESTRICTION: t('安装失败：系统限制了安装，请重启运行时后重试。'),
+    INSTALL_FAILED_CONFLICTING_PROVIDER: t('安装失败：与已有应用的 ContentProvider 冲突，请卸载冲突应用。'),
+    INSTALL_FAILED_INTERNAL_ERROR: t('安装失败：系统内部错误（常见于存储空间不足或开机未完成），请重启运行时后重试。'),
   };
   const msg = table[tag];
-  return msg ? `${msg}（${tag}）` : `安装失败：${raw}`;
+  return msg ? t('{msg}（{tag}）', { msg, tag }) : t('安装失败：{raw}', { raw });
 }
 
 /** 把启动后的崩溃日志翻译成能看懂的原因 */
 function friendlyLaunchError(raw, pkg) {
-  const t = String(raw || '');
-  if (/DoBadTrampoline|libndk_translation|houdini|SIGABRT.*arm/i.test(t)) {
-    return `${pkg || '应用'} 启动后崩溃：ARM 翻译层与该应用的信号处理不兼容。`
-      + 'ApkStart 会自动切换到 Android 14 兼容镜像后重试。';
+  const text = String(raw || '');
+  const app = pkg || t('应用');
+  if (/DoBadTrampoline|libndk_translation|houdini|SIGABRT.*arm/i.test(text)) {
+    return t('{app} 启动后崩溃：ARM 翻译层与该应用的信号处理不兼容。ApkStart 会自动切换到 Android 14 兼容镜像后重试。', { app });
   }
-  if (/UnsatisfiedLinkError|dlopen failed|couldn't find "lib|\.so.*not found/i.test(t)) {
-    return `${pkg || '应用'} 启动后崩溃：缺少设备原生库（应用可能只提供 ARM 版本）。`
-      + '会自动切换到带 ARM 翻译层的兼容镜像后重试。';
+  if (/UnsatisfiedLinkError|dlopen failed|couldn't find "lib|\.so.*not found/i.test(text)) {
+    return t('{app} 启动后崩溃：缺少设备原生库（应用可能只提供 ARM 版本）。会自动切换到带 ARM 翻译层的兼容镜像后重试。', { app });
   }
-  if (/ClassNotFoundException|NoClassDefFoundError|AndroidRuntime/i.test(t)) {
-    return `${pkg || '应用'} 启动即崩溃（应用内部异常，可能与模拟器环境或缺少 Google 服务有关）。`;
+  if (/ClassNotFoundException|NoClassDefFoundError|AndroidRuntime/i.test(text)) {
+    return t('{app} 启动即崩溃（应用内部异常，可能与模拟器环境或缺少 Google 服务有关）。', { app });
   }
-  if (/java\.lang\.SecurityException|Permission Denial/i.test(t)) {
-    return `${pkg || '应用'} 启动失败：系统拒绝了启动请求（权限或签名问题）。`;
+  if (/java\.lang\.SecurityException|Permission Denial/i.test(text)) {
+    return t('{app} 启动失败：系统拒绝了启动请求（权限或签名问题）。', { app });
   }
-  return `${pkg || '应用'} 未能启动${t ? `：${t.slice(0, 240)}` : '（进程未存活）'}`;
+  return text ? t('{app} 未能启动：{detail}', { app, detail: text.slice(0, 240) }) : t('{app} 未能启动（进程未存活）', { app });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -268,7 +280,7 @@ class AdbClient {
           // adb install 的失败原因写在 stdout 且退出码非 0；
           // 旧版只看 stderr，导致用户永远只看到一句空泛的「失败」。
           const text = [stdout, stderr, err.message].filter(Boolean).join('\n').trim();
-          const e = new AdbError(`adb ${finalArgs.join(' ')} 失败: ${text}`, stderr, err.code);
+          const e = new AdbError(t('adb {args} 失败: {text}', { args: finalArgs.join(' '), text }), stderr, err.code);
           e.stdout = stdout;
           e.raw = text;
           return reject(e);
@@ -438,7 +450,7 @@ class AdbClient {
    *  - NO_MATCHING_ABIS 抛带 code 的错误，交给上层自动切换兼容镜像。
    */
   async install(apkPath) {
-    if (!fs.existsSync(apkPath)) throw new Error(`APK 不存在: ${apkPath}`);
+    if (!fs.existsSync(apkPath)) throw new Error(t('APK 不存在: {path}', { path: apkPath }));
     const staged = stageApk(apkPath);
     const file = staged.path;
     const variants = [
@@ -489,7 +501,7 @@ class AdbClient {
           // 没拿到明确错误码：最后一种写法再试
         }
       }
-      const err = new Error(friendlyInstallError(last || '安装失败，未获得明确原因'));
+      const err = new Error(friendlyInstallError(last || t('安装失败，未获得明确原因')));
       err.code = (/INSTALL_[A-Z_]+/.exec(last) || [])[0] || 'INSTALL_UNKNOWN';
       err.raw = last;
       throw err;
@@ -500,7 +512,7 @@ class AdbClient {
 
   /** 拆分 APK（.apks / .xapk 解出来的多个分片）走 install-multiple */
   async installMultiple(apkPaths) {
-    if (!apkPaths || !apkPaths.length) throw new Error('没有可安装的分片 APK');
+    if (!apkPaths || !apkPaths.length) throw new Error(t('没有可安装的分片 APK'));
     const staged = apkPaths.map((p) => stageApk(p));
     const files = staged.map((s) => s.path);
     const totalBytes = staged.reduce((n, s) => n + (fs.existsSync(s.path) ? fs.statSync(s.path).size : 0), 0);
@@ -520,10 +532,14 @@ class AdbClient {
             err.code = 'NO_MATCHING_ABIS';
             throw err;
           }
-          throw new Error(friendlyInstallError(raw));
+          const err = new Error(friendlyInstallError(raw));
+          err.code = (/INSTALL_[A-Z_]+/.exec(raw) || [])[0] || 'INSTALL_UNKNOWN';
+          throw err;
         }
       }
-      throw new Error('拆分 APK 安装失败');
+      const err = new Error(t('拆分 APK 安装失败'));
+      err.code = 'INSTALL_UNKNOWN';
+      throw err;
     } finally {
       staged.forEach((s) => unstage(s.staged ? s.path : null));
     }
@@ -650,7 +666,7 @@ class AdbClient {
       // eslint-disable-next-line no-await-in-loop
       const alive = await this.waitAppAlive(pkg, 6000);
       if (alive.ok) return out;
-      if (alive.uncertain) return `${out}\n（应用仍在加载中）`;
+      if (alive.uncertain) return `${out}\n${t('（应用仍在加载中）')}`;
       lastError = alive.crash || lastError;
       // 崩溃日志明确指向 ARM 翻译层时不再重试，直接交给上层切换兼容镜像
       if (/DoBadTrampoline|libndk_translation|UnsatisfiedLinkError|dlopen failed/i.test(alive.crash || '')) {
@@ -802,6 +818,8 @@ class AdbClient {
   /** 清除应用数据 */
   async clearData(pkg) {
     await this.shell(`pm clear ${pkg}`);
+    // 数据清掉权限也一起掉了，必须让下次启动重新授，不能命中 permGranted 缓存
+    try { store.upsertApp({ package: pkg, permGranted: false }); } catch (_) { /* ignore */ }
   }
 
   /** 导出应用数据（Windows/调试版可用 run-as；否则走 adb backup 兜底） */
@@ -822,8 +840,18 @@ class AdbClient {
    * 把应用申请的运行时权限一次性授掉。
    * 不授会有两个后果：① 首次启动弹系统授权框，用户看到的是「应用没打开」；
    * ② 清过数据（pm clear）之后权限会掉，应用起来就卡在授权页。
+   *
+   * 性能：`dumpsys package` 在 guest 里要起一次 app_process（实测 1~3s），
+   * 每条 `pm grant` / `cmd appops set` 又是各起一次。红果这种十几个权限的应用，
+   * 光这一段就吃掉 20 秒以上（日志里 permissions granted 从 +18s 到 +42s）。
+   * 权限授过之后状态是持久的，除非重装或 pm clear 才会掉，
+   * 所以授完在 apps.json 里记一笔，后续启动直接跳过；清数据/重装时把标记清掉。
    */
   async grantRuntimePermissions(pkg) {
+    try {
+      const rec = store.getApp(pkg);
+      if (rec && rec.permGranted === true) return [];
+    } catch (_) { /* 读不到记录就当没授过 */ }
     let dump = '';
     try {
       dump = await this.shell(`dumpsys package ${pkg}`, { timeout: 20000 });
@@ -852,6 +880,8 @@ class AdbClient {
       await this.shell(cmds.join(' ; '), { timeout: 20000 }).catch(() => '');
       granted.push(...denied);
     }
+    // 只有真的跑完命令才记标记：中途失败下次还会重试，不会留下「以为授过」的假状态
+    try { store.upsertApp({ package: pkg, permGranted: true }); } catch (_) { /* ignore */ }
     return granted;
   }
 
@@ -873,6 +903,10 @@ class AdbClient {
       'settings put global transition_animation_scale 0',
       'settings put global animator_duration_scale 0',
       'settings put system screen_off_timeout 2147483647',
+      // 大屏任务栏：平板密度下 Pixel Launcher 会在底部常驻一条 Taskbar，
+      // 盖住应用内容、按键挤在左下角（用户反馈的「按键错位」）。
+      // 见 disableLauncherTaskbar()：这里每次启动都补一刀，幂等且只多一次往返。
+      'settings put global enable_taskbar 0',
       // 联网验证：安卓默认拿 connectivitycheck.gstatic.com 判断「是否真能上网」，
       // 国内连不上它，系统就一直给网络打「!」标记（已连接但无法访问互联网），
       // 部分应用据此自我判定离线、拒绝加载内容。换成国内返回 204 的端点。
@@ -918,8 +952,11 @@ class AdbClient {
    */
   async setOrientation(landscape) {
     try {
-      // 自动旋转必须关掉（否则传感器会乱转）。
-      await this.shell('settings put system accelerometer_rotation 0; wm size reset', { timeout: 15000 });
+      // 自动旋转开关默认打开（0.5.9）：写 guest 的 accelerometer_rotation=1，
+      // 让系统设置里那个开关是「开」的。方向本身由下面的 wm user-rotation lock 0
+      // + set-ignore-orientation-request 决定，不受传感器影响，所以不会乱转。
+      // 用户可在设置 →「镜像自动旋转」关掉，回到旧的锁定 0 行为。
+      await this.shell(`settings put system accelerometer_rotation ${guestAutoRotate()}; wm size reset`, { timeout: 15000 });
       // 方向锁 **0**（不是 1）。物理面板的方向已经由 hw.lcd.width/height 决定
       // （见 doctor.lcdFor），这里再锁 1 等于把横面板又转成竖逻辑空间，
       // 结果就是画面躺倒 90° —— 这正是「横屏没弄好」的直接原因。
@@ -942,6 +979,72 @@ class AdbClient {
     }
   }
 
+  /**
+   * 关掉大屏任务栏（Android 12L+ 的 Taskbar）。
+   *
+   * 为什么需要：平板排版把 density 压到 190dpi，720 宽 ⇒ sw606dp，
+   * 越过了 Android 的 600dp 大屏断点。Pixel Launcher 于是在屏幕底部常驻
+   * 一条 NAVIGATION_BAR_PANEL 类型的任务栏：半透明、盖住应用内容，
+   * 返回/主页/最近三个键被挤到左下角 —— 就是用户截图里的「按键错位」。
+   *
+   * 它不是系统导航栏（gestural overlay 那个），所以 policy_control immersive
+   * 关不掉它，只能关 global enable_taskbar；而且 Launcher 只在启动时读一次，
+   * 已经起来了就得让它重启才生效。两个启动器包名都点一遍，覆盖 Play 版和 AOSP 版。
+   */
+  async disableLauncherTaskbar() {
+    try {
+      await this.shell('settings put global enable_taskbar 0', { timeout: 10000 });
+      // grep -c 命中 0 行时退出码是 1，补 || true 免得被当成命令失败
+      const out = await this.shell(
+        'dumpsys window windows | grep -c "Window #.*Taskbar" || true',
+        { timeout: 12000 },
+      ).catch(() => '0');
+      const alive = parseInt(String(out).trim(), 10) || 0;
+      if (alive > 0) {
+        await this.shell(
+          'am force-stop com.google.android.apps.nexuslauncher; am force-stop com.android.launcher3',
+          { timeout: 12000 },
+        ).catch(() => '');
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * 等应用真的画出第一帧。
+   *
+   * 「窗口接上了」和「用户能看到画面」是两件事：Application 进程起来后，
+   * Android 12+ 会先挂一屏系统 Splash（应用图标 + 白底），Activity 完成首帧
+   * 才会把它撤掉。开机动画如果在这一步之前就淡出，用户看到的就是一张白底图，
+   * 以为卡死了 —— 所以启动动画要守到系统 Splash 窗口消失再收。
+   *
+   * 判定：窗口列表里不再有 "Splash Screen" 记录，且焦点落在目标包上。
+   * 超时返回 false，调用方照常收动画（不能因为判定失败把用户永远关在动画里）。
+   */
+  async waitForAppFirstFrame(pkg, { timeoutMs = 12000, intervalMs = 350 } = {}) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      // 必须用 `dumpsys window`（WINDOW MANAGER 全量），不能用
+      // `dumpsys window windows`：后者只列窗口，**没有 mCurrentFocus 这一行**，
+      // focusOnApp 于是永远是 false，判定必然超时 —— 表现就是应用明明已经画出
+      // 画面，开机动画还要再钉满 12 秒才肯淡出。
+      const out = await this.shell(
+        'dumpsys window | grep -E "Splash Screen|mCurrentFocus" | head -8',
+        { timeout: 8000 },
+      ).catch(() => '');
+      const s = String(out);
+      if (s.trim()) {
+        const splashAlive = /Splash Screen/.test(s);
+        const focusOnApp = s.indexOf(pkg) >= 0;
+        if (!splashAlive && focusOnApp) return true;
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return false;
+  }
+
   /** 启动时清掉旧版本残留的 wm size / density 覆盖（持久化在 /data，会一直躺倒） */
   async resetDisplayOverrides(landscape = false) {
     try {
@@ -952,10 +1055,13 @@ class AdbClient {
       // 左上角一小块、右边一大片空白，也就是用户说的「墨读没有填满窗口」。
       // 现在在这里连同 size 一起重设，启动路径上不再有中途改密度。
       await this.shell(`wm size reset; wm density ${tabletDensity()}`, { timeout: 15000 });
-      await this.shell('settings put system accelerometer_rotation 0', { timeout: 15000 });
+      await this.shell(`settings put system accelerometer_rotation ${guestAutoRotate()}`, { timeout: 15000 });
       // 与 setOrientation 保持一致：面板方向说了算，逻辑方向锁 0。
       await this.shell('wm user-rotation lock 0', { timeout: 15000 });
       await this.shell(`wm set-ignore-orientation-request ${landscape ? 'true' : 'false'}`, { timeout: 15000 });
+      // 平板密度一设，Launcher 的任务栏就跟着起来（sw>=600dp）。它只在启动时
+      // 读一次 enable_taskbar，所以这里除了写开关，还要在它已经起来时重启一次。
+      await this.disableLauncherTaskbar();
       return true;
     } catch (_) {
       return false;

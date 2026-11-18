@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.4）
+# Microsoft Store 提交材料（ApkStart 0.6.1）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.4.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.6.1.0_x64.msix`（x64，约 1.5 GB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,53 @@
 
 **中文**
 ```
-0.5.4：
+0.6.1：
+· 修复「启动后看到的还是 ApkStart 的美化等待窗口」：现在一点开应用就让模拟器原生窗口接管画面，你能立刻看到安卓自己的开机画面，而不是我们的转圈页。
+· 原生窗口接管失败会自动重试 4 次（冷启动、换横竖屏之后 Qt 窗口会晚一点才出现），四次都不成功才临时退回内置窗口，不会再留下一屏黑或一张永远转圈的等待页。
+· 默认窗口设置加固：只要没在设置里主动切换过窗口承载方式，一律按模拟器原生窗口启动；老配置里残留的嵌入开关也会被自动纠正。
+
+0.6.0（已包含）：
+· 修复底部「按键错位」：安卓 13 的平板任务栏（屏幕底部那条半透明栏）在平板排版下会盖住应用、把返回/主页/最近键挤到左下角，现在默认关闭。
+· 启动动画延长到应用真正画出第一屏再淡出，不再出现「白底 + 应用图标」的空白等待。
+· 启动提速：已授予的权限不再每次重复授予，大型应用单这一项就能省 20 秒以上。
+· 默认改用模拟器原生窗口：拖拽、缩放、旋转不再掉帧，也不再出现黑边、坐标错位；想用带旋转按钮的标题栏可在设置里切回嵌入模式。
+· 修复 AMD 显卡电脑总是退回软件渲染导致的卡顿：硬件渲染关掉 Vulkan 后重试，真正吃到显卡加速。
+· 修复升级后仍在跑上一个安装包里的安卓运行时（旧包一删就启动失败）。
+· 设置页重新分类：按「常用与安装 / 显示与窗口 / 操作与输入 / 性能与资源 / 网络与下载 / 诊断与修复 / 集成与文件 / 更新与关于」八类归置，找设置项不再靠长列表翻。
+· 设置页新增搜索框，输入「横屏」「内存」「代理」等关键词即可直达对应设置项。
+· 新增「自动检测」：后台定时体检安卓运行时、adb 授权、磁盘余量、数据分区、快照与设置冲突，出问题按分类列出并可一键处理。
+· 自动检测只在发现新问题时提醒一次，修复后自动复检；可随时关闭或调整检测间隔。
+· 修复部分电脑「装完点应用没反应、所有应用都打不开」：安装包漏带解压组件、或系统镜像下载被截断，都会让安卓开不了机。现在打包会强制带上解压组件并校验镜像完整性；已经展开过可用镜像的电脑不会再重复解压。
+
+0.5.9（已包含）：
+· 修复红果免费短剧等应用无法横屏：标题栏旋转、托盘菜单、Ctrl+R 现在统一走同一套方向决策，横屏覆盖优先于应用自带的方向声明。
+· 镜像里的「自动旋转」开关默认打开，可在设置里关闭；画面方向仍由屏幕方向策略决定，不会被传感器带歪。
+· 默认回到带旋转按钮的嵌入窗口（更好看的自定义标题栏），可在设置里随时切回模拟器原生独立窗口，两种模式都保留。
+· 启动提速：热启动和旋转重启时复用新鲜的网络状态，减少重复的 adb 网络探测往返。
+
+0.5.8（已包含）：
+· 新增「本机体检 · 自动配置」：自动检查 CPU 虚拟化是否开启、Windows 虚拟机监控程序平台是否启用、显卡与显存、内存和系统版本。
+· 能自动改的直接生效：按本机硬件推荐内存、CPU 核心数、画质与渲染后端，并把这台机器的配置固化成一份驱动。
+· 需要管理员权限的操作（开启 Windows 功能、安装加速驱动）提供一键按钮；只能进 BIOS 改的会给出明确步骤。
+
+0.5.7（已包含）：
+· 新增「驱动（兼容补丁）」：机器跑不起来时，可以导入或自己写一份 JSON 补丁，声明匹配哪些机器、命中后改哪些启动参数。
+· 设置页可直接导入驱动、启用停用、打开驱动目录、导出本机模板；补丁只改白名单里的启动参数，不执行任何代码。
+· 内置三个示例驱动（AMD 核显、无硬件加速、老 Intel 核显），默认不启用，按需打开即可。
+
+0.5.6（已包含）：
+· 运行时只保留 ApkStart 自带的一套：不再探测、接管或依赖电脑上安装的任何模拟器（MuMu、雷电、蓝叠、WSA 都不再使用）。
+· 设置里移除了「引擎模式」和第三方模拟器相关选项，不会再因为导入旧配置而切到别人的模拟器。
+· 内存、CPU 核心数与数据分区仍可自行分配，上限按你的电脑配置计算。
+
+0.5.5（已包含）：
+· 修复部分电脑上应用画面全黑的问题：自动识别显卡能力并切换渲染档位，画面异常时自动重启重试。
+· 支持安装 50GB 级的大型安卓游戏：安装前按实际需求检查磁盘空间，不再装到一半才失败。
+· 内存、CPU 核心数与数据分区大小现在可以自己分配，上限跟着你的电脑配置走。
+· 数据分区扩容不再「显示成功但实际没扩」：需要重建时会明确告知并二次确认。
+· 安装包独立运行，自带运行时，不需要预先安装任何模拟器。
+
+0.5.4（已包含）：
 · 修复在 125% / 150% 等非 100% 缩放的屏幕上，独立窗口只显示一部分并偏离角落、点击错位的问题。
 · 修复冷启动时被「允许 USB 调试」授权框卡住、误报显卡/虚拟化问题导致开机超时。
 · 修复 PackageManager 报告「已安装」但应用文件已丢失、导致应用打不开的问题。
@@ -49,7 +95,53 @@
 
 **English**
 ```
-0.5.4:
+0.6.1:
+· Fixed "launching an app still shows ApkStart's own styled waiting window": the emulator's native window now takes over the moment you open an app, so you see Android's own boot screen instead of our spinner page.
+· Native window hand-over now retries four times (Qt's window can appear a little late on cold starts and after an orientation change); only if all four fail does it temporarily fall back to the built-in window — no more black screen and no endless spinner.
+· Hardened the default window setting: unless you explicitly switched the window host in Settings, ApkStart always launches with the emulator's native window, and a leftover "embedded" flag from older configs is corrected automatically.
+
+0.6.0 (included):
+· Fixed the "misaligned buttons" at the bottom: on tablet layout Android 13's large-screen taskbar sits over the app and squeezes back/home/recents into the bottom-left corner — it is now off by default.
+· The startup animation now stays until the app really draws its first frame, so you no longer stare at a white screen with just the app icon.
+· Faster launches: permissions that were already granted are no longer re-granted on every start — for large apps that alone saves 20+ seconds.
+· The emulator's native window is now the default: dragging, resizing and rotating no longer stutter, and the black borders / misplaced clicks are gone. Switch back to the embedded window with the rotate button in Settings whenever you like.
+· Fixed stutter on AMD graphics PCs that always fell back to software rendering: hardware rendering is retried with Vulkan disabled, so the GPU is actually used.
+· Fixed upgrades still running the Android runtime from a previous install package (which broke as soon as the old folder was deleted).
+· Settings are now organized into eight categories (Essentials & Install, Display & Window, Input, Performance & Resources, Network & Downloads, Diagnostics & Fixes, Files & Integration, Updates & About) — no more hunting through one long list.
+· New search box in Settings: type "landscape", "memory", "proxy" and jump straight to the matching setting.
+· New "Auto diagnostics": the app periodically checks the Android runtime, adb authorization, free disk space, the data partition, snapshots and conflicting settings, then lists any problem by category with a one-click fix.
+· Auto diagnostics only notifies you when a new problem appears, re-checks itself after every fix, and can be switched off or rescheduled at any time.
+· Fixed "clicking an app does nothing / no app will start" on some PCs: a package missing the decompression module, or a truncated system-image download, prevented Android from booting. Packaging now always bundles the module and verifies image integrity, and PCs that already have a usable expanded image no longer re-extract it.
+
+0.5.9 (included):
+· Fixed landscape mode for 红果 (Fanqie) short-video app and similar: the title-bar rotate button, tray menu and Ctrl+R now share one orientation decision; per-app landscape override takes priority over the app's own declared orientation.
+· The in-image "auto-rotate" switch is now on by default and can be turned off in Settings; screen orientation is still decided by the orientation policy, never by the sensor.
+· Restored the nicer embedded window with the custom title bar and rotate button as the default; you can switch back to the emulator's native standalone window anytime in Settings — both modes remain available.
+· Faster startup: hot launches and rotation restarts reuse fresh network state, cutting repeated adb network probes.
+
+0.5.8 (included):
+· New "PC check-up · auto-config": detects whether CPU virtualization is enabled, whether the Windows Hypervisor Platform is on, plus GPU/VRAM, memory and OS build.
+· Everything that can be automated is applied: memory, CPU cores, render resolution and render path are tuned for this PC, and the result is saved as a driver for future launches.
+· Actions that need administrator rights (enabling Windows features, installing the acceleration driver) get a one-click button; BIOS-only changes come with exact steps.
+
+0.5.7 (included):
+· New "drivers" (compatibility patches): when a PC cannot boot the runtime, import or write a JSON patch that declares which machines it matches and which launch options to change.
+· Settings can import a driver, toggle it, open the drivers folder, and export a template for this PC. Patches only touch whitelisted launch options and never execute code.
+· Three built-in examples (AMD iGPU, no hardware acceleration, old Intel iGPU) are shipped disabled by default.
+
+0.5.6 (included):
+· Only ApkStart's own runtime remains: emulators installed on the PC (MuMu, LDPlayer, BlueStacks, WSA) are no longer detected, taken over, or relied on.
+· The engine selector and all third-party emulator options were removed from Settings, so an imported old config can no longer switch to someone else's emulator.
+· Memory, CPU cores and the /data partition are still user-allocatable, with limits derived from your PC.
+
+0.5.5 (included):
+· Fixed black app screens on some PCs: graphics capability is detected and the render path is switched automatically, with a retry when the picture is blank.
+· Supports installing large Android games in the 50 GB range: disk space is checked up front instead of failing halfway through.
+· Memory, CPU cores and the /data partition size can now be allocated by the user, with limits derived from your PC.
+· Growing the data partition no longer reports a fake success: when a rebuild is required, it is stated clearly and confirmed first.
+· The package runs standalone with its own bundled runtime; no emulator needs to be installed beforehand.
+
+0.5.4 (included):
 · Fixed detached windows showing only partially, sitting off-corner, and misaligned clicks on displays scaled above 100% (125%/150%).
 · Fixed cold boot stalling on the "Allow USB debugging" dialog and being misreported as a graphics/virtualization failure.
 · Fixed apps that PackageManager reported as installed but whose files were missing and would not launch.
@@ -279,7 +371,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.4.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.6.1.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

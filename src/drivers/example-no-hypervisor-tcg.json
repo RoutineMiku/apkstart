@@ -1,0 +1,24 @@
+{
+  "format": "apkstart-driver/1",
+  "id": "example-no-hypervisor-tcg",
+  "name": "没有硬件加速 · 直接走软件模拟（示例）",
+  "version": "1.0.0",
+  "author": "ApkStart",
+  "description": "机器没开「虚拟机监控程序平台」、也不允许装内核驱动时，emulator 走硬件加速会直接失败。这个补丁让 ApkStart 一开始就用软件模拟（-accel off），省掉两轮白等；同时把渲染后端换成 software，避免 GL 初始化失败。",
+  "enabled": false,
+  "priority": 10,
+  "match": {
+    "platform": ["win32"],
+    "accel": ["none"]
+  },
+  "effect": {
+    "forceTcg": true,
+    "gpuMode": "software",
+    "configIni": {
+      "hw.gpu.mode": "software"
+    },
+    "notes": [
+      "软件模拟比硬件加速慢 5~10 倍，能开虚拟化时建议还是去「Windows 功能」里勾上虚拟机平台"
+    ]
+  }
+}

@@ -129,8 +129,7 @@ Explorer 双击 .apk
 2. `adoptExisting()`（`engine.js:708`）→ 扫还活着的模拟器端口（`tasklist` + `netstat` 找 qemu 的监听端口，不靠猜 5554），`adb kill-server` 后逐个 `connect` + `getprop sys.boot_completed`，能接管的直接复用；
 3. `adb devices` 里已有 `emulator-NNNN` → 复用；
 4. 进程在但设备离线 → `emulator.stop()` 后重来；
-5. `engine.mode === 'attach'` → 探测 WSA/MuMu/LDPlayer/Nox/MEmu 的常用端口（高级路径）；
-6. 默认路径：
+5. 唯一路径（0.5.6 起没有第三方底座，也没有 attach 模式）：
    - `provisioner.materializeImages()` 展开 `.xz/.gz` 系统镜像（已展开秒过）；
    - `checkEnv()` 判断 adb/emulator/sysimg 是否齐备；
    - `killOrphanEmulators()` 清掉残留 qemu（否则 AVD 锁 FATAL）；

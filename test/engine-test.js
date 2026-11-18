@@ -3,6 +3,8 @@
  * 引擎与自举链路测试（不依赖真实 QEMU / adb / Android）
  * 覆盖：下载器（含断点续传）、ZIP 解压、环境检查、QEMU 启动参数、monitor 协议
  */
+// 断言基于中文原文：固定界面语言为中文，不受本机 settings.json 影响
+require('../src/i18n').setLang('zh');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');

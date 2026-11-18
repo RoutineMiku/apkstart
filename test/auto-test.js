@@ -3,6 +3,8 @@
  * 零配置自适应 / 容器式瘦身的回归测试（纯 Node，不拉起 emulator）
  * 运行：node test/auto-test.js
  */
+// 断言基于中文原文：固定界面语言为中文，不受本机 settings.json 影响
+require('../src/i18n').setLang('zh');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -132,7 +134,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   });
 
   await test('设置页展示的自动参数与实跑参数一致（37.x 不再显示弃用后端）', () => {
-    const common = { accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000, port: 5562, adbPort: 5044 };
+    const common = {
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000, port: 5562, adbPort: 5044,
+      // 显式给宿主：内存/核心上限现在跟着宿主走，不加这一项测试结果会随 CI 机器规格漂移
+      // （GitHub runner 只有 4 核，手动填 6 核会被正确收敛成 3 核，断言就会误报）
+      host: { totalMB: 32768, freeMB: 24000, cores: 12, home: 'C:\\x', homeAscii: true, tmp: TMP, platform: 'win32', arch: 'x64', rdp: false },
+    };
     const p = doctor.autoProfile({ ...common, settings: { engine: { autoMemory: true, gpuMode: 'auto', memoryMB: 0, cores: 0 } } });
     const text = doctor.describeProfile(p);
     assert(p.gpu === 'host' || p.gpu === 'swangle', `应为 host 或 swangle（AMD 机器），实际 ${p.gpu}`);
@@ -881,12 +888,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
 
     const auto = doctor.autoProfile({
       settings: { engine: { autoMemory: true, liteMode: true } },
-      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000, host,
     });
     assert(auto.lite === true && auto.cores <= 4, JSON.stringify({ lite: auto.lite, cores: auto.cores }));
     const manual = doctor.autoProfile({
       settings: { engine: { autoMemory: false, cores: 6, liteMode: true } },
-      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000, host,
     });
     assert(manual.cores === 6, '用户手动指定的核数必须优先于轻量模式');
     assert(/轻量容器/.test(doctor.describeProfile(auto)), '诊断摘要应标出轻量容器');
@@ -952,15 +959,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!/w:\s*Math\.min\(area\.w - 80, 1280\)/.test(appwinJs), '不能再写死 1280 宽（会被模拟器夹成竖条）');
   });
 
-  await test('后端自动选择：builtin 永远优先，不能被装过的第三方模拟器顶掉', () => {
+  await test('只有一个运行时：注册表固定 builtin，装了什么模拟器都不影响', () => {
     const backends = require('../src/core/backends');
-    // 用户装了 MuMu 不代表要用它：auto 模式下必须是我们自己的运行时。
-    // 之前 mumu 排第一，导致启动后根本没开自己的模拟器、嵌入全失败。
-    const order = backends.AUTO_ORDER;
-    assert(Array.isArray(order), 'AUTO_ORDER 应该是个数组');
-    // Windows 上 builtin 必须第一；非 Windows（FydeOS）没有 emulator.exe，fydeos 才合理
-    const expectFirst = process.platform === 'win32' ? 'builtin' : 'fydeos';
-    assert(order[0] === expectFirst, `auto 模式第一应该是 ${expectFirst}，实际是 ${order[0]}`);
+    // 0.5.6 起不再有自动挑选：不管本机装了 MuMu / 雷电 / 蓝叠 / WSA，
+    // 都只跑 ApkStart 自己的运行时，只按设置读也不会有第二个候选。
+    assert(backends.REGISTRY.length === 1, '注册表里出现了第二个底座');
+    assert(backends.REGISTRY[0].id === 'builtin', '唯一底座不是 builtin');
   });
 
   await test('窗口标题改 ApkStart：识别逻辑必须同时认新标题', () => {
@@ -1261,62 +1265,6 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
 
     // 存活观察期本身不能删：它是防「闪一下就崩」的兜底
     assert(/aliveSince >= 4000/.test(instJs), '4 秒存活观察期要保留（防闪崩）');
-  });
-
-  await test('FydeOS 底座：Windows 也能用，但不嵌窗口、不假装能开机', async () => {
-    const { FydeosBackend, splitHost, detectVmHost } = require('../src/core/backends/fydeos');
-    const b = new FydeosBackend(path.join(__dirname, '..'), {});
-
-    assert(b.id === 'fydeos', 'id 必须是 fydeos（会写进设置，不能改）');
-    // FydeOS 的画面在它自己的桌面里（或虚拟机窗口里），不是某个安卓应用的 HWND。
-    // 硬说能嵌会让上层去 SetParent 一个空句柄。
-    assert(FydeosBackend.embedCapable === false, 'FydeOS 不能窗口嵌入');
-    assert((await b.windowTargets()).length === 0, '不能返回假的窗口句柄');
-
-    // 安卓是系统的一部分：不能提供「装镜像 / 存快照 / 改面板方向」这些能力
-    assert(!b.has('provision'), 'FydeOS 不需要也不能部署镜像');
-    assert(!b.has('snapshot'), 'FydeOS 没有我们自己的快照');
-    assert(!b.has('rotatePanel'), '面板方向由系统管');
-
-    // Windows 上必须能连「跑在虚拟机里的 FydeOS」，而不是一律拒绝。
-    // 关键：Windows 没有本机安卓，所以地址必须让用户填，且提示要能照着做。
-    if (process.platform === 'win32') {
-      const noHost = await b.check();
-      // 开发机上可能真跑着一台 adb 设备（本机模拟器 / 手机），这时 check() 合理地
-      // 返回 ok:true。我们只验证「没有因为平台不对而拒绝」，不断言一定失败。
-      assert(!/只能在 FydeOS/.test(noHost.reason || ''),
-        'Windows 上不该以「平台不对」为由一律拒绝');
-      if (!noHost.ok) {
-        assert(/地址/.test(noHost.reason) || /adb/i.test(noHost.reason),
-          '没填地址时要提示去填地址（或先把 adb 部署好）');
-      }
-
-      // 填了地址之后就不该再因为「平台不对」被拒
-      const { execFileSync } = require('child_process');
-      let adbExists = false;
-      try { execFileSync('where', ['adb'], { timeout: 3000, windowsHide: true }); adbExists = true; } catch (_) { /* ignore */ }
-      const b2 = new FydeosBackend(path.join(__dirname, '..'), {});
-      b2.hostOverride = '127.0.0.1:5555';
-      b2.adbPath = adbExists ? 'adb' : path.join(__dirname, '..', 'runtime', 'platform-tools', 'adb.exe');
-      const withHost = await b2.check();
-      assert(!/只能在 FydeOS/.test(withHost.reason || ''),
-        'Windows 上填了地址就不该再以「平台不对」为由拒绝');
-    }
-
-    // host:port 解析要稳（端口不写默认 5555；IPv6 方括号也要能吃）
-    assert(splitHost('127.0.0.1:5555').port === 5555);
-    assert(splitHost('192.168.1.7').port === 5555, '不写端口时默认 5555');
-    assert(splitHost('192.168.1.7').host === '192.168.1.7');
-    assert(splitHost('[::1]:5555').host === '::1', 'IPv6 方括号要正确解析');
-    assert(splitHost('') === null, '空字符串返回 null');
-
-    // 探测不能抛异常（autoPick 会直接调它）
-    const p = await b.probe();
-    assert(p && typeof p.found === 'boolean', 'probe 必须返回 {found:boolean}');
-    if (process.platform === 'win32') {
-      const vm = detectVmHost();
-      assert(vm && typeof vm.found === 'boolean', 'detectVmHost 不能抛异常');
-    }
   });
 
   await test('虚拟机联网：AVD 必须开虚拟 Wi-Fi，且能主动重连「不会自动连」的热点', () => {
@@ -2427,6 +2375,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/if \(this\.detachedMode && !this\._showWhileWaiting\) return;/.test(appwin),
       'ready-to-show 只在 showWhileWaiting 时才显示壳窗口');
     assert(/正在为《[\s\S]{0,40}切换到/.test(mainJs), '提示文案要说清为什么慢');
+    // 真正开始换向重启时，pre-attach 可能已经把壳窗口收起来了 —— 必须再亮一次，
+    // 否则重启那 40 秒桌面全空（用户以为程序退出了）。
+    assert(/appWin\.showWaiting\(/.test(mainJs), '重启换向前要重新亮出等待窗口');
+    assert(/waitingForRestart/.test(appwin), '要有「正在等待重启」标记');
+    // 启动阶段的 pre-attach 轮询看到标记必须让路，不能把等待窗口又 hide 掉
+    assert(/if \(appWin\.waitingForRestart\)/.test(mainJs), 'pre-attach 要让路');
   });
 
   await test('标题要在 show 之前设，否则会闪上一个应用的名字', () => {
@@ -2481,6 +2435,16 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // stop() 关干净后必须丢掉启动器句柄，否则 running() 永远为 true
     const stopFn = emuJs.slice(emuJs.indexOf('async stop('), emuJs.indexOf('async stop(') + 1800);
     assert(/killAttempt\(\)[\s\S]{0,200}this\.proc = null;/.test(stopFn), 'stop() 收尾要清掉 this.proc');
+    // engine 层还要防另一种假象：模拟器刚退出时 adb 仍短时报 device，
+    // isOnline() 于是判成就绪，后续命令全部 device not found。
+    const engineJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+    const inner = engineJs.slice(engineJs.indexOf('async _ensureInner('), engineJs.indexOf('async _ensureInner(') + 2200);
+    assert(/getprop sys\.boot_completed/.test(inner), 'ensure 要补一条真实命令验证设备可用');
+    assert(/probe !== null/.test(inner), '命令不通时不能复用旧客户端');
+    // 换向前后要等 adb 侧设备真的消失，再拉起新机器
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const rot = mainJs.slice(mainJs.indexOf('async function restartForOrientation'), mainJs.indexOf('async function restartForOrientation') + 2600);
+    assert(/c\.isOnline\(\)\.catch\(\(\) => false\)/.test(rot), 'stop 后要等 adb 设备消失');
   });
 
   await test('Windows Terminal 弹出的开机黑框也要能认出来', () => {
@@ -2617,8 +2581,221 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/iconIndex: 0/.test(shortcutJs), 'iconIndex 要是 0');
   });
 
+  await test('红果横屏：方向决策必须收敛到纯函数，覆盖优先于 APK 清单', () => {
+    const root = path.join(__dirname, '..');
+    const o = require('../src/core/orientation');
+
+    // 强制模式最高优先级
+    assert(o.resolveLandscape({ mode: 'landscape', orientation: 'portrait', orientationOverride: 'portrait' }) === true,
+      '强制横屏要盖过一切');
+    assert(o.resolveLandscape({ mode: 'portrait', orientation: 'landscape', orientationOverride: 'landscape' }) === false,
+      '强制竖屏要盖过一切');
+    // 单应用覆盖优先于 APK 清单声明 —— 红果 APK 声明 portrait，用户点横屏后必须横过来
+    assert(o.resolveLandscape({ mode: 'auto', orientation: 'portrait', orientationOverride: 'landscape' }) === true,
+      'per-app 横屏覆盖要盖过 APK 的 portrait 声明');
+    assert(o.resolveLandscape({ mode: 'auto', orientation: 'landscape', orientationOverride: 'portrait' }) === false,
+      'per-app 竖屏覆盖要盖过 APK 的 landscape 声明');
+    // 没覆盖时跟 APK 声明，再没有就跟面板
+    assert(o.resolveLandscape({ mode: 'auto', orientation: 'portrait' }) === false, '无覆盖时跟 APK 声明');
+    assert(o.resolveLandscape({ mode: 'auto', orientation: null, panelLandscape: true }) === true, '跟随重力时跟面板');
+    // 旋转取反 + 覆盖值往返一致（旋转按钮写覆盖、下次启动读回来必须是同一个方向）
+    assert(o.flipLandscape(false) === true && o.flipLandscape(true) === false, 'flip 要取反');
+    assert(o.parseOverride(o.overrideValue(true)) === true, '横屏覆盖值往返一致');
+    assert(o.parseOverride(o.overrideValue(false)) === false, '竖屏覆盖值往返一致');
+
+    // 三个入口必须都走同一个决策函数，不能再各算各的（红果横不过来的根因）
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(/wantLandscapeFor\(pkg\)\s*\)?\.?\s*/.test(mainJs) && /orientation\.resolveLandscape/.test(mainJs),
+      'wantLandscapeFor 要走 resolveLandscape');
+    assert(/async function rotateCurrentApp\(\)/.test(mainJs), '要有统一的旋转入口');
+    assert(/orientation\.flipLandscape\(current\)/.test(mainJs), '旋转入口要用同一个 flip');
+    assert(/orientation\.overrideValue\(next\)/.test(mainJs), '旋转入口要写同一个覆盖值');
+    const shellJs = fs.readFileSync(path.join(root, 'src', 'ui', 'shell.js'), 'utf8');
+    assert(/shell\.rotate\(\)/.test(shellJs), '标题栏旋转按钮要走统一入口');
+  });
+
+  await test('镜像自动旋转默认打开，但面板方向仍由 wm 锁定', () => {
+    const root = path.join(__dirname, '..');
+    const o = require('../src/core/orientation');
+    // 默认（没设置 / 没关过）= 打开
+    assert(o.autoRotateSetting({}) === '1', '默认打开自动旋转');
+    assert(o.autoRotateSetting({ display: {} }) === '1', 'display 为空也算默认打开');
+    assert(o.autoRotateSetting({ display: { autoRotate: false } }) === '0', '用户显式关掉才返回 0');
+    // store 默认要写 true
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    assert(/autoRotate:\s*true/.test(storeJs), 'store 默认 autoRotate=true');
+    // adb 两段都要写加速度开关，且保留方向锁权威命令（测试前面已断言 lock 0 / ignore-request）
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    assert(/accelerometer_rotation \$\{guestAutoRotate\(\)\}/.test(adbJs), 'adb 要用 guestAutoRotate 值');
+  });
+
+  await test('窗口模式：默认原生窗口，两种模式可在设置里切换，且只迁移一次', () => {
+    const root = path.join(__dirname, '..');
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    // 0.6.0：嵌入模式（SetParent）缩放/旋转时掉帧且有黑边、坐标错位，
+    // 默认改为让模拟器开自己的原生窗口。
+    assert(/windowEmbed:\s*false,\s*\n\s*\/\/ 镜像内/.test(storeJs), 'defaultSettings.display.windowEmbed 必须是 false');
+    // 一次性迁移：只迁「没主动选过」的配置，用户自己选的不能被反复扳回来
+    assert(/windowEmbedMigrated2/.test(storeJs), '要有一次性迁移标记');
+    assert(/windowEmbedChosen !== true/.test(storeJs), '主动选过的配置不迁移');
+    // 只看标记不够：老配置可能是「migrated2=true 但值仍是 true」（迁移没落盘 / 手改过），
+    // 那种情况以前会被原样放过 → 启动又是美化壳窗口。判定基准必须是「有没有主动选过」。
+    const migBody = storeJs.slice(storeJs.indexOf('窗口承载方式的最终裁决'), storeJs.indexOf('窗口承载方式的最终裁决') + 1200);
+    assert(/d\.windowEmbedChosen !== true && d\.windowEmbed !== false/.test(migBody),
+      '迁移条件不能依赖 windowEmbedMigrated2，否则旧标记会漏迁');
+    // 原生窗口要尽早接出来，别让用户对着美化等待页干等
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(/pre-attach detached ok/.test(mainJs), '启动时要先尝试把模拟器原生窗口接出来');
+    // 接管失败必须重试，否则壳窗口一直停在屏幕上（用户看到的「美化窗口」）
+    const attachBody = mainJs.slice(mainJs.indexOf('async function attachAppWindow'), mainJs.indexOf('async function attachAppWindow') + 2200);
+    assert(/for \(let i = 0; i < 4; i \+= 1\)/.test(attachBody), '原生窗口接管要重试');
+    assert(/临时退回嵌入模式/.test(attachBody), '四轮都失败要兜底，不能留黑屏');
+    const appJs = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+    assert(/windowEmbedChosen:\s*true/.test(appJs), '设置页切换时要写入「已主动选择」标记');
+    const indexHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+    assert(/setWindowEmbed/.test(indexHtml), '设置里要有窗口模式切换入口');
+    // 原生窗口排在第一个选项，用户进设置第一眼看到的就是默认值
+    const sel = indexHtml.slice(indexHtml.indexOf('id="setWindowEmbed"'), indexHtml.indexOf('id="setWindowEmbed"') + 400);
+    assert(sel.indexOf('value="detached"') < sel.indexOf('value="embed"'), '原生窗口应为默认选项（排在前面）');
+  });
+
+  await test('窗口模式：探针与自动检测按新默认值判定', () => {
+    const root = path.join(__dirname, '..');
+    const probeJs = fs.readFileSync(path.join(root, 'src', 'core', 'autodebug-probe.js'), 'utf8');
+    // 只有显式 true 才算嵌入模式，未设置时按原生窗口处理
+    assert(/windowEmbed:\s*!!\(settings\.display && settings\.display\.windowEmbed === true\)/.test(probeJs),
+      '探针要按「显式 true 才算嵌入」判定');
+  });
+
+  await test('加载速度：网络状态新鲜缓存快速复用，运行时停止即作废', () => {
+    const root = path.join(__dirname, '..');
+    const engineJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+    // waitForNetwork 命中 8 秒内的缓存直接返回，省掉连续调用的 adb 往返
+    assert(/cached\.ok && Date\.now\(\) - cached\.at < 8000/.test(engineJs), 'waitForNetwork 要复用新鲜网络缓存');
+    // stop() 里清掉缓存，重启后不会误用关机前的旧状态导致黑屏
+    const stopBody = engineJs.slice(engineJs.indexOf('async stop('), engineJs.indexOf('async stop(') + 400);
+    assert(/this\._lastNetwork = null/.test(stopBody), 'stop 要清掉网络缓存');
+  });
+
+  await test('打包必须带上生产依赖（否则 @napi-rs/lzma 缺失、镜像展不开、应用全打不开）', () => {
+    const root = path.join(__dirname, '..');
+    const packJs = fs.readFileSync(path.join(root, 'build', 'pack.js'), 'utf8');
+    const pkg = require(path.join(root, 'package.json'));
+
+    // 0.5.9 的致命回归：pack.js 只复制 src/，没带 node_modules，
+    // 打包版一启动就 Cannot find module '@napi-rs/lzma'，所有应用都打不开。
+    assert(pkg.dependencies && pkg.dependencies['@napi-rs/lzma'],
+      '@napi-rs/lzma 必须在 dependencies 里（解压 system.img.xz 需要）');
+    assert(/node_modules/.test(packJs) && /dependencies/.test(packJs),
+      'pack.js 要按 package.json 的 dependencies 复制生产依赖');
+    assert(/startsWith\('@'\)/.test(packJs),
+      '作用域包要连整个 scope 一起复制（原生二进制在 @napi-rs/*-win32-x64-msvc）');
+    // 解压路径上真要能找到它：本地 node_modules 里必须装好
+    const lzmaDir = path.join(root, 'node_modules', '@napi-rs', 'lzma');
+    assert(fs.existsSync(lzmaDir), '本机要装好 @napi-rs/lzma 才能打包');
+  });
+
+  await test('镜像解压缺 lzma 时给可读错误，而不是一长串 require stack', () => {
+    const root = path.join(__dirname, '..');
+    const provJs = fs.readFileSync(path.join(root, 'src', 'core', 'provision.js'), 'utf8');
+    assert(/LZMA_MISSING/.test(provJs), '缺 lzma 要用 LZMA_MISSING 错误码');
+    assert(/安装包不完整/.test(provJs), '错误文案要直说安装包不完整，别让用户以为电脑坏了');
+    // 不能再是无保护的 require.resolve：那会在缺依赖时抛原始模块错误
+    assert(/try\s*\{[^}]*require\.resolve\('@napi-rs\/lzma'\)/.test(provJs),
+      'require.resolve 要包在 try 里，失败时给友好错误');
+  });
+
+  await test('按键错位：关掉大屏任务栏（Taskbar）', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    // 平板密度（sw606dp）会触发 Launcher 的 Taskbar：贴底、盖内容、按键挤在左下角
+    assert(/async disableLauncherTaskbar\(\)/.test(adbJs), '要有 disableLauncherTaskbar');
+    assert(/settings put global enable_taskbar 0/.test(adbJs), '任务栏开关用 global enable_taskbar');
+    // Launcher 只在启动时读一次开关，已起来必须重启才会消失
+    assert(/am force-stop com\.google\.android\.apps\.nexuslauncher/.test(adbJs), '要重启 Pixel Launcher');
+    // 每次启动都补一刀（幂等），并在开机初始化里做一次「检查+重启」
+    const pf = adbJs.slice(adbJs.indexOf('async prepareForeground('), adbJs.indexOf('async prepareForeground(') + 1600);
+    assert(/enable_taskbar 0/.test(pf), 'prepareForeground 要写任务栏开关');
+    const reset = adbJs.slice(adbJs.indexOf('async resetDisplayOverrides('), adbJs.indexOf('async resetDisplayOverrides(') + 1600);
+    assert(/disableLauncherTaskbar\(\)/.test(reset), 'resetDisplayOverrides 要调用 disableLauncherTaskbar');
+  });
+
+  await test('启动动画：守到应用第一帧再淡出', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    assert(/async waitForAppFirstFrame\(pkg/.test(adbJs), '要有 waitForAppFirstFrame');
+    // Android 12+ 在 Activity 首帧前会挂系统 Splash，判定就是它消失 + 焦点在目标包
+    assert(/Splash Screen/.test(adbJs), '要按系统 Splash 窗口判定首帧');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 收动画前必须等首帧，否则用户看到白底 + 应用图标，以为卡死
+    const idx = mainJs.indexOf('waitForAppFirstFrame');
+    assert(idx > 0, 'main 要调用 waitForAppFirstFrame');
+    const after = mainJs.slice(idx, idx + 800);
+    assert(/splashDone/.test(after), '首帧之后才 splashDone');
+    // 判定必须用 `dumpsys window`：`dumpsys window windows` 里没有 mCurrentFocus，
+    // 会把焦点判断永远判成否，导致每次启动都白等满超时。
+    assert(/dumpsys window \| grep -E "Splash Screen\|mCurrentFocus"/.test(adbJs),
+      '首帧判定要用 dumpsys window（含 mCurrentFocus）');
+    // 红果这类重应用首帧要 15 秒以上，12 秒超时会把动画提前收掉
+    assert(/timeoutMs:\s*20000/.test(mainJs), '首帧等待给足 20 秒');
+  });
+
+  await test('启动提速：权限授过就不再重复授（省 20s+）', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    const fn = adbJs.slice(adbJs.indexOf('async grantRuntimePermissions('), adbJs.indexOf('async grantRuntimePermissions(') + 2600);
+    // 命中缓存要直接返回，连 dumpsys package 都不跑
+    assert(/rec\.permGranted === true/.test(fn), '已授权限要命中缓存');
+    assert(/store\.upsertApp\(\{ package: pkg, permGranted: true \}\)/.test(fn), '授完要写标记');
+    const clear = adbJs.slice(adbJs.indexOf('async clearData('), adbJs.indexOf('async clearData(') + 400);
+    assert(/permGranted: false/.test(clear), 'pm clear 后要作废缓存');
+    const inst = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    assert(/permGranted: false/.test(inst), '重装后要作废缓存');
+  });
+
+  await test('卡顿：AMD host 后端关 Vulkan 后重试硬件加速', () => {
+    const root = path.join(__dirname, '..');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+    assert(/-feature', '-Vulkan/.test(emuJs), 'host 后端要能关掉 Vulkan');
+    assert(/badGpuVulkanTried/.test(emuJs), '每个 emulator 版本要重试一次 host');
+    // 只在 host + AMD + Windows 生效，别把软件后端也带进不确定性
+    assert(/gpu === 'host' && process\.platform === 'win32' && doctor\.detectGpuVendor\(\) === 'amd'/.test(emuJs),
+      '仅 host + AMD 关闭 Vulkan');
+  });
+
+  await test('升级残留：运行时目录指向别的安装包时改用随包内置', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(/looksForeignBundle/.test(mainJs), '要识别「另一个包的 resources/runtime」');
+    assert(/resources\[\\\\\/\]runtime\$/.test(mainJs), '按 resources/runtime 结尾判定');
+  });
+
+  await test('双实例交替：旧实例退出不能杀掉新实例刚接管的模拟器', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 用户「点了没反应再点一次」时，第二次启动会接管模拟器；旧实例的收尾如果
+    // 照样 dispose()，新实例立刻拿到 device not found —— 应用彻底打不开。
+    assert(/owner\.pid/.test(mainJs), '启动时要记下自己是不是运行时的主人');
+    assert(/const releaseRuntime = /.test(mainJs), '要有「运行时归属」判定');
+    const fn = mainJs.slice(mainJs.indexOf('const releaseRuntime'), mainJs.indexOf('const releaseRuntime') + 800);
+    assert(/owner === process\.pid/.test(fn), 'pid 不是自己时不能停运行时');
+    const hits = (mainJs.match(/runtime\?\.dispose\(\)/g) || []).length;
+    assert(hits === 1, `运行时只应在 releaseRuntime 里停一次，实际 ${hits} 处`);
+  });
+
+  await test('窗口代理：从目录联接启动时也要认得出模拟器窗口', () => {
+    const root = path.join(__dirname, '..');
+    const agentJs = fs.readFileSync(path.join(root, 'src', 'core', 'agent.js'), 'utf8');
+    // 代理按进程 exe 路径前缀判断归属，Windows 给的是解析 junction 后的真实路径；
+    // 不解析就会 emu:0 → 原生窗口接管失败 → 退回带旋转按钮的嵌入壳。
+    assert(/realpathSync\.native/.test(agentJs), 'scope 目录要先解析成真实路径');
+    const scope = agentJs.slice(agentJs.indexOf('async scope('), agentJs.indexOf('async scope(') + 1200);
+    assert(/list\.push\(d\)/.test(scope), '原路径也要保留，兼容少数环境');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
+
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }
   process.exit(failed ? 1 : 0);
 })();

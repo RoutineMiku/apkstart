@@ -70,6 +70,11 @@ node build/msix.js --sign
 有 `AppxManifest.xml` / `AppxBlockMap.xml` / `[Content_Types].xml`（这三个缺一个都装不上），
 并打印「运行时已内置」确认。
 
+> **包体积**：当前约 1.5 GB。其中 1.1 GB 是 `system.img.xz`——它是用默认压缩档（preset 6）
+> 重压出来的，原始发行版用 `preset 9|EXTREME` 只有约 470 MB。
+> 想瘦回 ~850 MB：`npm run runtime` 重新生成镜像后再打一次包（这一步是纯 CPU，约 30~40 分钟，
+> 只影响包体大小，不影响运行）。
+
 ### 2.2 需要本机装什么
 
 - Node ≥ 20（已具备）
@@ -126,13 +131,13 @@ node build/msix.js --sign          # 生成自签证书 + 尝试签名
 # 如果上一步报 signtool 不可用，用 SDK 里的那一份手工签：
 & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe" `
   sign /fd SHA256 /a /f dist\store\ApkStart-test.pfx /p 'ApkStart!test' `
-  dist\store\ApkStart_0.5.4.0_x64.msix
+  dist\store\ApkStart_0.6.1.0_x64.msix
 
 # 管理员 PowerShell 里信任证书（一次即可）
 Import-PfxCertificate -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' `
   -FilePath 'dist\store\ApkStart-test.pfx' `
   -Password (ConvertTo-SecureString 'ApkStart!test' -Force -AsPlainText)
-Add-AppxPackage -Path 'dist\store\ApkStart_0.5.4.0_x64.msix'
+Add-AppxPackage -Path 'dist\store\ApkStart_0.6.1.0_x64.msix'
 ```
 
 卸载：`Get-AppxPackage *ApkStart* | Remove-AppxPackage`

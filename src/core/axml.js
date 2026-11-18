@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../i18n');
 /**
  * Android 二进制 XML(AXML) 解析器
  * AndroidManifest.xml 在 APK 内是编译后的二进制格式，无法直接当文本读。
@@ -25,7 +26,7 @@ const ANDROID_NS = 'http://schemas.android.com/apk/res/android';
 
 function readStringPool(buf, start) {
   const type = buf.readUInt16LE(start);
-  if (type !== RES_STRING_POOL_TYPE) throw new Error('字符串池类型错误');
+  if (type !== RES_STRING_POOL_TYPE) throw new Error(t('字符串池类型错误'));
   const headerSize = buf.readUInt16LE(start + 2);
   const chunkSize = buf.readUInt32LE(start + 4);
   const count = buf.readUInt32LE(start + 8);
@@ -67,7 +68,7 @@ function readStringPool(buf, start) {
 function parseAxml(buffer) {
   const buf = buffer;
   if (buf.readUInt16LE(0) !== RES_XML_TYPE) {
-    throw new Error('不是 Android 二进制 XML（可能被混淆或非法 APK）');
+    throw new Error(t('不是 Android 二进制 XML（可能被混淆或非法 APK）'));
   }
   let pos = buf.readUInt16LE(2); // headerSize
   const total = buf.readUInt32LE(4);
@@ -145,7 +146,7 @@ function parseAxml(buffer) {
   }
 
   const el = root.children.find((c) => c.name === 'manifest') || root.children[0];
-  if (!el) throw new Error('APK 清单为空');
+  if (!el) throw new Error(t('APK 清单为空'));
   return el;
 }
 

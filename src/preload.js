@@ -3,7 +3,28 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
+// 界面语言：preload 每次加载（含切换语言后的 reload）都按设置重新解析（规则见 src/i18n/index.js）。
+// 应用窗口外壳不 reload，而是收到 i18n:changed 后就地切换（见 i18n-dom.js）。
+const i18n = require('./i18n');
+i18n.getLang();
+const langListeners = [];
+ipcRenderer.on('i18n:changed', (_e, code) => {
+  i18n.setLang(code);
+  for (const cb of langListeners) { try { cb(i18n.getLang(), i18n.localeTag()); } catch (_) { /* ignore */ } }
+});
+
 contextBridge.exposeInMainWorld('apkstart', {
+  i18n: {
+    lang: i18n.getLang(),
+    tag: i18n.localeTag(),
+    languages: i18n.LANGUAGES.map((l) => ({ ...l })),
+    t: (src, vars) => i18n.t(src, vars),
+    tHtml: (src, vars) => i18n.tHtml(src, vars),
+    getLang: () => i18n.getLang(),
+    onChange: (cb) => { if (typeof cb === 'function') langListeners.push(cb); },
+  },
+  setLanguage: (lang) => invoke('settings:setLanguage', lang),
+
   info: () => invoke('app:info'),
   listApps: () => invoke('apps:list'),
   pickApk: () => invoke('apk:pick'),
@@ -15,6 +36,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   createShortcut: (pkg) => invoke('app:shortcut', pkg),
   clearData: (pkg) => invoke('app:clearData', pkg),
   pin: (pkg, pinned) => invoke('app:pin', { pkg, pinned }),
+  setAppOrientation: (pkg, orientation) => invoke('app:setOrientation', { pkg, orientation }),
   revealApk: (pkg) => invoke('app:revealApk', pkg),
   revealApkDir: () => invoke('apk:reveal'),
   openDir: () => invoke('dialog:openDir'),
@@ -44,6 +66,26 @@ contextBridge.exposeInMainWorld('apkstart', {
   startupInfo: () => invoke('app:startupInfo'),
   dataInfo: () => invoke('runtime:dataInfo'),
   setDataSize: (gb) => invoke('runtime:setDataSize', gb),
+  resources: () => invoke('engine:resources'),
+  // 本机体检 / 自动配置
+  preflightRun: () => invoke('preflight:run'),
+  preflightApply: () => invoke('preflight:apply'),
+  // 自动检测（自动 debug）：定时采集 + 判定，产出按分类归组的问题清单
+  autodebugRun: () => invoke('autodebug:run'),
+  autodebugState: () => invoke('autodebug:state'),
+  autodebugConfig: (patch) => invoke('autodebug:config', patch || {}),
+  // 自动检测的修复动作
+  clearOrphans: () => invoke('app:clearOrphans'),
+  clearSnapshot: () => invoke('app:clearSnapshot'),
+  restartRuntime: () => invoke('runtime:restart'),
+  // 驱动（兼容补丁）：列清单 / 导入 / 打开目录 / 导出本机模板 / 启用停用
+  driversList: () => invoke('drivers:list'),
+  driversImport: () => invoke('drivers:import'),
+  driversOpenFolder: () => invoke('drivers:openFolder'),
+  driversExportTemplate: () => invoke('drivers:exportTemplate'),
+  driversSetEnabled: (id, enabled) => invoke('drivers:setEnabled', { id, enabled }),
+
+  resetAndResize: (gb) => invoke('runtime:resetAndResize', gb),
   confirm: (opts) => invoke('app:confirm', opts || {}),
   displayState: () => invoke('display:state'),
   displaySet: (patch) => invoke('display:set', patch || {}),
@@ -140,7 +182,7 @@ contextBridge.exposeInMainWorld('apkstart', {
     const allowed = [
       'install:start', 'install:progress', 'install:done', 'install:error',
       'app:launched', 'runtime:log', 'toast', 'ui:navigate', 'provision:progress',
-      'update:progress', 'update:state',
+      'update:progress', 'update:state', 'autodebug:state',
     ];
     if (!allowed.includes(channel)) return () => {};
     const handler = (_e, payload) => cb(payload);

@@ -1,43 +1,31 @@
 'use strict';
 /**
- * 底座注册表：id → 实现
+ * 底座注册表
  *
- * 新增一个底座只要三步：
- *   1. 在 backends/ 下写一个继承 Backend 的类；
- *   2. 在下面 REGISTRY 里登记；
- *   3. 设置页的「引擎模式」下拉加一个选项（src/ui/index.html）。
+ * **只有一个底座：自带运行时（builtin）。**
  *
- * 这一层还负责「自动挑选」：用户没指定底座时，按优先级探测本机能用的那个，
- * 全都探不到才回落到自带运行时。
+ * 0.5.6 起，ApkStart 在任何机器、任何情况下都只跑自己的 Android 运行时
+ * （自带的 adb / emulator / 系统镜像），不再探测、接管、驱动任何第三方模拟器
+ * （MuMu / 雷电 / 蓝叠 / WSA / FydeOS），也不提供「连接已有运行时」的模式。
+ *
+ * 为什么把可选底座整条链路删掉，而不是只留个开关关掉：
+ *   - 只要代码里还留着探测分支，用户机器上装了 MuMu 就随时可能被「顺手接管」，
+ *     表现成「点开 ApkStart 却跑的是别人家的模拟器」，数据、存档、镜像都不在自己以为的地方；
+ *   - 第三方模拟器升级、换端口、改配置都会让 ApkStart 直接失效，而这些不是我们能修的；
+ *   - 商店包 / 便携版只带自己的运行时，本来也不允许捆绑或依赖任何第三方模拟器。
+ * 所以这里保留注册表的形式（上层接口不变），内容固定为 builtin：
+ * 读设置、读残留配置、导入旧 settings.json 都不会再切到别的底座。
  */
 
 const { Backend, CAPS } = require('./base');
 const { BuiltinBackend } = require('./builtin');
-const { MumuBackend } = require('./mumu');
-const { FydeosBackend } = require('./fydeos');
 
 const REGISTRY = [
   BuiltinBackend,
-  MumuBackend,
-  FydeosBackend,
 ];
 
-/**
- * 自动挑选时的顺序（越靠前越优先）。
- *
- * **自带运行时在 Windows 上必须排第一**。原因：用户机器上很可能装着 MuMu / 雷电 /
- * 蓝叠，早期版本把 mumu 放在最前面，结果 ApkStart 悄悄接管了「别人家的模拟器」：
- *   - 我们找不到自己那份 QEMU 窗口，嵌入/多窗口/旋转全部按错的底座走；
- *   - 用户点开 ApkStart 却发现跑的是 MuMu，数据、存档、镜像都不在自己以为的地方；
- *   - MuMu 一升级或换端口，ApkStart 就直接失效。
- * 所以第三方底座一律改成「只有用户在设置里显式选了才用」。
- *
- * 非 Windows（FydeOS / Linux）另当别论：那边根本没有 emulator.exe，
- * 自带运行时跑不起来，系统自带的安卓子系统才是唯一合理的选择。
- */
-const AUTO_ORDER = process.platform === 'win32'
-  ? ['builtin', 'mumu']
-  : ['fydeos', 'builtin'];
+/** 唯一底座。保留这个常量，是给「以后真要加底座」的地方留个明确落点。 */
+const ONLY = 'builtin';
 
 function byId(id) {
   return REGISTRY.find((B) => B.id === id) || null;
@@ -55,40 +43,30 @@ function describe() {
 
 /**
  * 按设置创建一个底座实例。
- * @param {object} o { appRoot, settings, runtime, store, log }
+ *
+ * 注意：**故意忽略 settings.engine.mode**。老版本可能留下 mode=mumu / fydeos / attach，
+ * 手改 settings.json 也可能写成别的值 —— 这些都必须被当成 builtin，
+ * 否则「无论什么情况都独立运行」就是一句空话。返回值里的 id 一定是 'builtin'。
+ *
+ * @param {object} o { appRoot, settings, runtime, store, log, id }
  * @returns {{ backend: Backend, Cls: Function, id: string }}
  */
-function create({ appRoot, settings, runtime, store, log }) {
-  const engine = (settings && settings.engine) || {};
-  let id = String(engine.mode || 'builtin');
-  // 兼容老版本：mode 以前只有 builtin / attach 两种值
-  if (id === 'attach') id = 'builtin';
+function create({ appRoot, runtime, store, log, id: forced } = {}) {
+  // 显式传了别的 id（旧代码的回退路径）也一律落到 builtin
+  const id = forced && byId(forced) ? forced : ONLY;
   const Cls = byId(id) || BuiltinBackend;
   const backend = new Cls(appRoot, { runtime, store, log });
   return { backend, Cls, id: Cls.id };
 }
 
 /**
- * 自动挑选一个已经装好的底座（不启动任何东西，纯探测）。
- * 返回第一个 probe 命中的 id；全都不命中返回 'builtin'。
+ * 自动挑选底座。现在只有一个，永远返回 builtin，不做任何探测：
+ * 探测本身就会去碰第三方模拟器的目录 / 注册表，那正是要去掉的行为。
  */
-async function autoPick({ appRoot, store, log } = {}) {
-  for (const id of AUTO_ORDER) {
-    const Cls = byId(id);
-    if (!Cls) continue;
-    // 自带运行时始终可选，不需要探测（探测它反而要读一堆路径）
-    if (id === 'builtin') return { id, reason: 'fallback' };
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const inst = new Cls(appRoot, { store, log });
-      // eslint-disable-next-line no-await-in-loop
-      const r = await inst.probe();
-      if (r && r.found) return { id, reason: 'detected', detail: r.detail || '' };
-    } catch (_) { /* 探测失败就当没有 */ }
-  }
-  return { id: 'builtin', reason: 'fallback' };
+async function autoPick() {
+  return { id: ONLY, reason: 'builtin-only' };
 }
 
 module.exports = {
-  REGISTRY, AUTO_ORDER, CAPS, byId, describe, create, autoPick, Backend,
+  REGISTRY, ONLY, CAPS, byId, describe, create, autoPick, Backend,
 };

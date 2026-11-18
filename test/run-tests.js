@@ -3,6 +3,8 @@
  * 纯 Node 单元测试（不依赖 Electron / adb / 网络）
  * 运行：npm test
  */
+// 断言基于中文原文：固定界面语言为中文，不受本机 settings.json 影响
+require('../src/i18n').setLang('zh');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');

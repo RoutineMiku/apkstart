@@ -331,6 +331,9 @@ function run(exe, args, opts = {}) {
   return execFileSync(exe, args, { stdio: 'inherit', windowsHide: true, ...opts });
 }
 
+// 独立运行守卫：MSIX 里不许出现 MuMu 等第三方模拟器（自带运行时才是唯一依赖）
+const { assertStandalone } = require('./guard-standalone');
+
 // ---------------- 主流程 ----------------
 
 function stagePackage() {
@@ -366,6 +369,8 @@ function stagePackage() {
   } else {
     console.log('运行时已内置（emulator / platform-tools / system-images）');
   }
+  // 打完载荷立刻守一次：商店包必须自带运行时、独立运行，不能夹带任何第三方模拟器
+  assertStandalone(appDir, { label: 'MSIX 载荷 app/' });
   console.log('生成商店图标…');
   const made = writeAssets(path.join(work, 'Assets'));
   for (const m of made) console.log(`  ${m}`);

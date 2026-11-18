@@ -35,6 +35,10 @@
   </div>
   <div class="titlebar-spacer"></div>
   <div class="titlebar-actions">
+    <button class="icon-btn lang-btn" id="btnLang" title="语言 · Language · Ngôn ngữ" aria-haspopup="menu">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
+      <span class="lang-code" id="langCode">EN</span>
+    </button>
     <button class="icon-btn" id="btnSettings" title="设置">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6h.09A1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg>
     </button>
@@ -69,7 +73,7 @@
         </svg>
       </div>
       <h2>把 APK 拖进来就能装</h2>
-      <p>安装完成后会自动生成桌面图标，双击即以独立窗口运行，和普通 Windows 软件一样。<br/>已注册 .apk 关联时，在资源管理器里双击 APK 也会直接装到 ApkStart。</p>
+      <p data-i18n-html>安装完成后会自动生成桌面图标，双击即以独立窗口运行，和普通 Windows 软件一样。<br>已注册 .apk 关联时，在资源管理器里双击 APK 也会直接装到 ApkStart。</p>
       <button class="btn primary lg" id="btnInstall2">选择 APK 文件</button>
       <p class="hint" id="emptyHint"></p>
     </div>
@@ -132,17 +136,77 @@
 <!-- 右键菜单 -->
 <div class="ctxmenu" id="ctxmenu"></div>
 
+<!-- 语言菜单（标题栏地球按钮） -->
+<div class="ctxmenu lang-menu" id="langMenu" role="menu"></div>
+
 <!-- 设置 -->
 <div class="modal-mask" id="settingsMask">
   <div class="modal">
     <header class="modal-head">
       <h2>设置</h2>
+      <div class="set-search-wrap">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="setSearch" class="set-search" type="search" autocomplete="off" placeholder="搜索设置项：横屏 / 内存 / 代理 / 快照…" />
+        <button class="set-search-clear" id="btnClearSearch" type="button" hidden aria-label="清除搜索">×</button>
+      </div>
       <button class="icon-btn" id="btnCloseSettings">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
     </header>
-    <div class="modal-body">
-      <div class="group" id="runtimeGroup">
+    <div class="modal-main">
+      <nav class="set-nav" id="setNav" aria-label="设置分类">
+        <button class="set-nav-item on" type="button" data-cat="basic">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h10"/></svg></span>
+          <span class="set-nav-label">常用与安装</span>
+          <span class="set-nav-badge" data-badge="basic" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="display">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M9 20h6M12 17v3"/></svg></span>
+          <span class="set-nav-label">显示与窗口</span>
+          <span class="set-nav-badge" data-badge="display" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="input">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10v4M17 10v4"/></svg></span>
+          <span class="set-nav-label">操作与输入</span>
+          <span class="set-nav-badge" data-badge="input" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="perf">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></span>
+          <span class="set-nav-label">性能与资源</span>
+          <span class="set-nav-badge" data-badge="perf" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="net">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="16" r="1.6"/></svg></span>
+          <span class="set-nav-label">网络与下载</span>
+          <span class="set-nav-badge" data-badge="net" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="diag">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 3 8v5c0 5 3.8 7.6 9 9 5.2-1.4 9-4 9-9V8z"/><path d="m9 12 2 2 4-4"/></svg></span>
+          <span class="set-nav-label">诊断与修复</span>
+          <span class="set-nav-badge" data-badge="diag" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="files">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+          <span class="set-nav-label">集成与文件</span>
+          <span class="set-nav-badge" data-badge="files" hidden></span>
+        </button>
+        <button class="set-nav-item" type="button" data-cat="about">
+          <span class="set-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></span>
+          <span class="set-nav-label">更新与关于</span>
+          <span class="set-nav-badge" data-badge="about" hidden></span>
+        </button>
+      </nav>
+    <div class="modal-body" id="settingsBody">
+      <div class="group" id="languageGroup" data-cat="basic">
+        <div class="group-title">界面语言</div>
+        <div class="field">
+          <label for="setLanguage">语言 · Language · Ngôn ngữ</label>
+          <select id="setLanguage"></select>
+          <span class="sub">切换后界面会立即刷新，正在运行的应用不受影响。</span>
+        </div>
+      </div>
+
+      <div class="group" id="runtimeGroup" data-cat="basic">
         <div class="group-title">运行时与环境</div>
         <div class="field">
           <label>运行状态</label>
@@ -163,14 +227,14 @@
           <h2>安装 Android 到虚拟磁盘</h2>
           <p class="guide-sub">虚拟机窗口已打开。按下面 6 步操作一次，之后 ApkStart 会直接从磁盘启动，不再需要镜像。</p>
           <ol class="guide-list">
-            <li><b>启动菜单</b>：用 <kbd>↓</kbd> 选到 <code>Installation - Install Android-x86 to harddisk</code>，回车</li>
-            <li><b>Choose Partition</b>：选 <code>Create/Modify partitions</code>；询问是否使用 GPT 时选 <code>No</code></li>
-            <li><b>cfdisk 分区</b>：<code>New</code> → <code>Primary</code> → 容量直接回车 → <code>Bootable</code> → <code>Write</code> → 输入 <code>yes</code> → <code>Quit</code></li>
-            <li><b>格式化</b>：选 <code>vda1</code> → 提示格式化时选 <code>ext4</code> → <code>Yes</code></li>
-            <li><b>引导与系统</b>：<code>Install GRUB</code> 选 <code>Yes</code>；<code>Install /system as read-write</code> 选 <code>Yes</code></li>
-            <li><b>完成</b>：进度到 100% 后点下面的「我已安装完成」（ApkStart 会自动重启并接管）</li>
+            <li data-i18n-html><b>启动菜单</b>：用 <kbd>↓</kbd> 选到 <code>Installation - Install Android-x86 to harddisk</code>，回车</li>
+            <li data-i18n-html><b>Choose Partition</b>：选 <code>Create/Modify partitions</code>；询问是否使用 GPT 时选 <code>No</code></li>
+            <li data-i18n-html><b>cfdisk 分区</b>：<code>New</code> → <code>Primary</code> → 容量直接回车 → <code>Bootable</code> → <code>Write</code> → 输入 <code>yes</code> → <code>Quit</code></li>
+            <li data-i18n-html><b>格式化</b>：选 <code>vda1</code> → 提示格式化时选 <code>ext4</code> → <code>Yes</code></li>
+            <li data-i18n-html><b>引导与系统</b>：<code>Install GRUB</code> 选 <code>Yes</code>；<code>Install /system as read-write</code> 选 <code>Yes</code></li>
+            <li data-i18n-html><b>完成</b>：进度到 100% 后点下面的「我已安装完成」（ApkStart 会自动重启并接管）</li>
           </ol>
-          <p class="guide-tip">如果之后提示 adb 未连接：在虚拟机窗口按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F1</kbd> 进入终端，执行
+          <p class="guide-tip" data-i18n-html>如果之后提示 adb 未连接：在虚拟机窗口按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F1</kbd> 进入终端，执行
             <code>setprop service.adb.tcp.port 5555</code>、<code>stop adbd</code>、<code>start adbd</code>，
             再按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F7</kbd> 回到图形界面。</p>
           <div class="guide-foot">
@@ -180,12 +244,12 @@
         </div>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="basic">
         <div class="group-title">自动模式（默认，无需设置）</div>
         <div class="field">
           <label>本机自适应参数</label>
           <div class="inline-note" id="autoProfileText">正在检测…</div>
-          <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。
+          <span class="sub" data-i18n-html>内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。
             ApkStart 用<b>专用 adb 服务端口 5044</b>（你系统里自己的 adb 是 5037），所以命令行里
             <code>adb devices</code> 看不到这台安卓设备 —— 这是刻意的隔离。想连的话用
             <code>$env:ANDROID_ADB_SERVER_PORT=5044</code> 再执行 adb。
@@ -221,7 +285,7 @@
         </div>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="display">
         <div class="group-title">应用窗口</div>
         <div class="field">
           <label>显示模式</label>
@@ -229,7 +293,7 @@
             <option value="window">竖屏窗口（可自由拉伸，记住每个应用的大小）</option>
             <option value="fullscreen">全屏（铺满屏幕，保持手机比例两侧留黑）</option>
           </select>
-          <span class="sub">随时按 <b>F11</b> 或右键托盘切换；全屏只放大窗口，不改变画面比例，切换不重启应用。</span>
+          <span class="sub" data-i18n-html>随时按 <b>F11</b> 或右键托盘切换；全屏只放大窗口，不改变画面比例，切换不重启应用。</span>
         </div>
         <div class="field">
           <label>自动全屏</label>
@@ -247,11 +311,20 @@
             <option value="portrait">强制竖屏（手机比例，适合刷短视频、看小说）</option>
             <option value="landscape">强制横屏（宽屏铺满，适合看剧、玩游戏）</option>
           </select>
-          <span class="sub">安卓的横竖屏是<b>虚拟手机面板的真实方向</b>决定的。面板方向和应用自己声明的方向不一致时，
+          <span class="sub" data-i18n-html>安卓的横竖屏是<b>虚拟手机面板的真实方向</b>决定的。面板方向和应用自己声明的方向不一致时，
             安卓只会给应用中间一条窄画面、两侧补黑 —— 换窗口大小、改分辨率都填不满。
             「跟随应用」会在安装 APK 时读出应用的方向，启动时自动把面板换成一致的那个，
             所以红果、墨读这类应用会正立且铺满。方向不对时才重启一次运行时（约十几秒），
             之后再打开同一方向的应用都是秒进。</span>
+        </div>
+        <div class="field">
+          <label>镜像自动旋转</label>
+          <select id="setAutoRotate">
+            <option value="on">打开（默认）· 系统设置里显示自动旋转已开启</option>
+            <option value="off">关闭 · 回到旧的锁定行为</option>
+          </select>
+          <span class="sub" data-i18n-html>安卓里<b>自动旋转开关默认打开</b>。注意这不影响画面方向：面板方向和屏幕方向仍由上面的
+            策略 + 忽略应用方向请求决定，不会被传感器带歪。只有个别应用读取这个开关值时才会用到。</span>
         </div>
         <div class="field">
           <label>平板排版</label>
@@ -269,18 +342,18 @@
             <option value="portrait">竖屏面板</option>
             <option value="landscape">横屏面板</option>
           </select>
-          <span class="sub">这是运行时<b>现在</b>用的物理面板方向，由上面那条策略自动写入。
+          <span class="sub" data-i18n-html>这是运行时<b>现在</b>用的物理面板方向，由上面那条策略自动写入。
             只有在「强制」模式下它才完全由你决定。</span>
         </div>
         <div class="field">
           <label>窗口承载方式</label>
           <select id="setWindowEmbed">
-            <option value="embed">嵌入模式（默认）· 安卓画面嵌在 ApkStart 窗口里，观感统一</option>
-            <option value="detached">独立窗口 · 由模拟器自己开窗口，避开花屏/黑边/点不准</option>
+            <option value="detached">原生窗口（默认·推荐）· 模拟器自己开窗口，帧率与缩放最稳</option>
+            <option value="embed">嵌入模式 · 安卓画面嵌在 ApkStart 窗口里，标题栏带旋转按钮</option>
           </select>
-          <span class="sub">嵌入模式最像「一个应用一个窗口」，但需要把模拟器的窗口塞进我们自己的窗口，
-            容易在缩放、旋转、多窗口切换时出现黑边或点击错位。独立模式下方向、缩放、输入都由模拟器原生处理，
-            这类问题不会出现，代价是多一个任务栏图标。改动在下次打开应用时生效。</span>
+          <span class="sub">原生窗口由模拟器直接渲染和排布，拖拽、缩放、旋转都跟手，不会出现黑边或点击错位，
+            代价是多一个任务栏图标（横屏用托盘菜单或 Ctrl+Alt+R）。嵌入模式会把模拟器窗口塞进我们的窗口，
+            观感更统一、自带旋转按钮，但在缩放/旋转/切换应用时容易掉帧并出现黑边。改动在下次打开应用时生效。</span>
         </div>
         <div class="field" id="portraitField">
           <label>竖屏画面大小</label>
@@ -294,7 +367,7 @@
         </div>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="input">
         <div class="group-title">鼠标键位</div>
         <div class="field">
           <label>左键 · 确认 / 点击</label>
@@ -328,7 +401,7 @@
         </div>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="input">
         <div class="group-title">键盘映射（游戏手柄）</div>
         <div class="field switch-field">
           <div>
@@ -343,7 +416,7 @@
         </div>
       </div>
 
-      <div class="group" id="perfGroup">
+      <div class="group" id="perfGroup" data-cat="perf">
         <div class="group-title">性能与资源占用</div>
         <div class="field">
           <label>资源策略</label>
@@ -374,6 +447,11 @@
               <option value="12">12 GB</option>
               <option value="16">16 GB</option>
               <option value="24">24 GB</option>
+              <option value="32">32 GB</option>
+              <option value="48">48 GB</option>
+              <option value="64">64 GB（50GB 级游戏）</option>
+              <option value="96">96 GB</option>
+              <option value="128">128 GB</option>
             </select>
           </div>
         </div>
@@ -395,7 +473,7 @@
             <option value="ja-JP">日本語</option>
             <option value="ko-KR">한국어</option>
           </select>
-          <span class="sub">系统设置、权限弹窗、日期格式的语言。开机时注入到虚拟机，
+          <span class="sub" data-i18n-html>系统设置、权限弹窗、日期格式的语言。开机时注入到虚拟机，
             <b>下次重启运行时生效</b>。中文输入法不受此项影响，单独在下面开关。</span>
         </div>
         <div class="field switch-field">
@@ -423,7 +501,7 @@
         <div class="field switch-field">
           <div>
             <label>保留快速启动快照（推荐）</label>
-            <span class="sub">第二次打开应用只要几秒，代价是磁盘上多一份约 2–3 GB 的 <code>ram.bin</code>。磁盘紧张可以关掉：只影响启动速度，不影响应用与存档。</span>
+            <span class="sub" data-i18n-html>第二次打开应用只要几秒，代价是磁盘上多一份约 2–3 GB 的 <code>ram.bin</code>。磁盘紧张可以关掉：只影响启动速度，不影响应用与存档。</span>
           </div>
           <input type="checkbox" id="setKeepSnapshot" class="switch" />
         </div>
@@ -465,7 +543,7 @@
         </div>
       </div>
 
-      <div class="group" id="downloadGroup">
+      <div class="group" id="downloadGroup" data-cat="net">
         <div class="group-title">下载与更新源</div>
         <div class="field">
           <label>更新与下载源</label>
@@ -506,34 +584,101 @@
         </details>
       </div>
 
-      <details class="advanced-group">
+      <div class="group" id="preflightGroup" data-cat="diag">
+        <div class="group-title">本机体检 · 自动配置</div>
+        <div class="field">
+          <span class="sub">先查一遍这台机器：CPU 虚拟化有没有开、Windows 的虚拟机监控程序平台在不在、
+            显卡是什么、显存多大、内存和系统版本够不够。能自动改的（内存 / 核心 / 画质 / 渲染后端）直接写进设置，
+            并把结果固化成一份驱动；必须管理员权限的给按钮；只能在 BIOS 里改的会告诉你怎么改。</span>
+        </div>
+        <div class="field">
+          <div class="row">
+            <button class="btn primary sm" id="btnPreflight">开始体检</button>
+            <button class="btn ghost sm" id="btnPreflightApply" hidden>应用推荐配置</button>
+          </div>
+        </div>
+        <div id="preflightList" class="drv-list"></div>
+        <div class="field">
+          <span class="sub" id="preflightSummary"></span>
+        </div>
+      </div>
+
+      <div class="group" id="driverGroup" data-cat="diag">
+        <div class="group-title">驱动 · 兼容补丁</div>
+        <div class="field">
+          <span class="sub" data-i18n-html>有些机器要改启动参数才跑得起来（老显卡 GLES 版本低、没开硬件加速、某版驱动一开硬件渲染就崩）。
+            驱动就是一份 JSON：声明「匹配哪些机器」+「命中后改哪些启动参数」。你可以自己写、导入、分享。
+            驱动只改白名单里的启动项，<b>不执行任何代码</b>；匹配不上就不生效。</span>
+        </div>
+        <div class="field">
+          <span class="sub" id="drvSummary">正在读取驱动…</span>
+        </div>
+        <div id="drvList" class="drv-list"></div>
+        <div class="field">
+          <div class="row">
+            <button class="btn ghost sm" id="btnDrvReload">刷新</button>
+            <button class="btn ghost sm" id="btnDrvImport">导入驱动…</button>
+            <button class="btn ghost sm" id="btnDrvFolder">打开驱动目录</button>
+            <button class="btn ghost sm" id="btnDrvExport">导出本机模板</button>
+          </div>
+          <span class="sub" data-i18n-html>「导出本机模板」会把匹配条件按这台机器填好，改 <code>effect</code> 里的
+            <code>gpuMode</code> / <code>forceTcg</code> 就能用。字段说明见仓库里的 <code>docs/drivers.md</code>。</span>
+        </div>
+      </div>
+
+      <div class="group" id="autodebugGroup" data-cat="diag">
+        <div class="group-title">自动检测 · 智能诊断</div>
+        <div class="field">
+          <span class="sub" data-i18n-html>后台定时把这台机器查一遍：安卓运行时有没有起来、adb 授权是否正常、磁盘还剩多少、
+            数据分区是不是被差量盘挡住、快照有没有坏、设置之间有没有互相打架。
+            只在发现<b>新</b>的严重问题时弹一次通知，其余都安静地列在下面。</span>
+        </div>
+        <div class="field switch-field">
+          <div>
+            <label>启用自动检测（默认开启）</label>
+            <span class="sub">关掉后不再定时扫描；随时可以点「立即检测」手动跑一次。</span>
+          </div>
+          <input type="checkbox" id="setAutodebugAuto" class="switch" />
+        </div>
+        <div class="field two">
+          <div>
+            <label>检测间隔</label>
+            <select id="setAutodebugInterval">
+              <option value="1">每 1 分钟</option>
+              <option value="5">每 5 分钟</option>
+              <option value="10">每 10 分钟（推荐）</option>
+              <option value="30">每 30 分钟</option>
+              <option value="60">每 1 小时</option>
+            </select>
+          </div>
+          <div class="switch-field" style="align-items:center">
+            <div>
+              <label>发现新问题时通知我</label>
+              <span class="sub">只对严重问题弹通知；已知的老问题不重复打扰。</span>
+            </div>
+            <input type="checkbox" id="setAutodebugNotify" class="switch" />
+          </div>
+        </div>
+        <div class="runtime-actions">
+          <button class="btn primary sm" id="btnAutodebugRun">立即检测</button>
+          <button class="btn ghost sm" id="btnAutodebugReport">导出诊断报告</button>
+          <span class="inline-note" id="autodebugStateText">尚未检测</span>
+        </div>
+        <div id="autodebugList" class="dbg-list"></div>
+      </div>
+
+      <details class="advanced-group" data-cat="perf">
         <summary>高级参数（一般无需修改）</summary>
-      <div class="group">
+      <div class="group" data-cat="perf">
         <div class="group-title">运行时</div>
         <div class="field">
-          <label>引擎模式</label>
-          <select id="setEngineMode">
-            <option value="builtin">自带运行时（推荐，QEMU + Android-x86，无第三方依赖）</option>
-            <option value="mumu">MuMu 模拟器 12（复用本机已装的网易模拟器）</option>
-            <option value="fydeos">FydeOS 安卓子系统（FydeOS 装在本机，或跑在 VMware / VirtualBox 里）</option>
-            <option value="attach">连接已有运行时（高级：复用 WSA / 其他模拟器的 adb 端口）</option>
-          </select>
-          <span class="sub">「自带运行时」会自己下载安卓镜像；选第三方模拟器时不下载任何东西，
-            直接驱动你电脑上已经装好的那台，装的应用和它自己的应用共用一套环境。
-            FydeOS 底座驱动 FydeOS 自带的安卓环境（需要先在它的安卓设置里打开「ADB 调试」）；
-            FydeOS 跑在虚拟机里时，要在下面填那台虚拟机的地址。它不嵌窗口，画面由 FydeOS 自己显示。</span>
-        </div>
-        <div class="field" id="fydeosHostField" hidden>
-          <label>FydeOS 安卓子系统地址</label>
-          <input id="setFydeosHost" type="text" placeholder="127.0.0.1:5555，或虚拟机的局域网 IP:5555" />
-          <span class="sub">FydeOS 跑在 VMware / VirtualBox 里时必填。最省事的配法：给虚拟机做端口转发
-            （宿主 5555 → guest 5555），然后填 <b>127.0.0.1:5555</b>。
-            直接装在本机的 FydeOS 可以留空（自动探测 arc:5555 等）。</span>
-        </div>
-        <div class="field" id="mumuPathField" hidden>
-          <label>MuMu 安装目录（留空自动查找）</label>
-          <input id="setMumuPath" type="text" placeholder="例如 D:\MuMu Player 12" />
-          <span class="sub">默认会按注册表和常见路径自动找 MuMuManager.exe；装在非常规盘符时在这里指定。</span>
+          <label>运行时</label>
+          <div class="row">
+            <input id="setEngineLabel" type="text" readonly value="ApkStart 自带运行时（QEMU + Android 14，独立运行）" />
+          </div>
+          <span class="sub">ApkStart 只跑自己的运行时：adb / emulator / 系统镜像都由它自己下载和管理，
+            不探测、不接管、不依赖你电脑上装的任何模拟器（MuMu / 雷电 / 蓝叠 / WSA 都不会被使用）。
+            这样换机器、别人装没装模拟器、模拟器怎么升级，都不影响这里。</span>
         </div>
         <div class="field">
           <label>adb 路径</label>
@@ -541,10 +686,7 @@
         </div>
         <div class="field">
           <label>设备地址</label>
-          <div class="row">
-            <input id="setDevice" type="text" placeholder="127.0.0.1:58526" />
-            <button class="btn ghost sm" id="btnProbe">探测</button>
-          </div>
+          <span class="sub" id="deviceAddrNote">由 ApkStart 自己分配（emulator-5554，端口冲突时自动顺延），无需填写。</span>
         </div>
         <div class="field">
           <label>系统镜像（ISO）</label>
@@ -559,6 +701,9 @@
             <label>CPU 核心（0 = 自动）</label>
             <input id="setCores" type="number" min="0" max="16" />
           </div>
+        </div>
+        <div class="field">
+          <span class="sub" id="builtinResNote"></span>
         </div>
         <div class="field">
           <label>空闲回收（分钟，0 = 不回收）</label>
@@ -586,7 +731,7 @@
       </div>
       </details>
 
-      <div class="group">
+      <div class="group" data-cat="display">
         <div class="group-title">安卓系统设置（不用进安卓桌面）</div>
         <div class="field">
           <label>运行状态</label>
@@ -654,7 +799,7 @@
         </div>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="files">
         <div class="group-title">桌面与应用</div>
         <div class="field switch-field">
           <div>
@@ -680,7 +825,7 @@
         </div>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="files">
         <div class="group-title">文件互通</div>
         <div class="field">
           <label>本机共享目录</label>
@@ -700,7 +845,7 @@
         <p class="note">两侧目录会持续双向同步；在安卓应用里保存到该目录的文件，会出现在本机共享目录中。</p>
       </div>
 
-      <div class="group">
+      <div class="group" data-cat="files">
         <div class="group-title">系统集成</div>
         <div class="field switch-field">
           <div>
@@ -725,7 +870,7 @@
             <button class="btn ghost sm" id="btnBrowseAvdDir">浏览</button>
             <button class="btn ghost sm" id="btnOpenAvdDir">打开</button>
           </div>
-          <span class="sub">真正吃盘的是这一块：数据分区（默认 6 GB，可在上面对大）+ 快速启动快照（约 2–3 GB）。
+          <span class="sub" data-i18n-html>真正吃盘的是这一块：数据分区（默认 6 GB，可在上面对大）+ 快速启动快照（约 2–3 GB）。
             磁盘紧张时把它指到另一个盘（如 D:），重启软件后生效；旧目录里的 <code>apkstart.avd</code> 可整体搬过去再删。</span>
         </div>
         <div class="field">
@@ -736,7 +881,7 @@
           </div>
         </div>
       </div>
-      <div class="group" id="updateGroup">
+      <div class="group" id="updateGroup" data-cat="about">
         <div class="group-title">软件更新</div>
         <div class="field">
           <label>当前版本 <span class="inline-note" id="updateCurrent">—</span></label>
@@ -754,7 +899,7 @@
         </div>
       </div>
 
-      <div class="group" id="aboutGroup">
+      <div class="group" id="aboutGroup" data-cat="about">
         <div class="group-title">关于</div>
         <div class="about-box">
           <div class="about-brand">
@@ -782,6 +927,7 @@
         </div>
       </div>
     </div>
+    </div>
     <footer class="modal-foot">
       <span class="inline-note">设置修改后立即生效</span>
       <button class="btn primary" id="btnDoneSettings">完成</button>
@@ -789,6 +935,7 @@
   </div>
 </div>
 
+<script src="i18n-dom.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

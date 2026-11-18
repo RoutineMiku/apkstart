@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../i18n');
 /**
  * resources.arsc 解析器（精简版）
  * 用途：把 AndroidManifest 里的 @0x7f... 资源引用还原成
@@ -86,7 +87,7 @@ class ResTable {
 
   _parse() {
     const buf = this.buf;
-    if (buf.readUInt16LE(0) !== RES_TABLE_TYPE) throw new Error('resources.arsc 格式错误');
+    if (buf.readUInt16LE(0) !== RES_TABLE_TYPE) throw new Error(t('resources.arsc 格式错误'));
     const headerSize = buf.readUInt16LE(2);
     const total = buf.readUInt32LE(4);
     const pkgCount = buf.readUInt32LE(8);

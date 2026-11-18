@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../i18n');
 /**
  * 本机 ↔ 安卓 的共享目录双向同步
  *
@@ -64,7 +65,7 @@ class Sharer {
     const result = { pushed: 0, pulled: 0, errors: [] };
     try {
       const client = this.runtime.client();
-      if (!(await client.isOnline())) throw new Error('运行时未连接');
+      if (!(await client.isOnline())) throw new Error(t('运行时未连接'));
       await this.ensureDirs(onLog);
       const state = this.loadState();
 

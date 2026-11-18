@@ -1,4 +1,6 @@
 'use strict';
+// 断言里比对的是中文原文：固定界面语言，不随本机系统语言变化
+require('../src/i18n').setLang('zh');
 /**
  * issue #99「非 100% 缩放屏幕显示一半」修复的纯 Node 测试（无需 Electron/模拟器）。
  *

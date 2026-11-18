@@ -1,4 +1,6 @@
 'use strict';
+// 断言里比对的是中文原文：固定界面语言，不随本机系统语言变化
+require('../src/i18n').setLang('zh');
 /**
  * 安卓系统设置（src/core/android.js）的纯 Node 测试：用假的 adb client 记录命令、返回预设输出，
  * 不需要模拟器。运行：node test/android-test.js

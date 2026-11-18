@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../../i18n');
 /**
  * 底座：自带的 Google Android Emulator（QEMU 全系统虚拟化）
  *
@@ -15,15 +16,16 @@
 const fs = require('fs');
 const path = require('path');
 const { Backend, CAPS } = require('./base');
+const { freeDiskMB } = require('../doctor');
+const { diskRequiredMB, diskVerdict, hostProfile, memoryLimits, memVerdict, diskLimits } = require('../resources');
 
 class BuiltinBackend extends Backend {
   static get id() { return 'builtin'; }
 
-  static get label() { return '自带运行时（Android Emulator + QEMU）'; }
+  static get label() { return t('自带运行时（Android Emulator + QEMU）'); }
 
   static get summary() {
-    return '零第三方依赖：apkstart 自己下载并管理 Android 14 镜像，ARM 应用走镜像自带的翻译层。'
-      + '首次启动约 25 秒，之后靠 quickboot 快照秒进。';
+    return t('零第三方依赖：apkstart 自己下载并管理 Android 14 镜像，ARM 应用走镜像自带的翻译层。首次启动约 25 秒，之后靠 quickboot 快照秒进。');
   }
 
   static get embedCapable() { return true; }
@@ -51,28 +53,28 @@ class BuiltinBackend extends Backend {
   running() { return !!(this.rt && this.rt.emuRunning); }
 
   async probe() {
-    if (!this.rt) return { ok: false, found: false, detail: '运行时未初始化' };
+    if (!this.rt) return { ok: false, found: false, detail: t('运行时未初始化') };
     const p = this.rt.provisioner.paths();
     const found = fs.existsSync(p.emulatorExe) || fs.existsSync(p.adbExe);
     return { ok: true, found, path: p.emulatorExe, detail: p.root };
   }
 
   async check() {
-    if (!this.rt) return { ok: false, reason: '运行时未初始化' };
+    if (!this.rt) return { ok: false, reason: t('运行时未初始化') };
     const env = await this.rt.provisioner.checkEnv().catch(() => null);
-    if (!env) return { ok: false, reason: '运行时探测失败' };
-    if (!env.adb.ok) return { ok: false, reason: '缺 adb', needs: 'adb' };
-    if (!env.emulator.ok) return { ok: false, reason: '缺 Android Emulator', needs: 'emulator' };
-    if (!env.sysimg.ok) return { ok: false, reason: '缺系统镜像', needs: 'sysimg' };
+    if (!env) return { ok: false, reason: t('运行时探测失败') };
+    if (!env.adb.ok) return { ok: false, reason: t('缺 adb'), needs: 'adb' };
+    if (!env.emulator.ok) return { ok: false, reason: t('缺 Android Emulator'), needs: 'emulator' };
+    if (!env.sysimg.ok) return { ok: false, reason: t('缺系统镜像'), needs: 'sysimg' };
     return { ok: true, env };
   }
 
   async resolveAdb() { return this.rt ? this.rt.adbPath() : ''; }
 
   async ensure({ onLog = () => {} } = {}) {
-    if (!this.rt) return { ok: false, error: '运行时未初始化' };
+    if (!this.rt) return { ok: false, error: t('运行时未初始化') };
     const r = await this.rt.ensure({ onLog });
-    if (!r || !r.ok) return { ok: false, error: (r && r.error) || '安卓运行时未能启动' };
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || t('安卓运行时未能启动') };
     // serial 用可写字段（见 syncSerial 的说明），ensure 成功后同步一次
     this.syncSerial();
     this.adbPath = this.rt.adbPath();
@@ -98,13 +100,13 @@ class BuiltinBackend extends Backend {
   }
 
   async stop({ graceful = true } = {}) {
-    if (!this.rt) return { ok: false, error: '运行时未初始化' };
+    if (!this.rt) return { ok: false, error: t('运行时未初始化') };
     const ok = await this.rt.stop({ graceful }).catch((e) => ({ error: e.message }));
     return { ok: ok !== false };
   }
 
   async install(component, onProgress = () => {}) {
-    if (!this.rt) return { ok: false, error: '运行时未初始化' };
+    if (!this.rt) return { ok: false, error: t('运行时未初始化') };
     const prov = this.rt.provisioner;
     switch (component) {
       case 'runtime': return prov.installRuntimePack(onProgress);
@@ -114,13 +116,64 @@ class BuiltinBackend extends Backend {
       case 'playimg': return prov.installPlayImage(onProgress);
       case 'aehd': return prov.installAehd(onProgress);
       case 'qemu': return prov.installQemu(onProgress);
-      default: return { ok: false, error: `未知组件 ${component}` };
+      default: return { ok: false, error: t('未知组件 {component}', { component }) };
     }
   }
 
   usage() { return this.rt ? this.rt.usage() : { total: 0, items: [] }; }
 
   dataInfo() { return this.rt ? this.rt.emulator.dataInfo() : { ok: false }; }
+
+  /**
+   * 设置页展示用：宿主上限 + 当前分配。
+   * 自带运行时的内存/CPU 是写进 qemu 命令行的，改完下次开安卓生效；
+   * 数据分区可以就地扩容（resizeData），不丢已装应用。
+   */
+  resources() {
+    const info = this.dataInfo() || {};
+    const host = hostProfile();
+    const eng = (this.rt && this.rt.settings && this.rt.settings.engine) || {};
+    const freeMB = info.avdDir ? freeDiskMB(info.avdDir) : 0;
+    const memMB = Number(eng.memoryMB) || 0;
+    return {
+      backend: 'builtin',
+      host,
+      limits: { ...memoryLimits(host.totalMB), ...diskLimits(freeMB) },
+      wanted: { memoryGB: memMB ? Math.round((memMB / 1024) * 2) / 2 : 0, cores: Number(eng.cores) || 0 },
+      current: {
+        memoryGB: memMB ? Math.round((memMB / 1024) * 2) / 2 : 0,
+        cores: Number(eng.cores) || 0,
+        dataGB: Number(info.configuredGB) || 0,
+        imageGB: Number(info.imageGB) || 0,
+      },
+      freeMB,
+      pending: false,
+      verdict: memVerdict(memMB, host.totalMB),
+      note: t('自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」——')
+        + t('能就地扩就保留已装应用，安卓正在用快速启动差量盘时会提示你重置后按新容量重建。'),
+    };
+  }
+
+  /**
+   * 大包预检：除了物理磁盘，还要看 /data 分区本身够不够。
+   * 50GB 级游戏装不下的最常见原因不是下载失败，而是 userdata 镜像还是
+   * 默认的 6/8GB —— 装到 dexopt 阶段才报 INSTALL_INSUFFICIENT_STORAGE。
+   */
+  checkDiskFor(bytes) {
+    const info = this.dataInfo() || {};
+    const need = diskRequiredMB(bytes);
+    const phys = diskVerdict(info.avdDir ? freeDiskMB(info.avdDir) : 0, need);
+    if (!phys.ok) return phys;
+    const capGB = Number(info.configuredGB) || 0;
+    if (capGB && capGB * 1024 < need) {
+      return {
+        ok: false,
+        message: t('安卓数据分区不足：当前 {capGB} GB，这个游戏建议至少 {v1} GB。', { capGB, v1: Math.ceil(need / 1024) })
+          + t('请在设置 → 引擎里把「数据分区容量」调大后重启安卓（会就地扩容，不丢已装应用）。'),
+      };
+    }
+    return { ok: true, requiredMB: need };
+  }
 
   async resizeData(mb) { return this.rt ? this.rt.emulator.resizeDataPartition(mb) : { ok: false }; }
 

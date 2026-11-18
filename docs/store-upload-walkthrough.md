@@ -7,7 +7,7 @@
 
 ## 0. 前置检查
 
-- [ ] `dist/store/ApkStart_0.5.4.0_x64.msix` 存在，约 850 MB
+- [ ] `dist/store/ApkStart_0.6.1.0_x64.msix` 存在，约 1.5 GB
 - [ ] 包里身份已换成你的真实值（见第 2 步；当前仍是占位 `RoutineMiku.ApkStart`）
 - [ ] 隐私政策有可公开访问的 URL
 
@@ -42,7 +42,7 @@ Package/Identity/Publisher  = CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D
 > node build/msix.js --identity "RoutineMiku.ApkStart" --publisher "CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D"
 > ```
 
-打包完我会核对：清单身份逐字一致、`Version="0.5.4.0"`、7 张 Assets 的 md5 与 `build/store-assets` 一致。
+打包完我会核对：清单身份逐字一致、`Version="0.6.1.0"`、7 张 Assets 的 md5 与 `build/store-assets` 一致。
 **在第 2 步完成前不要上传**，占位身份会被直接拒收。
 
 ---
@@ -51,7 +51,7 @@ Package/Identity/Publisher  = CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D
 
 **Packages → Upload package**
 
-- **[上传]** `D:\apkstart-dsh\apkstart\dist\store\ApkStart_0.5.4.0_x64.msix`
+- **[上传]** `D:\apkstart-dsh\apkstart\dist\store\ApkStart_0.6.1.0_x64.msix`
 - 上传约 891 MB，按你的上行带宽可能要 5–20 分钟，别刷新页面
 - 校验通过后会出现「Package accepted」
 

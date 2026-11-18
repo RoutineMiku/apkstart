@@ -33,15 +33,25 @@ const ICON_DIR = path.join(DATA_DIR, 'icons');
 const APK_DIR = path.join(DATA_DIR, 'apks');
 const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+// 本进程启动时数据目录里是否已有旧版本留下的配置/应用清单（= 升级用户，而非全新安装）。
+// 必须在任何写入之前取值，所以放在模块加载时。
+const EXISTING_USER = fs.existsSync(SETTINGS_FILE) || fs.existsSync(APPS_FILE);
 
 const DEFAULT_SETTINGS = {
+  // 界面语言：en | vi | zh。空 = 尚未选择，启动时由 i18n.resolveInitialLanguage 决定并写回：
+  // 老用户升级保持中文，新用户跟随系统语言（不支持的语言回落英文）。
+  language: '',
   adbPath: '',
   device: '127.0.0.1:5555',
+  /**
+   * 驱动（兼容补丁）扩展：用户自己写的 JSON 补丁放在数据目录的 drivers/ 下。
+   * 这里只记「被用户关掉的 id」——默认全开，坏了能一键关，不用删文件。
+   */
+  drivers: { state: {}, disabled: [] },
   engine: {
-    mode: 'builtin',         // builtin（自带运行时，默认） | mumu（复用已装的 MuMu 模拟器） | fydeos（FydeOS 自带安卓子系统） | attach（连接已有运行时，高级）
-    mumuPath: '',            // MuMu 安装目录（留空 = 自动按注册表 / 常见路径查找）
-    mumuIndex: 0,            // MuMu 多开实例索引，默认 0 号
-    fydeosHost: '',          // FydeOS 安卓子系统地址（留空 = 依次试 arc:5555 / 100.115.92.2:5555 / 127.0.0.1:5555）
+    // 只有一个运行时：自带运行时（builtin）。字段保留是为了兼容老 settings.json 的合并，
+    // 读设置时会被强制写回 'builtin'（见 getSettings 的迁移）。
+    mode: 'builtin',
     qemuPath: '',
     systemImage: '',
     memoryMB: 0,             // 0 = 由 doctor 按机器内存自动决定
@@ -153,6 +163,12 @@ const DEFAULT_SETTINGS = {
   // 启动欢迎卡：lastDate 记录上次自动弹出的日期（手动打开时一天最多一次），
   // disabled = 用户勾了「不再自动弹出」。
   welcome: { lastDate: '', disabled: false },
+  /**
+   * 自动检测（自动 debug）：定时把机器状态采一遍，把问题清单推给界面。
+   * auto = 是否定时跑；intervalMin = 间隔（分钟）；
+   * notify = 出现「新的严重问题」时弹系统通知（老问题不重复打扰）。
+   */
+  debug: { auto: true, intervalMin: 10, notify: true },
   display: {
     mode: 'window',          // window（竖屏窗口，可自由拉伸） | fullscreen（自动适配屏幕）
     portrait: '900x1600',    // 窗口模式的竖屏分辨率，可在设置里调大小
@@ -173,9 +189,19 @@ const DEFAULT_SETTINGS = {
     // 越过 Android 的平板断点）。红果短剧这类应用只有在平板排版下才有双列剧集页，
     // 也是用户要的「平板模式」。关掉就回到镜像默认密度（手机排版）。
     tabletMode: true,
-    // 窗口模式：true=把安卓画面嵌进 ApkStart 自己的窗口（观感统一）；
-    // false=让模拟器开自己的原生窗口（绕开嵌入固有的黑边/坐标错位/铺不满问题）。
-    windowEmbed: true,
+    // 窗口承载方式：false=让模拟器开自己的原生窗口（Qt 直接渲染，方向/缩放/输入
+    // 全由它自己管，帧率和拖动都跟手）；
+    // true=把安卓画面用 SetParent 塞进 ApkStart 的壳窗口（观感统一，标题栏带
+    // 旋转/最小化/最大化/关闭按钮）。
+    // 0.6.0 起默认原生窗口：嵌入模式要把别人的窗口重新布局进自己客户区，
+    // 在缩放、旋转、切换应用时会掉帧，还常伴随黑边/坐标错位/铺不满 ——
+    // 这类问题在嵌入方式下无法根治，原生窗口从根上绕开。
+    // 两种模式仍然都能在设置里选（display.windowEmbed）。
+    windowEmbed: false,
+    // 镜像内「自动旋转」开关：默认打开（写 guest 的 accelerometer_rotation=1），
+    // 面板方向仍由 wm user-rotation lock + set-ignore-orientation-request 决定，
+    // 不会被传感器带歪。关掉可回到旧的强制锁定行为。
+    autoRotate: true,
   },
 };
 
@@ -239,11 +265,23 @@ function resourcePreset(mode) {
 
 const store = {
   DATA_DIR, ICON_DIR, APK_DIR,
+  existingUser: EXISTING_USER,
   // 商店（MSIX）打包版标记：main.js 据此关掉自更新、跳过需要管理员权限的内核驱动安装
   STORE_BUILD,
 
   getSettings() {
     const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    /**
+     * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
+     * 或者手改出来的任何其它值，一律当 builtin 处理，并把残留的第三方字段删掉。
+     *
+     * 只在读的时候改内存里的对象，不立刻回写磁盘：设置文件是用户的，等他下次
+     * 保存设置时自然落盘；这样「打开一次 ApkStart 就改了他的 settings.json」不会发生。
+     */
+    s.engine.mode = 'builtin';
+    for (const k of ['mumuPath', 'mumuIndex', 'mumuRenderProfile', 'mumuMemoryGB', 'mumuCores', 'fydeosHost']) {
+      delete s.engine[k];
+    }
     // 旧版本默认无头运行：应用进程能起来但屏幕上没有窗口，等效于「打不开」。
     // 无条件迁移到带窗口模式，且不再允许通过旧配置把它关掉。
     s.engine.headless = false;
@@ -252,6 +290,35 @@ const store = {
     // 旧版本用 Android freeform 小窗，现在整个模拟器窗口就是应用窗口，
     // 应用必须铺满这块屏幕，否则会出现「窗口里再套一个小窗」。
     s.freeform = false;
+
+    /**
+     * 窗口承载方式的最终裁决：**默认必须是模拟器原生窗口**。
+     *
+     * 0.5.9 曾把所有人强制迁到嵌入模式，结果嵌入方式（SetParent + 反复
+     * SetWindowPos 重排别人的窗口）在缩放/旋转/切应用时掉帧，并伴随黑边、
+     * 坐标错位、铺不满，是用户反馈最集中的一类问题。原生窗口由模拟器自己
+     * 渲染和排布，这些问题不存在，所以默认改回它。
+     *
+     * 这里不再只看「迁移标记」：只要用户**没有在设置页主动选过**
+     * （windowEmbedChosen 由设置页写入），读到的值一律纠正为原生，并存回磁盘。
+     * 之前的写法只要 windowEmbedMigrated2 已经是 true 就放手不管，于是老配置里
+     * 那句 windowEmbed:true 会一直生效 —— 用户升级后启动看到的仍是美化壳窗口，
+     * 却以为「默认设置没改」。判定基准只认「有没有主动选过」，其它标记都不算数。
+     */
+    try {
+      const raw = readJson(SETTINGS_FILE, {});
+      const d = (raw && raw.display) || {};
+      if (d.windowEmbedChosen !== true && d.windowEmbed !== false) {
+        s.display.windowEmbed = false;
+        s.display.windowEmbedMigrated2 = true;
+        // 立刻回写，保证配置文件本身也回到原生；用户其它字段原样保留。
+        writeJson(SETTINGS_FILE, {
+          ...raw,
+          display: { ...d, windowEmbed: false, windowEmbedMigrated2: true },
+        });
+      }
+    } catch (_) { /* 迁移失败不影响启动，保持读到的值 */ }
+
     return s;
   },
 

@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../i18n');
 /**
  * Windows 窗口代理：与 src/core/win/agent.ps1 里的常驻进程通信。
  *
@@ -40,7 +41,7 @@ class WinAgent extends EventEmitter {
   ensure() {
     if (this.ready) return this.ready;
     this.ready = new Promise((resolve, reject) => {
-      if (!this.available) { reject(new Error('窗口代理不可用')); return; }
+      if (!this.available) { reject(new Error(t('窗口代理不可用'))); return; }
       let out = '';
       let settled = false;
       const proc = spawn('powershell.exe', [
@@ -73,11 +74,11 @@ class WinAgent extends EventEmitter {
         this.ready = null;
         this.hooked = false;
         this.hookConf = null;
-        this._failAll('窗口代理已退出');
+        this._failAll(t('窗口代理已退出'));
         if (wasReady) this.emit('exit');
-        fail(new Error('窗口代理启动失败'));
+        fail(new Error(t('窗口代理启动失败')));
       });
-      setTimeout(() => { if (!settled) fail(new Error('窗口代理启动超时')); }, 15000);
+      setTimeout(() => { if (!settled) fail(new Error(t('窗口代理启动超时'))); }, 15000);
     });
     return this.ready;
   }
@@ -92,7 +93,7 @@ class WinAgent extends EventEmitter {
       sock.on('close', () => {
         this.sock = null;
         this.ready = null;
-        this._failAll('窗口代理连接断开');
+        this._failAll(t('窗口代理连接断开'));
       });
       this.sock = sock;
       this.buf = '';
@@ -127,9 +128,9 @@ class WinAgent extends EventEmitter {
   /** 发送一条命令并等待回包 */
   async call(obj, timeout = CALL_TIMEOUT) {
     await this.ensure();
-    if (!this.sock) throw new Error('窗口代理未连接');
+    if (!this.sock) throw new Error(t('窗口代理未连接'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`窗口代理超时: ${obj.cmd}`)), timeout);
+      const timer = setTimeout(() => reject(new Error(t('窗口代理超时: {cmd}', { cmd: obj.cmd }))), timeout);
       this.pending.push({ resolve, reject, timer });
       this.sock.write(`${JSON.stringify(obj)}\n`);
     });
@@ -147,8 +148,28 @@ class WinAgent extends EventEmitter {
    *        并以此为据决定「鼠标事件的当前窗口是不是我们的」（防止句柄被回收复用）
    */
   async scope(dirs, appPid) {
-    const list = (Array.isArray(dirs) ? dirs : [dirs]).filter(Boolean);
-    const req = { cmd: 'scope', dirs: list.join(';') };
+    /**
+     * 目录必须解析成**真实路径**再交给代理。
+     *
+     * 代理是按「进程可执行文件路径前缀」判断窗口归属的，而 Windows 的
+     * `Process.MainModule.FileName` 返回的是解析过 junction / 符号链接的真实路径。
+     * 如果 ApkStart 自己是从一个目录联接（junction）启动的（例如把 dist\ApkStart-win64-portable
+     * 链接到 build\_packout\...），传给代理的仍是链接路径，前缀就对不上 →
+     * 代理认为「这不是我们的进程」→ 找不到模拟器窗口（日志里的 emu:0）→
+     * 原生窗口接管失败 → 退回嵌入模式，用户看到的就是那个带旋转按钮的壳窗口。
+     * 两个路径都保留：真实路径用于匹配，原路径兼容极少数会返回链接路径的环境。
+     */
+    const raw = (Array.isArray(dirs) ? dirs : [dirs]).filter(Boolean);
+    const list = [];
+    for (const d of raw) {
+      try {
+        const real = fs.realpathSync.native ? fs.realpathSync.native(d) : fs.realpathSync(d);
+        if (real) list.push(real);
+      } catch (_) { /* 目录不存在就只留原路径 */ }
+      list.push(d);
+    }
+    const uniq = [...new Set(list.filter(Boolean))];
+    const req = { cmd: 'scope', dirs: uniq.join(';') };
     if (Number(appPid) > 0) req.pid = Number(appPid);
     return this.call(req, 4000).catch(() => ({ ok: false, n: 0 }));
   }

@@ -29,6 +29,11 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+      # 界面多语言：代码里用到的 key 在 en / vi 词典里都要有；两份词典 key 一致、
+      # {占位符} 与 HTML 标签与中文原文一致、没有空译文（npm test 里的 i18n-test 也会覆盖）
+      - name: 多语言词典检查
+        run: npm run check:i18n
+
       - name: 运行测试
         run: npm test
 
@@ -40,3 +45,31 @@ jobs:
           $out = & .\test\pointer-hook-logic.ps1
           $out | ForEach-Object { Write-Host $_ }
           if (-not ($out -contains 'POINTER_HOOK_LOGIC_OK')) { exit 1 }
+
+  ui-i18n:
+    # 真实 Electron 渲染（主进程 IPC 为 mock，不含安卓运行时）：中文 / English / Tiếng Việt
+    # × 默认尺寸 / 最小窗口 × 100% / 150% / 200% 缩放，检查文字被裁切、按钮文字溢出、横向滚动条。
+    # 截图作为 artifact 上传，便于人工复核。
+    name: 界面多语言布局（Electron）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖（含 Electron）
+        run: npm ci
+
+      - name: 布局检查
+        run: npm run test:ui-i18n
+
+      - name: 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: i18n-layout-screenshots
+          path: test/out/i18n-layout/
+          if-no-files-found: ignore

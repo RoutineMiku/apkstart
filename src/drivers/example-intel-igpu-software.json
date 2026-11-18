@@ -1,0 +1,24 @@
+{
+  "format": "apkstart-driver/1",
+  "id": "example-intel-igpu-software",
+  "name": "Intel 核显 · 软件渲染兜底（示例）",
+  "version": "1.0.0",
+  "author": "ApkStart",
+  "description": "老款 Intel 核显（HD / UHD 6xx 之前）在部分驱动版本上会出现 GLES 初始化失败或花屏。把渲染后端固定为 software，画面一定能出来。",
+  "enabled": false,
+  "priority": 0,
+  "match": {
+    "platform": ["win32"],
+    "gpuVendor": ["intel"]
+  },
+  "effect": {
+    "gpuMode": "software",
+    "configIni": {
+      "hw.gpu.mode": "software",
+      "hw.gpu.enabled": "yes"
+    },
+    "notes": [
+      "画面能出来但游戏会卡：这类机器更适合玩轻量应用"
+    ]
+  }
+}

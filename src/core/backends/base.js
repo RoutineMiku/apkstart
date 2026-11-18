@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../../i18n');
 /**
  * 后端适配层（backend driver）—— 把「安卓从哪来」这件事从 Runtime 里抽出来。
  *
@@ -11,9 +12,10 @@
  *   2. 有一块能拿到 HWND 的安卓画面窗口（用 SetParent 嵌进我们自己的窗口）；
  *   3. 能把这台设备启动 / 停掉。
  *
- * 只要满足这三条，底座可以是自家 QEMU，也可以是用户电脑上已经装好的模拟器
- * （MuMu / 雷电 / 蓝叠…），甚至是 WSA 这类系统级运行时。
- * 本文件定义这层接口；具体实现放在同目录下，一个文件一个底座。
+ * 0.5.6 起只保留一个实现：builtin（自带 emulator + 系统镜像）。
+ * 这层接口留着，是为了让 engine.js 里「安卓从哪来」这件事仍然只有一处入口，
+ * 也方便以后真要替换运行时的时候不用再动引擎主流程；
+ * 但**不再支持任何第三方模拟器 / 系统级运行时**（MuMu / 雷电 / 蓝叠 / WSA 都不接）。
  *
  * 约定（所有实现都必须遵守）：
  *  - 所有方法都可能被并发调用，实现要幂等；重复 ensure() 不能起两台。
@@ -61,7 +63,7 @@ class Backend {
   static get id() { return 'base'; }
 
   /** 界面上显示的名字 */
-  static get label() { return '未命名后端'; }
+  static get label() { return t('未命名后端'); }
 
   /** 一句话说明，设置页用它解释这个底座是什么 */
   static get summary() { return ''; }
@@ -96,7 +98,7 @@ class Backend {
    * @returns {Promise<{ok:boolean, reason?:string, needs?:string}>}
    */
   // eslint-disable-next-line class-methods-use-this
-  async check() { return { ok: false, reason: '未实现' }; }
+  async check() { return { ok: false, reason: t('未实现') }; }
 
   /** 解析可用的 adb 路径（优先自带，其次底座自带的，最后系统 PATH） */
   async resolveAdb() { return ''; }
@@ -107,7 +109,7 @@ class Backend {
    * @returns {Promise<{ok:boolean, serial?:string, adbPath?:string, reused?:boolean, error?:string}>}
    */
   // eslint-disable-next-line class-methods-use-this
-  async ensure(o = {}) { return { ok: false, error: '未实现' }; }
+  async ensure(o = {}) { return { ok: false, error: t('未实现') }; }
 
   /**
    * 安卓画面窗口的候选 HWND（十六进制或十进制的字符串数组，按优先级排序）。
@@ -119,10 +121,8 @@ class Backend {
 
   /**
    * 画面窗口是否已经就绪（可以停止隐藏/开始嵌入）。
-   * 默认：拿得到候选窗口就算就绪。
-   * 第三方底座（例如 MuMu）需要额外确认「窗口真的出现在桌面上」，
-   * 因为 Windows 在 SetParent 时会隐式清掉 WS_VISIBLE，
-   * 把还没显示过的窗口塞进宿主里，宿主那边会是全黑且它自己也不会再显示。
+   * 默认：拿得到候选窗口就算就绪。自带 emulator 的窗口是我们自己拉起来的，
+   * 默认实现就够用；保留这个钩子是为了将来换运行时时有地方等画面。
    *
    * @param {object} o { isEmbedded?: () => boolean }
    * @returns {Promise<{ok:boolean, reason?:string}>}
@@ -141,11 +141,11 @@ class Backend {
 
   /** 停止运行时 */
   // eslint-disable-next-line class-methods-use-this
-  async stop(o = {}) { return { ok: false, error: '未实现' }; }
+  async stop(o = {}) { return { ok: false, error: t('未实现') }; }
 
   /** 下载/部署缺失组件（只有带 CAPS.provision 的底座需要实现） */
   // eslint-disable-next-line class-methods-use-this
-  async install(component, onProgress) { return { ok: false, error: '该后端不支持自动部署' }; }
+  async install(component, onProgress) { return { ok: false, error: t('该后端不支持自动部署') }; }
 
   /** 占用统计（设置页「运行时占用」） */
   // eslint-disable-next-line class-methods-use-this
@@ -157,11 +157,11 @@ class Backend {
 
   /** 调整数据分区 */
   // eslint-disable-next-line class-methods-use-this
-  async resizeData(mb) { return { ok: false, error: '该后端不支持调整数据分区' }; }
+  async resizeData(mb) { return { ok: false, error: t('该后端不支持调整数据分区') }; }
 
   /** 彻底重置安卓数据 */
   // eslint-disable-next-line class-methods-use-this
-  async resetData() { return { ok: false, error: '该后端不支持重置数据' }; }
+  async resetData() { return { ok: false, error: t('该后端不支持重置数据') }; }
 
   /** 释放资源（ApkStart 退出时调用；默认什么都不做） */
   // eslint-disable-next-line class-methods-use-this

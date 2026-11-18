@@ -2,6 +2,8 @@
 /* 应用窗口标题栏：只有 旋转 / 最小化 / 最大化 / 关闭，其余设置都在 ApkStart 主界面 */
 const api = window.apkstart;
 const $ = (id) => document.getElementById(id);
+const t = window.t || ((s) => s);
+if (window.translateDom) window.translateDom(document.body);
 
 const btn = {
   rotate: $('btnRotate'),
@@ -33,7 +35,7 @@ window.addEventListener('keydown', (e) => {
 
 function applyState(s) {
   if (!s) return;
-  $('appName').textContent = s.label || '应用';
+  $('appName').textContent = s.label || t('应用');
   $('bootName').textContent = s.label || '';
   const icon = s.iconUrl || '';
   if (icon) {
@@ -52,4 +54,6 @@ function applyState(s) {
 }
 
 api.shell.onState(applyState);
+// 切换界面语言时外壳不 reload（里面嵌着正在运行的安卓画面），就地刷新一次文字
+window.addEventListener('i18n:changed', () => { api.shell.state().then(applyState).catch(() => {}); });
 api.shell.state().then(applyState).catch(() => {});

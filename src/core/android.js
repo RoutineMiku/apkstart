@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('../i18n');
 /**
  * 安卓系统设置：不需要进安卓桌面，也不用装第三方工具，
  * 直接通过 adb 把常用的系统开关做成 ApkStart 设置页里的按钮。
@@ -45,7 +46,7 @@ class AndroidSettings {
 
   async client() {
     const rt = await this.runtime.ensure();
-    if (!rt.ok) throw new Error(rt.error || '运行时未就绪');
+    if (!rt.ok) throw new Error(rt.error || t('运行时未就绪'));
     return rt.client;
   }
 

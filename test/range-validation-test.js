@@ -8,6 +8,8 @@
  * 运行：node test/range-validation-test.js
  */
 const assert = require('assert/strict');
+// 按稳定错误码判断，不依赖界面语言（中文/英文/越南文的报错文案都可能出现）
+const isRangeErr = (e) => e && e.code === 'RANGE_MISMATCH';
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
@@ -88,14 +90,14 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
       await atest('单流 206 范围不符时拒绝', async () => {
         const out = path.join(dir, 'resume');
         fs.writeFileSync(out, 'xxxx'); // 让请求带 Range: bytes=4-
-        await assert.rejects(download(`${base}/bad`, out), /范围/);
+        await assert.rejects(download(`${base}/bad`, out), isRangeErr);
       });
 
       await atest('downloadParallel 范围不符时拒绝，不留半截文件', async () => {
         const out = path.join(dir, 'two');
         await assert.rejects(
           downloadParallel(`${base}/bad`, out, { connections: 2, minChunk: 2, retries: 1 }),
-          /范围/,
+          isRangeErr,
         );
         assert.equal(fs.existsSync(out), false, '失败后目标文件应被清理');
       });
@@ -104,7 +106,7 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
         const out = path.join(dir, 'three');
         await assert.rejects(
           downloadMulti([`${base}/bad1`, `${base}/bad2`], out, { connections: 2, minChunk: 2, retries: 1 }),
-          /范围/,
+          isRangeErr,
         );
       });
 
