@@ -141,9 +141,9 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const p = doctor.autoProfile({ ...common, settings: { engine: { autoMemory: true, gpuMode: 'auto', memoryMB: 0, cores: 0 } } });
     const text = doctor.describeProfile(p);
     assert(p.gpu === 'host' || p.gpu === 'swangle', `应为 host 或 swangle（AMD 机器），实际 ${p.gpu}`);
-    assert(p.accelOk === true && text.includes('硬件加速'), text);
+    assert(p.accelOk === true && (text.includes('硬件加速') || text.includes('Hardware Accel')), text);
     assert(!text.includes('swiftshader_indirect'), text);
-    assert(text.includes('端口 5562'), text);
+    assert(text.includes('端口 5562') || text.includes('Port 5562'), text);
 
     // 老引擎仍应用老后端；用户手动填的高级参数仍然生效
     const old = doctor.autoProfile({ ...common, emulatorVersion: '35.1.4.0', settings: {} });
@@ -894,7 +894,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000, host,
     });
     assert(manual.cores === 6, '用户手动指定的核数必须优先于轻量模式');
-    assert(/轻量容器/.test(doctor.describeProfile(auto)), '诊断摘要应标出轻量容器');
+    assert(/轻量容器|Lite container/i.test(doctor.describeProfile(auto)), '诊断摘要应标出轻量容器');
   });
 
   await test('全局鼠标钩子默认关闭，且窗口代理不再长时间阻塞消息泵', () => {
@@ -997,8 +997,8 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!/-prop[\s\S]{0,80}persist\.sys\.locale/.test(emuCode),
       '不能再用无效的 -prop persist.sys.locale');
     assert(/_guestLocale/.test(emuJs), '要有可配置的语言来源');
-    // 默认中文
-    assert(/locale:\s*'zh-CN'/.test(storeJs), '默认语言必须是简体中文');
+    // 默认语言（auto 跟随应用语言或 zh-CN）
+    assert(/locale:\s*'(auto|zh-CN)'/.test(storeJs), '默认语言必须是 auto 或 zh-CN');
     assert(/chineseIme:\s*true/.test(storeJs), '默认开启中文输入法');
 
     // 输入法：随包带 APK、开机装好并启用
@@ -2505,7 +2505,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/openWindowsFeatures: \(\) => invoke\('provision:openWindowsFeatures'\)/.test(preloadJs),
       'preload 要暴露 openWindowsFeatures');
     // 8) 软件模拟下第一次启动要弹一次系统通知（设置里的自检项用户很可能没看到）
-    assert(/let accelWarned = false;/.test(mainJs) && /正在以软件模拟运行/.test(mainJs),
+    assert(/let accelWarned = false;/.test(mainJs) && (/正在以软件模拟运行/.test(mainJs) || /accel\.softwareWarningTitle/.test(mainJs)),
       '软件模拟要提醒一次');
   });
 

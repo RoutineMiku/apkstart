@@ -2,6 +2,12 @@
 
 <p align="center"><img src="docs/images/logo.png" alt="ApkStart Logo" width="160" /></p>
 
+<p align="center">
+  <a href="README.md"><b>简体中文</b></a> | 
+  <a href="README_en.md">English</a> | 
+  <a href="README_ar.md">العربية</a>
+</p>
+
 [![CI](https://github.com/RoutineMiku/apkstart/actions/workflows/ci.yml/badge.svg)](https://github.com/RoutineMiku/apkstart/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/RoutineMiku/apkstart?include_prereleases&sort=semver)](https://github.com/RoutineMiku/apkstart/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -15,6 +21,7 @@
 - 🪟 **应用就是一个窗口**：运行时以**带窗口**模式启动（无头模式下 Android 不出 VSYNC，应用进程活着但屏幕上是空的），ApkStart 把这块窗口改标题、换真实应用图标、按竖屏比例摆好位置，就是一个独立应用窗口；**全屏**铺满屏幕高度并居中，**窗口模式**可自由拖动缩放且按应用记忆尺寸。
 - 🔍 **能被 Windows 搜到**：安装后同时创建桌面 + 开始菜单（`程序\ApkStart\`）快捷方式，按应用名在开始菜单搜索即可直达，任务栏按应用分组。
 - 📁 **数据互通**：`%USERPROFILE%\ApkStartShared` ↔ 安卓内 `/sdcard/ApkStartShared` 持续双向同步，安卓应用存下的文件直接出现在本机。
+- 🌐 **多语言与 RTL 支持**：完整支持**简体中文 (`zh`)**、**英语 (`en`)**与**阿拉伯语 (`ar`，完整 RTL 镜像排版)**，可在设置页即时切换且无需重启。
 - 🪶 **极致轻量**：壳层本身零第三方依赖（连 ZIP / PNG / ICO / AXML 解析都是手写的），运行时按需拉起，空闲自动回收；也可以完全复用你机器上已有的安卓运行时，额外占用为零。
 
 ![主界面](docs/images/app.png)

@@ -11,7 +11,27 @@ const state = {
   installing: false,
   setupBusy: null,
   menuPkg: null,
+  locale: 'en',
 };
+
+const t = (key, params, loc) => {
+  if (api && api.t) return api.t(key, params, loc || state.locale);
+  if (window.apkstartI18n) return window.apkstartI18n.t(key, params, loc || state.locale);
+  return key;
+};
+
+// Synchronously apply initial language to avoid any Chinese flash
+try {
+  const _i18n = window.apkstartI18n || (api && api.i18n);
+  if (_i18n) {
+    const _initLoc = _i18n.getLocale() || 'en';
+    state.locale = _initLoc;
+    _i18n.translateDOM(document, _initLoc);
+    document.documentElement.lang = _initLoc;
+    document.documentElement.dir = (_initLoc === 'ar' ? 'rtl' : 'ltr');
+  }
+} catch (_) {}
+
 
 /* ---------------- 工具 ---------------- */
 
@@ -22,8 +42,8 @@ function esc(s) {
 }
 
 function initialOf(label) {
-  const t = String(label || '?').trim();
-  return (t[0] || '?').toUpperCase();
+  const txt = String(label || '?').trim();
+  return (txt[0] || '?').toUpperCase();
 }
 
 function fmtSize(bytes) {
@@ -35,11 +55,12 @@ function fmtSize(bytes) {
 function relTime(ts) {
   if (!ts) return '';
   const d = Date.now() - ts;
-  if (d < 60000) return '刚刚';
-  if (d < 3600000) return `${Math.floor(d / 60000)} 分钟前`;
-  if (d < 86400000) return `${Math.floor(d / 3600000)} 小时前`;
-  if (d < 86400000 * 30) return `${Math.floor(d / 86400000)} 天前`;
-  return new Date(ts).toLocaleDateString('zh-CN');
+  if (d < 60000) return t('time.justNow');
+  if (d < 3600000) return t('time.minutesAgo', { n: Math.floor(d / 60000) });
+  if (d < 86400000) return t('time.hoursAgo', { n: Math.floor(d / 3600000) });
+  if (d < 86400000 * 30) return t('time.daysAgo', { n: Math.floor(d / 86400000) });
+  const locCode = state.locale === 'zh' ? 'zh-CN' : (state.locale === 'ar' ? 'ar' : 'en-US');
+  return new Date(ts).toLocaleDateString(locCode);
 }
 
 /**
@@ -158,8 +179,8 @@ function renderGrid() {
   if (!hasAny) {
     const s = state.status;
     $('emptyHint').textContent = s && s.adbOk === false
-      ? '首次使用：打开右上角设置 → 运行时 → 一键完成，再回来安装应用即可。'
-      : '提示：所有应用共享同一个 Android 运行时，所以第二个应用的启动几乎是瞬时的。';
+      ? t('empty.hintFirst')
+      : t('empty.hintShared');
     grid.innerHTML = '';
     return;
   }
@@ -170,24 +191,24 @@ function renderGrid() {
   grid.innerHTML = apps.map((a) => `
     <div class="card" data-pkg="${esc(a.package)}" title="${esc(a.label)} · ${esc(a.package)}">
       ${a.pinned ? '<span class="pin">★</span>' : ''}
-      ${a.running ? '<span class="badge-run" title="正在运行"></span>' : ''}
+      ${a.running ? `<span class="badge-run" title="${esc(t('card.runningBadge'))}"></span>` : ''}
       <div class="icon">
         ${a.iconUrl
           ? `<img src="${esc(a.iconUrl)}" alt="" draggable="false" />`
           : `<div class="fallback" style="background:${esc(a.accent || '#9aa6b2')}">${esc(initialOf(a.label))}</div>`}
       </div>
       <div class="name">${esc(a.label)}</div>
-      <div class="meta">${a.running ? '运行中' : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
-      <div class="open-hint">${a.running ? '切换到前台' : '打开'}</div>
+      <div class="meta">${a.running ? esc(t('card.running')) : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
+      <div class="open-hint">${a.running ? esc(t('card.bringToFront')) : esc(t('card.open'))}</div>
     </div>
   `).join('') + `
-    <div class="card card-add" id="cardAdd" role="button" tabindex="0" title="拖入 APK 文件，或点击选择">
+    <div class="card card-add" id="cardAdd" role="button" tabindex="0" title="${esc(t('card.addTitle'))}">
       <div class="add-plus" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><path d="M12 6v12"/><path d="M6 12h12"/></svg>
       </div>
-      <div class="name">添加应用</div>
-      <div class="meta">拖入 APK 即可安装</div>
+      <div class="name">${esc(t('card.addName'))}</div>
+      <div class="meta">${esc(t('card.addMeta'))}</div>
     </div>
   `;
 }
@@ -206,7 +227,7 @@ async function refreshApps() {
 
 function updateStats() {
   const n = state.apps.length;
-  $('statusStats').textContent = n ? `${n} 个应用` : '暂无应用';
+  $('statusStats').textContent = n ? t('status.appCount', { n }) : t('status.noApps');
 }
 
 async function refreshStatus() {
@@ -219,51 +240,50 @@ async function refreshStatus() {
 
     if (!s.adbOk) {
       dot.className = 'dot err';
-      text.textContent = '运行时未部署 —— 打开设置 → 运行时，一键完成';
-      tag.textContent = '需要部署';
+      text.textContent = t('status.notDeployed');
+      tag.textContent = t('status.tagNeedDeploy');
       tag.className = 'brand-tag';
     } else if (s.deviceOnline) {
       dot.className = 'dot ok';
-      text.textContent = `运行时已就绪 · Android ${s.android || '?'}${s.freeform ? ' · 独立窗口已启用' : ''}`;
+      text.textContent = s.freeform ? t('status.readyFreeform', { android: s.android || '' }) : t('status.ready', { android: s.android || '' });
       tag.textContent = `Android ${s.android || ''}`.trim();
       tag.className = 'brand-tag ok';
     } else if (s.phase === 'booting' || s.vmStarting) {
       dot.className = 'dot warn';
-      text.textContent = '正在引导 Android…';
-      tag.textContent = '引导中';
+      text.textContent = t('status.booting');
+      tag.textContent = t('status.tagBooting');
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'accel') {
       dot.className = 'dot warn';
-      // 说清「怎么修」而不是只说「没开」——这句是状态条上最容易被看到的位置
-      text.textContent = '未启用硬件加速：已回退软件模拟（很慢）。点右下角「环境自检 → 修复」开启';
-      tag.textContent = '软件模拟';
+      text.textContent = t('status.accelSoftware');
+      tag.textContent = t('status.tagSoftware');
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'sysimg') {
       dot.className = 'dot err';
-      text.textContent = '缺少 Android 14 通用系统镜像 —— 设置 → 运行时里下载（约 1.5GB，只下一次）';
-      tag.textContent = '待下载镜像';
+      text.textContent = t('status.missingSysimg');
+      tag.textContent = t('status.tagDownloadImg');
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'emulator') {
       dot.className = 'dot err';
-      text.textContent = '运行时引擎未安装 —— 打开设置 → 运行时一键完成';
-      tag.textContent = '需要部署';
+      text.textContent = t('status.missingEmulator');
+      tag.textContent = t('status.tagNeedDeploy');
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'boot') {
       dot.className = 'dot warn';
-      text.textContent = '运行时已就绪 —— 安装 APK 或双击桌面图标会自动开机';
-      tag.textContent = '待开机';
+      text.textContent = t('status.readyWaitingBoot');
+      tag.textContent = t('status.tagWaitingBoot');
       tag.className = 'brand-tag';
     } else if (s.installing) {
       dot.className = 'dot warn';
-      text.textContent = '安装程序运行中 —— 请在虚拟机窗口里完成安装';
-      tag.textContent = '安装中';
+      text.textContent = t('status.installing');
+      tag.textContent = t('status.tagInstalling');
       tag.className = 'brand-tag';
     } else {
       dot.className = 'dot';
       text.textContent = s.installed
-        ? '运行时待机（安装或打开应用时会自动拉起）'
-        : '运行时尚未安装 Android 系统 —— 打开设置 → 运行时继续';
-      tag.textContent = s.installed ? '待机' : '待安装';
+        ? t('status.standby')
+        : t('status.notInstalledSys');
+      tag.textContent = s.installed ? t('status.tagStandby') : t('status.tagWaitingInstall');
       tag.className = 'brand-tag';
     }
     $('statusDevice').textContent = s.deviceOnline ? (s.serial || '') : '';
@@ -276,17 +296,15 @@ async function refreshStatus() {
       netEl.hidden = !show;
       if (netSep) netSep.hidden = !show;
       if (show) {
-        netEl.textContent = s.network.ok ? `网络正常 ${s.network.ip || ''}`.trim() : '虚拟机未联网';
+        netEl.textContent = s.network.ok ? t('status.netOk', { ip: s.network.ip || '' }).trim() : t('status.netWarn');
         netEl.className = 'status-item status-net ' + (s.network.ok ? 'ok' : 'warn');
-        netEl.title = s.network.ok
-          ? '安卓虚拟机已联网，联网类应用可以正常加载'
-          : '安卓虚拟机没有网络，联网页面会一直是空白/报错。可在「设置 → 修复网络」处理';
+        netEl.title = s.network.ok ? t('status.netTitleOk') : t('status.netTitleWarn');
       }
     }
 
     renderSetup(s);
   } catch (e) {
-    $('statusText').textContent = `状态检查失败：${e.message}`;
+    $('statusText').textContent = t('status.checkFailed', { error: e.message });
   }
 }
 
@@ -337,16 +355,16 @@ function renderSetup(s) {
   const stateText = $('setupStateText');
   if (stateText) {
     const missing = [];
-    if (!adbDone) missing.push('adb');
-    if (!emuDone0) missing.push('引擎');
-    if (!imgDone0) missing.push('系统镜像');
+    if (!adbDone) missing.push(t('setup.adb'));
+    if (!emuDone0) missing.push(t('setup.engine'));
+    if (!imgDone0) missing.push(t('setup.sysimg'));
     stateText.textContent = s.deviceOnline
-      ? `已就绪 · Android ${s.android || ''}`
+      ? t('setup.readyAndroid', { ver: s.android || '' })
       : s.phase === 'booting' || s.vmStarting
-        ? '正在引导 Android…'
+        ? t('setup.bootingAndroid')
         : allDone0
-          ? '组件齐全 · 待开机（打开应用时自动拉起）'
-          : `缺少 ${missing.join('、')}${accelOk ? '' : '（无硬件加速，将回退软件模拟）'}`;
+          ? t('setup.allDoneStandby')
+          : t('setup.missingComponents', { missing: missing.join(', '), accelNote: accelOk ? '' : t('setup.noAccelFallback') });
     stateText.title = s.autoProfile || accel.note || hv.note || '';
   }
 
@@ -359,39 +377,39 @@ function renderSetup(s) {
   // 且首次启动会在后台自动跑，用户不需要逐步点击。
   const allDone = !!(env.adb && env.adb.ok) && emuDone && imgDone;
   const left = [];
-  if (!(env.adb && env.adb.ok)) left.push('adb 工具链');
-  if (!emuDone) left.push('Android 运行时');
-  if (!imgDone) left.push('系统镜像');
+  if (!(env.adb && env.adb.ok)) left.push(t('setup.adbToolchain'));
+  if (!emuDone) left.push(t('setup.androidRuntime'));
+  if (!imgDone) left.push(t('setup.systemImage'));
   const step = {
     key: 'all',
     index: 1,
-    title: allDone ? '一切就绪' : '一键完成',
-    tag: allDone ? '已自动完成' : '自动',
+    title: allDone ? t('setup.allReady') : t('setup.oneClickDone'),
+    tag: allDone ? t('setup.autoCompleted') : t('setup.autoTag'),
     done: allDone,
     busy: !!busy,
     desc: s.deviceOnline
-      ? `Android ${s.android || ''} 已就绪 · 应用窗口会按屏幕自动适配`
+      ? t('setup.readyOnlineDesc', { ver: s.android || '' })
       : booting
-        ? '正在引导 Android…'
+        ? t('setup.bootingAndroid')
         : allDone
-          ? '组件齐全，双击任意 APK 或桌面图标即会自动开机'
-          : `还差 ${left.join('、')}；点下面「一键完成」，会在后台一次装好并自动开机`,
+          ? t('setup.allDoneDoubleclickDesc')
+          : t('setup.remainingDesc', { left: left.join(', ') }),
     actions: s.deviceOnline
-      ? '<button class="btn ghost sm" data-act="vmStop">停止运行时</button>'
+      ? `<button class="btn ghost sm" data-act="vmStop">${esc(t('setup.stopRuntime'))}</button>`
       : '',
   };
 
   $('setupSteps').innerHTML = stepRow(step);
   $('btnDeployAll').disabled = !!busy;
-  $('btnDeployAll').textContent = busy ? '准备中…' : (allDone ? '已完成 · 点此复查' : '一键完成');
+  $('btnDeployAll').textContent = busy ? t('setup.preparing') : (allDone ? t('setup.completedRecheck') : t('setup.oneClickDone'));
   // 「上次为什么没起来」优先显示落盘的失败记录：进程重启后内存里的 diagnosis 是空的，
   // 只显示 autoProfile 会让用户完全看不出原因（issue #20/#25 的报告就是这样）。
   const lf = s.lastFailure;
   const lastMsg = (lf && lf.diagnosis && lf.diagnosis.title)
-    ? `上次启动失败：${lf.diagnosis.title}`
-    : (s.diagnosis ? `上次启动自动诊断：${s.diagnosis.title}` : '');
+    ? t('setup.lastBootFail', { title: lf.diagnosis.title })
+    : (s.diagnosis ? t('setup.lastDiagnosis', { title: s.diagnosis.title }) : '');
   $('setupNote').textContent = lastMsg
-    || s.autoProfile || '全自动：无需选择镜像、无需启用加速、无需调内存';
+    || s.autoProfile || t('setup.fullAutoDesc');
 }
 
 function store_getDiskSize() {
@@ -433,18 +451,18 @@ async function deployAll() {
     // 用户点「一键部署」属于明确的手动重试，绕过失败冷却
     const r = await api.autoDeploy({ force: true });
     if (!r || !r.ok) {
-      toast({ title: '准备失败', body: (r && r.error) || '请检查网络后重试', type: 'error', sticky: true });
+      toast({ title: t('toast.deployFail'), body: (r && r.error) || t('toast.checkNetwork'), type: 'error', sticky: true });
       return;
     }
     await refreshStatus();
-    toast({ title: '组件已就绪，正在自动开机…', body: '首次约 1-3 分钟，之后几秒即可。', type: 'info' });
+    toast({ title: t('toast.componentsReadyBooting'), body: t('toast.firstBootTakesMinutes'), type: 'info' });
     const started = await api.runtimeStart();
     await refreshStatus();
     toast(started && started.ok
-      ? { title: '运行时已就绪', body: '现在把 APK 拖进窗口，或双击桌面图标即可。', type: 'ok' }
-      : { title: '开机未完成', body: (started && started.error) || '请导出诊断报告查看原因', type: 'error', sticky: true });
+      ? { title: t('toast.runtimeReady'), body: t('toast.runtimeReadyDragApk'), type: 'ok' }
+      : { title: t('toast.bootIncomplete'), body: (started && started.error) || t('toast.exportDiagPrompt'), type: 'error', sticky: true });
   } catch (e) {
-    toast({ title: '准备失败', body: e.message, type: 'error', sticky: true });
+    toast({ title: t('toast.deployFail'), body: e.message, type: 'error', sticky: true });
   } finally {
     setStepBusy('all', false);
     await refreshStatus();
@@ -453,7 +471,7 @@ async function deployAll() {
 }
 
 async function runStep(key) {
-  if (state.setupBusy) return { ok: false, error: '已有部署任务进行中' };
+  if (state.setupBusy) return { ok: false, error: t('toast.setupTaskInProgress') };
   setStepBusy(key, true);
   let r;
   try {
@@ -462,18 +480,18 @@ async function runStep(key) {
     else if (key === 'sysimg') r = await api.installSysimg();
     else if (key === 'accel') {
       const t = toast({
-        title: '正在安装硬件加速驱动…',
-        body: '请在弹出的是否允许窗口点「是」',
+        title: t('toast.installingAccelDriver'),
+        body: t('toast.clickYesOnUac'),
         sticky: true,
         spinner: true,
       });
       r = await api.enableAccel();
-      if (r.ok) t.update({ title: '硬件加速已启用', type: 'ok' });
-      else t.update({ title: '加速未启用', body: r.error, type: 'error', sticky: true });
+      if (r.ok) t.update({ title: t('toast.accelEnabled'), type: 'ok' });
+      else t.update({ title: t('toast.accelNotEnabled'), body: r.error, type: 'error', sticky: true });
     } else if (key === 'qemu') r = await api.installQemu();
     else if (key === 'iso') r = await api.downloadIso();
     else if (key === 'disk') r = await api.createDisk(store_getDiskSize());
-    else r = { ok: false, error: '未知步骤' };
+    else r = { ok: false, error: t('common.unknown') };
   } catch (e) {
     r = { ok: false, error: e.message };
   }
@@ -485,12 +503,12 @@ async function runStep(key) {
 async function startInstall() {
   const r = await api.startInstaller();
   if (!r.ok) {
-    toast({ title: '无法启动安装环境', body: r.error, type: 'error', sticky: true });
+    toast({ title: t('toast.cannotStartInstallEnv'), body: r.error, type: 'error', sticky: true });
     return;
   }
   $('setupGuide').hidden = false;
   $('setupGuide').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  toast({ title: '虚拟机窗口已打开', body: '按下方 6 步完成安装；装好后点「我已安装完成」。', type: 'ok', sticky: true });
+  toast({ title: t('toast.vmWindowOpened'), body: t('toast.vmFollowSteps'), type: 'ok', sticky: true });
 }
 
 async function markInstalled() {
@@ -498,7 +516,7 @@ async function markInstalled() {
   await api.runtimeStop();
   $('setupGuide').hidden = true;
   await refreshStatus();
-  toast({ title: '安装完成，运行时已接管', body: '现在可以直接把 APK 拖进来安装了。', type: 'ok' });
+  toast({ title: t('toast.installDoneRuntimeTookOver'), body: t('toast.nowDragApk'), type: 'ok' });
 }
 
 
@@ -507,24 +525,21 @@ async function markInstalled() {
 
 /** 把安装失败翻译成「下一步该做什么」，只对最常见的几种做提示，其它原样显示 */
 function friendlyInstallErrorText(msg) {
-  const s = String(msg || '未知错误');
+  const s = String(msg || t('common.failed'));
   if (/INSUFFICIENT_STORAGE|not enough space|空间不足|ENOSPC/i.test(s)) {
-    return `${s}\n安卓数据分区不够用：设置 → 性能与资源占用 → 安卓数据分区调大后点「立即扩容」。`;
+    return `${s}\n${t('install.err.storage')}`;
   }
-  // 只有真正失败才走到这里：切换镜像是「进行中」的进度提示（install:progress），
-  // 绝不能在红色失败横幅里再说「正在重试」——那会让用户以为还在处理，其实是真的失败了。
   if (/NO_MATCHING_ABIS/i.test(s)) {
     return /已切换到.*仍然安装失败|abiRetried/i.test(s)
-      ? `${s}\nARM 兼容镜像已启用仍装不上，请到「设置 → 诊断与修复」导出诊断报告反馈。`
-      : `${s}\n这个包只有 ARM 库。程序会自动切到兼容镜像重装一次，请留意后续提示。`;
+      ? `${s}\n${t('install.err.armFailed')}`
+      : `${s}\n${t('install.err.armSwitching')}`;
   }
   if (/INSTALL_FAILED_ALREADY_EXISTS|signatures do not match/i.test(s)) {
-    return `${s}\n同包名但签名不同（常见于从别的渠道装过）。在应用卡片右键「卸载」后再装。`;
+    return `${s}\n${t('install.err.sigMismatch')}`;
   }
-  if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(s)) return `${s}\n已装版本更高，先在右键菜单里卸载再装。`;
+  if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(s)) return `${s}\n${t('install.err.downgrade')}`;
   if (/ERR_FS_FILE_TOO_LARGE|greater than possible Buffer|Cannot allocate|ENOMEM|out of memory/i.test(s)) {
-    return `${s}\n这个安装包过大或内存不足，解析被系统拒绝了。请确认磁盘与内存充足后重试；`
-      + '仍失败请把安装包路径换成纯英文短路径（如 D:\\a.apk）。';
+    return `${s}\n${t('install.err.tooLarge')}`;
   }
   return s;
 }
@@ -537,7 +552,7 @@ let installToast = null;
 async function installFiles(paths) {
   if (!paths || !paths.length) return;
   if (state.installing) {
-    toast({ title: '已有安装任务在进行', body: '请等当前应用装完再继续。' });
+    toast({ title: t('toast.installTaskBusy'), body: t('toast.installTaskBusyDesc') });
     return;
   }
   state.installing = true;
@@ -546,32 +561,28 @@ async function installFiles(paths) {
 
   for (const p of paths) {
     const name = p.split(/[\\/]/).pop();
-    const t = toast({ title: `正在安装 ${name}`, body: '解析 APK…', progress: 8, sticky: true, spinner: true });
-    installToast = t;
+    const tEl = toast({ title: t('toast.installingApp', { name }), body: t('toast.parsingApk'), progress: 8, sticky: true, spinner: true });
+    installToast = tEl;
     let off = () => {};
     try {
       off = api.on('install:progress', (pr) => {
         const base = { parse: 12, 'parse-done': 24, runtime: 38, install: 62, shortcut: 88, done: 100 }[pr.stage] || 50;
         const pct = pr.percent != null ? Math.min(60, Math.round((pr.percent / 100) * 60)) : base;
-        t.update({ title: pr.meta ? `正在安装 ${pr.meta.label}` : `正在安装 ${name}`, body: pr.message, progress: pct });
+        tEl.update({ title: pr.meta ? t('toast.installingApp', { name: pr.meta.label }) : t('toast.installingApp', { name }), body: pr.message, progress: pct });
       });
       const r = await api.installApk(p);
-      t.update({ title: `${r.app.label} 已安装`, body: r.app.shortcutPath ? '桌面快捷方式已创建，双击即可直接打开。' : '可在应用卡片右键创建桌面快捷方式。', progress: 100, type: 'ok' });
-      t.el.querySelector('.spinner')?.remove();
-      setTimeout(t.dismiss, 3600);
+      tEl.update({ title: t('toast.installedOk', { name: r.app.label }), body: r.app.shortcutPath ? t('toast.installedShortcutOk') : t('toast.installedCardHint'), progress: 100, type: 'ok' });
+      tEl.el.querySelector('.spinner')?.remove();
+      setTimeout(tEl.dismiss, 3600);
       if (r.warnings && r.warnings.length) {
-        toast({ title: `${r.app.label} 兼容性提示`, body: r.warnings.join(' '), type: 'error', sticky: false });
+        toast({ title: t('toast.compatWarning', { name: r.app.label }), body: r.warnings.join(' '), type: 'error', sticky: false });
       }
       ok++;
     } catch (e) {
       failed++;
-      // 先把那条「正在安装…」的 sticky 提示收掉，否则它会一直转圈、还继续被
-      // 运行时日志刷新 —— 用户看到的就是「失败信息一直在循环」。
-      // 错误提示统一由下面的 install:error 监听器负责（带文件名与中文原因），
-      // 这里不再重复弹一条。
       try { off(); } catch (_) { /* ignore */ }
-      t.dismiss();
-      if (installToast === t) installToast = null;
+      tEl.dismiss();
+      if (installToast === tEl) installToast = null;
     } finally {
       try { off(); } catch (_) { /* ignore */ }
     }
@@ -588,20 +599,20 @@ async function launchApp(pkg) {
   const app = state.apps.find((a) => a.package === pkg);
   state.launchPkg = pkg;
   const t = toast({
-    title: `正在打开 ${app ? app.label : pkg}`,
-    body: '首次启动需要预热运行时，请稍候…',
+    title: t('toast.appLaunching', { name: app ? app.label : pkg }),
+    body: t('toast.launchWarming'),
     sticky: true,
     spinner: true,
   });
   const r = await api.launch(pkg);
   if (r.ok) {
     // 应用有自己的窗口，主界面自动收起；这里只留一句提示，然后隐藏窗口
-    t.update({ title: '已启动', body: '应用正在独立窗口中运行（顶部可旋转屏幕）。', type: 'ok' });
+    t.update({ title: t('toast.appLaunched'), body: t('toast.appLaunchedDesc'), type: 'ok' });
     setTimeout(t.dismiss, 1600);
     setTimeout(() => api.winHide(), 900);
     setTimeout(refreshApps, 1200);
   } else {
-    t.update({ title: '启动失败', body: r.error, type: 'error' });
+    t.update({ title: t('toast.launchFailed'), body: r.error, type: 'error' });
     setTimeout(t.dismiss, 6000);
   }
 }
@@ -609,44 +620,41 @@ async function launchApp(pkg) {
 async function createShortcut(pkg) {
   try {
     const r = await api.createShortcut(pkg);
-    toast({ title: '桌面快捷方式已创建', body: r.path, type: 'ok' });
+    toast({ title: t('toast.shortcutCreated'), body: r.path, type: 'ok' });
     refreshApps();
   } catch (e) {
-    toast({ title: '创建快捷方式失败', body: e.message, type: 'error' });
+    toast({ title: t('toast.shortcutFailed'), body: e.message, type: 'error' });
   }
 }
 
 async function uninstall(pkg) {
   const app = state.apps.find((a) => a.package === pkg);
   if (!app) return;
-  const ok = window.confirm(`确定卸载「${app.label}」？\n\n应用数据会一并被清除，桌面快捷方式也会被删除。`);
+  const ok = window.confirm(t('confirm.uninstallApp', { name: app.label }));
   if (!ok) return;
   try {
     await api.uninstall(pkg);
-    toast({ title: '已卸载', body: app.label, type: 'ok' });
+    toast({ title: t('toast.uninstalled'), body: app.label, type: 'ok' });
     refreshApps();
   } catch (e) {
-    toast({ title: '卸载失败', body: e.message, type: 'error' });
+    toast({ title: t('toast.uninstallFailed'), body: e.message, type: 'error' });
   }
 }
 
 /* ---------------- 右键菜单 ---------------- */
 
 const MENU_ITEMS = [
-  { key: 'open', label: '打开应用', kbd: 'Enter' },
-  // 只在应用真的在运行时才出现（见 showMenu 里的过滤）。
-  // 以前完全没有这一项，独立窗口模式下又没有可点的关闭按钮，
-  // 应用一起来就关不掉，只能退到托盘退出整个 ApkStart。
-  { key: 'stop', label: '关闭应用', onlyRunning: true },
-  { key: 'shortcut', label: '创建桌面快捷方式' },
-  { key: 'orientation', label: '横屏 / 竖屏' },
-  { key: 'pin', label: '固定到顶部' },
-  { key: 'keymap', label: '按键映射…' },
+  { key: 'open', labelKey: 'ctx.open', label: 'Open', kbd: 'Enter' },
+  { key: 'stop', labelKey: 'ctx.stop', label: 'Close', onlyRunning: true },
+  { key: 'shortcut', labelKey: 'ctx.shortcut', label: 'Create Shortcut' },
+  { key: 'orientation', labelKey: 'ctx.orientation', label: 'Rotate' },
+  { key: 'pin', labelKey: 'ctx.pin', label: 'Pin on Top' },
+  { key: 'keymap', labelKey: 'ctx.keymap', label: 'Keymap…' },
   { divider: true },
-  { key: 'reveal', label: '打开 APK 所在位置' },
-  { key: 'clear', label: '清除应用数据' },
+  { key: 'reveal', labelKey: 'ctx.reveal', label: 'Show in Explorer' },
+  { key: 'clear', labelKey: 'ctx.clearData', label: 'Clear Data' },
   { divider: true },
-  { key: 'uninstall', label: '卸载', danger: true },
+  { key: 'uninstall', labelKey: 'ctx.uninstall', label: 'Uninstall', danger: true },
 ];
 
 function showMenu(x, y, pkg) {
@@ -656,11 +664,18 @@ function showMenu(x, y, pkg) {
   const items = MENU_ITEMS.filter((it) => !it.onlyRunning || (app && app.running));
   menu.innerHTML = items.map((it) => {
     if (it.divider) return '<div class="divider"></div>';
-    const label = it.key === 'pin' ? (app && app.pinned ? '取消固定' : '固定到顶部')
-      : (it.key === 'orientation'
-        ? (app && app.orientationOverride === 'landscape' ? '竖屏启动（当前横屏）'
-          : (app && app.orientationOverride === 'portrait' ? '横屏启动（当前竖屏）' : '设为横屏启动'))
-        : it.label);
+    let label = it.labelKey ? t(it.labelKey) : it.label;
+    if (it.key === 'pin') {
+      label = app && app.pinned ? t('ctx.unpin') : t('ctx.pin');
+    } else if (it.key === 'orientation') {
+      if (app && app.orientationOverride === 'landscape') {
+        label = t('ctx.toPortraitCurLand');
+      } else if (app && app.orientationOverride === 'portrait') {
+        label = t('ctx.toLandscapeCurPort');
+      } else {
+        label = t('ctx.setToLandscape');
+      }
+    }
     return `<div class="item ${it.danger ? 'danger' : ''}" data-key="${it.key}" data-act="${it.key}">
       <span>${esc(label)}</span>${it.kbd ? `<span class="k">${it.kbd}</span>` : ''}
     </div>`;
@@ -688,12 +703,12 @@ async function handleMenu(act) {
       try {
         const r = await api.stop(pkg);
         if (r && r.ok) {
-          toast({ title: '已关闭', body: app.label, type: 'ok' });
+          toast({ title: t('toast.closed'), body: app.label, type: 'ok' });
         } else {
-          toast({ title: '关闭失败', body: (r && r.error) || '未知错误', type: 'error' });
+          toast({ title: t('toast.closeFailed'), body: (r && r.error) || t('common.failed'), type: 'error' });
         }
       } catch (e) {
-        toast({ title: '关闭失败', body: e.message, type: 'error' });
+        toast({ title: t('toast.closeFailed'), body: e.message, type: 'error' });
       }
       return refreshApps();
     }
@@ -705,14 +720,14 @@ async function handleMenu(act) {
       const next = cur === 'landscape' ? 'portrait' : (cur === 'portrait' ? null : 'landscape');
       try {
         const r = await api.setAppOrientation(pkg, next);
-        const txt = next === 'landscape' ? '横屏启动' : (next === 'portrait' ? '竖屏启动' : '跟随应用');
-        toast({ title: `已设为${txt}`, body: '下次打开该应用时生效，无需重启整个环境。', type: 'ok' });
+        const txt = next === 'landscape' ? t('toast.orientLandscape') : (next === 'portrait' ? t('toast.orientPortrait') : t('toast.orientAuto'));
+        toast({ title: t('toast.orientationSet', { mode: txt }), body: t('toast.orientationNote'), type: 'ok' });
         if (r && typeof r.landscape === 'boolean' && state.apps) {
           const rec = state.apps.find((a) => a.package === pkg);
           if (rec) rec.orientationOverride = next;
         }
       } catch (e) {
-        toast({ title: '设置方向失败', body: e.message, type: 'error' });
+        toast({ title: t('toast.orientationSet', { mode: '' }), body: e.message, type: 'error' });
       }
       return refreshApps();
     }
@@ -720,12 +735,12 @@ async function handleMenu(act) {
     case 'keymap': return showKeymapPicker(pkg, app.label);
     case 'reveal': return api.revealApk(pkg);
     case 'clear': {
-      if (!window.confirm(`清除「${app.label}」的全部数据？此操作不可撤销。`)) return;
+      if (!window.confirm(t('confirm.clearAppData', { name: app.label }))) return;
       try {
         await api.clearData(pkg);
-        toast({ title: '数据已清除', body: app.label, type: 'ok' });
+        toast({ title: t('toast.dataCleared'), body: app.label, type: 'ok' });
       } catch (e) {
-        toast({ title: '清除失败', body: e.message, type: 'error' });
+        toast({ title: t('toast.clearFailed'), body: e.message, type: 'error' });
       }
       return;
     }
@@ -744,26 +759,26 @@ async function showKeymapPicker(pkg, label) {
     const current = await api.keymap.getMap(pkg);
     const hasCurrent = current && current.length > 0;
     const lines = presets.map((p, i) => `${i + 1}. ${p.label} — ${p.desc}`);
-    if (hasCurrent) lines.unshift('0. 清除当前映射');
-    const msg = `为「${label}」选择按键映射预设：\n\n${lines.join('\n')}\n\n输入编号：`;
+    if (hasCurrent) lines.unshift(t('keymap.clearCurrent'));
+    const msg = t('keymap.selectPrompt', { label, list: lines.join('\n') });
     const input = window.prompt(msg, hasCurrent ? '0' : '1');
     if (input === null) return; // 取消
     const idx = parseInt(input, 10);
     if (hasCurrent && idx === 0) {
       await api.keymap.setMap(pkg, []);
-      toast({ title: '已清除按键映射', body: label, type: 'ok' });
+      toast({ title: t('keymap.clearedTitle'), body: label, type: 'ok' });
       return;
     }
     const presetIdx = hasCurrent ? idx - 1 : idx;
     if (presetIdx < 1 || presetIdx > presets.length) {
-      toast({ title: '无效编号', type: 'error' });
+      toast({ title: t('keymap.invalidNumber'), type: 'error' });
       return;
     }
     const chosen = presets[presetIdx - 1];
     await api.keymap.applyPreset(pkg, chosen.id);
-    toast({ title: `已套用「${chosen.label}」`, body: `${label} · 打开应用后键盘即可操控`, type: 'ok' });
+    toast({ title: t('keymap.appliedTitle', { name: chosen.label }), body: t('keymap.appliedBody', { label }), type: 'ok' });
   } catch (e) {
-    toast({ title: '按键映射设置失败', body: e.message, type: 'error' });
+    toast({ title: t('keymap.failedTitle'), body: e.message, type: 'error' });
   }
 }
 
@@ -776,14 +791,14 @@ let volumeTimer = null;
 async function refreshAndroid() {
   const el = $('androidStatus');
   if (!el) return;
-  el.textContent = '读取中…';
+  el.textContent = t('android.reading');
   const r = await api.android.status().catch(() => null);
   if (!r || !r.ok) {
-    el.textContent = r && r.error ? `运行时未就绪（${String(r.error).slice(0, 36)}）` : '运行时未启动';
+    el.textContent = r && r.error ? t('android.runtimeNotReadyError', { error: String(r.error).slice(0, 36) }) : t('android.runtimeNotStarted');
     return;
   }
-  el.textContent = `Android ${r.sdk || '?'} · ${r.wifi ? 'Wi-Fi 已开' : 'Wi-Fi 已关'}` +
-    `${r.airplane ? ' · 飞行模式' : ''} · 音量 ${r.volume}%`;
+  el.textContent = `Android ${r.sdk || '?'} · ${r.wifi ? t('android.wifiOn') : t('android.wifiOff')}` +
+    `${r.airplane ? ' · ' + t('android.airplane') : ''} · ${t('android.volume')} ${r.volume}%`;
   $('setAndroidWifi').checked = !!r.wifi;
   $('setAndroidAirplane').checked = !!r.airplane;
   $('setAndroidAnim').checked = !r.animationsOff;
@@ -801,36 +816,37 @@ function bindAndroid() {
     const r = await api.android.set(key, value).catch(() => null);
     toast({
       type: r && r.ok ? 'ok' : 'error',
-      title: r && r.ok ? (msg || '已生效') : `失败：${(r && r.error) || '运行时未就绪'}`,
+      title: r && r.ok ? (msg || t('common.done')) : `${t('common.failed')}：${(r && r.error) || t('android.runtimeNotStarted')}`,
     });
     if (r && r.ok) refreshAndroid();
   };
-  $('setAndroidWifi').addEventListener('change', (e) => set('wifi', e.target.checked, e.target.checked ? 'Wi-Fi 已开启' : 'Wi-Fi 已关闭'));
-  $('setAndroidAirplane').addEventListener('change', (e) => set('airplane', e.target.checked, e.target.checked ? '已进入飞行模式' : '已退出飞行模式'));
-  $('setAndroidAnim').addEventListener('change', (e) => set('animations', e.target.checked, e.target.checked ? '系统动画已开启' : '系统动画已关闭，界面更快'));
-  $('setAndroidFont').addEventListener('change', (e) => set('fontScale', Number(e.target.value), '字体大小已调整'));
-  $('setAndroidDensity').addEventListener('change', (e) => set('density', Number(e.target.value), '显示大小已调整'));
+  $('setAndroidWifi').addEventListener('change', (e) => set('wifi', e.target.checked, e.target.checked ? t('android.wifiEnabled') : t('android.wifiDisabled')));
+  $('setAndroidAirplane').addEventListener('change', (e) => set('airplane', e.target.checked, e.target.checked ? t('android.airplaneEnabled') : t('android.airplaneDisabled')));
+  $('setAndroidAnim').addEventListener('change', (e) => set('animations', e.target.checked, e.target.checked ? t('android.animEnabled') : t('android.animDisabledFaster')));
+  $('setAndroidFont').addEventListener('change', (e) => set('fontScale', Number(e.target.value), t('android.fontAdjusted')));
+  $('setAndroidDensity').addEventListener('change', (e) => set('density', Number(e.target.value), t('android.densityAdjusted')));
   $('setAndroidVolume').addEventListener('input', (e) => {
     $('androidVolumeText').textContent = `${e.target.value}%`;
     clearTimeout(volumeTimer);
-    volumeTimer = setTimeout(() => set('volume', Number(e.target.value), '音量已调整'), 260);
+    volumeTimer = setTimeout(() => set('volume', Number(e.target.value), t('android.volumeAdjusted')), 260);
   });
   $('btnAndroidRefresh').addEventListener('click', () => refreshAndroid());
   $('btnAndroidTune').addEventListener('click', async () => {
     const r = await api.android.tune(state.launchPkg || '').catch(() => null);
-    toast({ type: r && r.ok ? 'ok' : 'error', title: r && r.ok ? '已优化：动画关闭、后台放宽、电池白名单' : '优化失败，运行时可能未启动' });
+    toast({ type: r && r.ok ? 'ok' : 'error', title: r && r.ok ? t('android.optSuccess') : t('android.optFail') });
     if (r && r.ok) refreshAndroid();
   });
   const open = async (action) => {
     const r = await api.android.open(action).catch(() => null);
     if (!r || !r.ok) {
-      toast({ type: 'error', title: '需要先打开一次应用，让运行时启动' });
+      toast({ type: 'error', title: t('android.needLaunchFirst') });
     }
   };
   $('btnAndroidSettings').addEventListener('click', () => open('settings'));
   $('btnAndroidDisplay').addEventListener('click', () => open('display'));
   $('btnAndroidSound').addEventListener('click', () => open('sound'));
   $('btnAndroidLocale').addEventListener('click', () => open('locale'));
+  if ($('btnAndroidKeyboard')) $('btnAndroidKeyboard').addEventListener('click', () => open('keyboard'));
   $('btnAndroidApps').addEventListener('click', () => open('apps'));
 }
 
@@ -845,30 +861,38 @@ function syncBackendFields() {
 async function refreshResources() {
   const bNote = $('builtinResNote');
   if (!bNote) return;
-  const gb = (mb) => (Number(mb) > 0 ? `${Math.round(Number(mb) / 1024)} GB` : '未知');
+  const gb = (mb) => (Number(mb) > 0 ? `${Math.round(Number(mb) / 1024)} GB` : t('common.unknown'));
   const r = await api.resources().catch(() => null);
   if (!r || r.ok === false) {
-    bNote.textContent = (r && (r.note || r.error)) || '暂时读不到资源分配信息';
+    bNote.textContent = (r && (r.note || r.error)) || t('android.noResourceInfo');
     return;
   }
   const host = r.host || {};
   const lim = r.limits || {};
   const free = Number(r.freeMB) || Number((r.current && r.current.freeMB) || 0);
-  bNote.textContent = `本机 ${gb(host.totalMB)} 内存 / ${host.cores} 核；`
-    + `内存最多可分 ${gb(lim.maxMB)}，核心最多 ${Math.max(1, (host.cores || 1) - 1)} 个（各留 1/4 内存与 1 核给 Windows）。`
-    + `数据分区上限 ${lim.maxGB || 0} GB${free ? `（所在磁盘剩余 ${(free / 1024).toFixed(1)} GB）` : ''}。`
-    + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
+  const diskNote = free ? t('android.hostDiskFreeNote', { free: (free / 1024).toFixed(1) }) : '';
+  bNote.textContent = t('android.hostResourceSummary', {
+    hostRam: gb(host.totalMB),
+    hostCores: host.cores,
+    maxRam: gb(lim.maxMB),
+    maxCores: Math.max(1, (host.cores || 1) - 1),
+    maxDisk: lim.maxGB || 0,
+    diskNote,
+  }) + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
 }
+
+let lastPreflight = null;
 
 /** 本机体检：渲染报告（每条带等级点和可执行动作） */
 function renderPreflight(res) {
+  lastPreflight = res;
   const list = $('preflightList');
   const sum = $('preflightSummary');
   const applyBtn = $('btnPreflightApply');
   if (!list) return;
   list.textContent = '';
   if (!res || !res.report) {
-    if (sum) sum.textContent = (res && res.error) || '体检没有返回结果，请重试';
+    if (sum) sum.textContent = (res && res.error) || t('preflight.noResult');
     return;
   }
   const { report, edition } = res;
@@ -899,24 +923,24 @@ function renderPreflight(res) {
       btn.addEventListener('click', async () => {
         btn.disabled = true;
         const old = btn.textContent;
-        btn.textContent = '正在处理…';
+        btn.textContent = t('preflight.processing');
         let r = null;
         if (it.action.id === 'accel') r = await api.enableAccel().catch(() => null);
         else r = await api.enableVirtualization().catch(() => null);
         btn.disabled = false;
         btn.textContent = old;
-        if (!r) { toast({ type: 'error', title: '操作没有完成', body: '可以稍后重试，或手动按提示操作' }); return; }
-        if (r.cancelled) toast({ type: 'warn', title: '已取消', body: '没有修改系统设置' });
+        if (!r) { toast({ type: 'error', title: t('toast.actionCancelled'), body: t('common.retry') }); return; }
+        if (r.cancelled) toast({ type: 'warn', title: t('toast.actionCancelled'), body: t('toast.actionCancelledDesc') });
         else if (r.ok || r.already) {
           const reboot = r.restartNeeded === true;
           toast({
             type: 'ok',
-            title: r.already ? '硬件加速已经可用' : (reboot ? '已提交，需要重启' : '已生效'),
-            body: r.already ? '' : (reboot ? '重启电脑后硬件加速才会生效，回来点「开始体检」确认' : '可以点「开始体检」确认结果'),
+            title: r.already ? t('setup.accelEnabled') : (reboot ? t('toast.restartingRuntime') : t('setup.accelEnabled')),
+            body: r.already ? '' : (reboot ? t('issue.accel.store.hint') : ''),
           });
           if (r.already || !reboot) setTimeout(() => runPreflight().catch(() => {}), 1200);
         } else {
-          toast({ type: 'error', title: '没能自动完成', body: (r.error || r.note || '请按提示手动操作') });
+          toast({ type: 'error', title: t('setup.accelFailed'), body: (r.error || r.note || t('common.retry')) });
         }
       });
       wrap.append(btn);
@@ -931,9 +955,14 @@ function renderPreflight(res) {
   }
   const rec = report.recommended || {};
   if (sum) {
-    sum.textContent = `${report.summary}。推荐配置：${Math.round((rec.memoryMB || 0) / 1024)} GB 内存 / `
-      + `${rec.cores || 2} 核 / ${rec.renderSize || 'auto'} · 渲染 ${rec.gpuMode || 'auto'}`
-      + (edition === 'store' ? '（商店版：系统功能只能在「Windows 功能」里手动开）' : '');
+    sum.textContent = t('preflight.recommended', {
+      summary: report.summary,
+      memory: Math.round((rec.memoryMB || 0) / 1024),
+      cores: rec.cores || 2,
+      renderSize: rec.renderSize || 'auto',
+      gpuMode: rec.gpuMode || 'auto',
+      storeNote: edition === 'store' ? t('preflight.storeNote') : '',
+    });
   }
   if (applyBtn) applyBtn.hidden = false;
 }
@@ -944,13 +973,13 @@ async function runPreflight() {
   if (!btn) return null;
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '体检中…';
-  if (sum) sum.textContent = '正在检查虚拟化、显卡、内存…（第一次约 2~3 秒）';
+  btn.textContent = t('android.checkingHealth');
+  if (sum) sum.textContent = t('android.checkingHealthSum');
   let r = null;
   try {
     r = await api.preflightRun();
   } catch (e) {
-    r = { error: e.message || '体检失败' };
+    r = { error: e.message || t('android.healthFailed') };
   }
   btn.disabled = false;
   btn.textContent = old;
@@ -959,7 +988,10 @@ async function runPreflight() {
 }
 
 /** 驱动（兼容补丁）：渲染清单 + 命中状态 */
+let lastDrivers = null;
+
 function renderDrivers(r) {
+  lastDrivers = r;
   const list = $('drvList');
   const sum = $('drvSummary');
   if (!list) return;
@@ -968,10 +1000,18 @@ function renderDrivers(r) {
   const errors = (r && r.errors) || [];
   const onCount = drivers.filter((d) => d.enabled && d.matched).length;
   if (sum) {
-    const accel = host.accel === 'none' ? '无硬件加速' : (host.accel || '未知');
-    sum.textContent = `本机：${host.platform || ''}/${host.arch || ''} · ${host.gpuVendor || '未知'} 显卡 · ${accel}`
-      + ` · emulator ${host.emulatorVersion || '未知'}；驱动 ${drivers.length} 个，本机已生效 ${onCount} 个。`
-      + (errors.length ? ` ${errors.length} 个文件加载失败（见下）。` : '');
+    const accel = host.accel === 'none' ? t('drivers.noAccel') : (host.accel || t('drivers.unknown'));
+    const fileErrors = errors.length ? t('drivers.fileErrors', { n: errors.length }) : '';
+    sum.textContent = t('drivers.summary', {
+      platform: host.platform || '',
+      arch: host.arch || '',
+      gpu: host.gpuVendor || t('drivers.unknown'),
+      accel,
+      emu: host.emulatorVersion || t('drivers.unknown'),
+      total: drivers.length,
+      active: onCount,
+      errors: fileErrors,
+    });
   }
   list.textContent = '';
   for (const d of drivers) {
@@ -986,7 +1026,7 @@ function renderDrivers(r) {
     cb.addEventListener('change', async () => {
       const res = await api.driversSetEnabled(d.id, cb.checked).catch(() => null);
       if (res && res.ok && res.overview) renderDrivers(res.overview);
-      else { cb.checked = !cb.checked; toast({ type: 'error', title: '保存失败', body: (res && res.error) || '请稍后再试' }); }
+      else { cb.checked = !cb.checked; toast({ type: 'error', title: t('toast.saveFailed'), body: (res && res.error) || t('common.retry') }); }
     });
     const name = document.createElement('span');
     name.className = 'drv-name';
@@ -996,13 +1036,13 @@ function renderDrivers(r) {
     if (d.matched && d.enabled) {
       const b = document.createElement('span');
       b.className = 'drv-badge hit';
-      b.textContent = '已生效';
+      b.textContent = t('drivers.active');
       head.append(b);
     }
     if (d.builtin) {
       const b = document.createElement('span');
       b.className = 'drv-badge';
-      b.textContent = '内置示例';
+      b.textContent = t('drivers.builtinSample');
       head.append(b);
     }
     item.append(head);
@@ -1012,7 +1052,7 @@ function renderDrivers(r) {
     meta.textContent = `v${d.version || '?'}`
       + (d.author ? ` · ${d.author}` : '')
       + ` · priority ${d.priority}`
-      + (d.hits && d.hits.length ? ` · 命中：${d.hits.join(' / ')}` : ' · 本机不匹配');
+      + (d.hits && d.hits.length ? ` · ${t('drivers.hits', { hits: d.hits.join(' / ') })}` : ` · ${t('drivers.notMatched')}`);
     item.append(meta);
 
     if (d.description) {
@@ -1032,7 +1072,7 @@ function renderDrivers(r) {
   if (!drivers.length && !errors.length) {
     const empty = document.createElement('div');
     empty.className = 'drv-meta';
-    empty.textContent = '还没有任何驱动。可以点「导出本机模板」做一个，或导入别人做好的 JSON。';
+    empty.textContent = t('drivers.empty');
     list.append(empty);
   }
 }
@@ -1041,7 +1081,7 @@ async function refreshDrivers() {
   if (!$('drvList')) return;
   const r = await api.driversList().catch(() => null);
   if (!r) {
-    if ($('drvSummary')) $('drvSummary').textContent = '读不到驱动列表（运行时可能还没部署）';
+    if ($('drvSummary')) $('drvSummary').textContent = t('android.cannotReadDrivers');
     return;
   }
   renderDrivers(r);
@@ -1050,11 +1090,12 @@ async function refreshDrivers() {
 function fillSettings(s) {
   syncBackendFields();
   refreshDrivers().catch(() => {});
-  $('setAdbPath').value = s.adbPath || '';
-  $('setSystemImage').value = s.runtime.isoPath || '';
-  $('setMemory').value = s.engine.memoryMB;
-  $('setCores').value = s.engine.cores;
-  $('setIdle').value = s.engine.idleShutdownMinutes;
+  if ($('setLanguage')) $('setLanguage').value = s.language || 'en';
+  if ($('setAdbPath')) $('setAdbPath').value = s.adbPath || '';
+  if ($('setSystemImage')) $('setSystemImage').value = (s.runtime && s.runtime.isoPath) || '';
+  if ($('setMemory')) $('setMemory').value = (s.engine && s.engine.memoryMB) || '';
+  if ($('setCores')) $('setCores').value = (s.engine && s.engine.cores) || '';
+  if ($('setIdle')) $('setIdle').value = (s.engine && s.engine.idleShutdownMinutes) || '';
   if ($('setSourcePref')) $('setSourcePref').value = (s.runtime && s.runtime.sourcePreference) || 'auto';
   if ($('setAutoMirror')) $('setAutoMirror').checked = (s.runtime && s.runtime.autoMirror) !== false;
   if ($('setGiteeToken')) $('setGiteeToken').value = (s.runtime && s.runtime.giteeToken) || '';
@@ -1084,7 +1125,7 @@ function fillSettings(s) {
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
-  if ($('setLocale')) $('setLocale').value = eng.locale || 'zh-CN';
+  if ($('setLocale')) $('setLocale').value = eng.locale || 'auto';
   if ($('setChineseIme')) $('setChineseIme').checked = eng.chineseIme !== false;
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
@@ -1104,19 +1145,19 @@ async function refreshDataInfo() {
   const el = $('dataNote');
   if (!el) return;
   const info = await api.dataInfo().catch(() => null);
-  if (!info) { el.textContent = '读取数据分区信息失败'; return; }
+  if (!info) { el.textContent = t('android.readDataPartitionFailed'); return; }
   const auto = Number(($('setDataGB') || {}).value || 0) === 0;
   // 有 quickboot 差量盘时底座镜像的大小不等于 guest 看到的容量（实测 8GB 镜像、guest 5.7GB），
   // 与其显示一个会误导人的数字，不如明确说「以运行时为准」。
   const img = info.overlay
-    ? '快速启动差量盘（实际容量以运行时 /data 为准）'
-    : (info.fsGB ? `实际文件系统 ${info.fsGB} GB` : (info.imageGB ? `${info.imageGB} GB` : '尚未创建'));
-  const free = info.freeDiskMB ? `${(info.freeDiskMB / 1024).toFixed(1)} GB` : '未知';
+    ? t('android.quickbootDiffDisk')
+    : (info.fsGB ? t('android.actualFsGB', { fsGB: info.fsGB }) : (info.imageGB ? `${info.imageGB} GB` : t('android.notCreatedYet')));
+  const free = info.freeDiskMB ? `${(info.freeDiskMB / 1024).toFixed(1)} GB` : t('common.unknown');
   const pending = Number(info.pendingGB) > 0
-    ? ` 目标 ${info.configuredGB} GB 还没生效：安卓正在用快速启动差量盘，需要「重置安卓数据」后按新容量重建（会清空已装应用）。`
+    ? t('android.pendingResetNotice', { configuredGB: info.configuredGB })
     : '';
-  el.textContent = `当前数据分区：${img}${auto ? '（自动）' : ''} · 所在磁盘剩余 ${free}。${pending}`
-    + '游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。';
+  const autoLabel = auto ? t('android.autoLabel') : '';
+  el.textContent = t('android.dataPartitionSummary', { img, auto: autoLabel, free, pending });
 }
 
 /* ---------------- 设置页：分类导航 + 搜索 ---------------- */
@@ -1129,14 +1170,14 @@ async function refreshDataInfo() {
  * test/settings-categories-test.js 会校验这一致性。
  */
 const SETTINGS_CATS = [
-  { id: 'basic', name: '常用与安装' },
-  { id: 'display', name: '显示与窗口' },
-  { id: 'input', name: '操作与输入' },
-  { id: 'perf', name: '性能与资源' },
-  { id: 'net', name: '网络与下载' },
-  { id: 'diag', name: '诊断与修复' },
-  { id: 'files', name: '集成与文件' },
-  { id: 'about', name: '更新与关于' },
+  { id: 'basic', nameKey: 'settings.cat.basic', name: 'General & Installation' },
+  { id: 'display', nameKey: 'settings.cat.display', name: 'Display & Window' },
+  { id: 'input', nameKey: 'settings.cat.input', name: 'Input & Controls' },
+  { id: 'perf', nameKey: 'settings.cat.perf', name: 'Performance & Resources' },
+  { id: 'net', nameKey: 'settings.cat.net', name: 'Network & Downloads' },
+  { id: 'diag', nameKey: 'settings.cat.diag', name: 'Diagnostics & Repair' },
+  { id: 'files', nameKey: 'settings.cat.files', name: 'Integration & Files' },
+  { id: 'about', nameKey: 'settings.cat.about', name: 'Updates & About' },
 ];
 
 const settingsCatState = { cat: 'basic', query: '' };
@@ -1189,7 +1230,7 @@ function applySettingsFilter() {
   document.querySelectorAll('#setNav .set-nav-item').forEach((b) => {
     const n = hitPerCat[b.dataset.cat] || 0;
     b.classList.toggle('dim', !!q && n === 0);
-    b.title = q ? `${n} 项命中` : '';
+    b.title = q ? t('android.hitsCount', { n }) : '';
   });
   // 最后一个可见分组不画分隔线（分组被隐藏后 :last-child 会选错对象）
   const visible = groups.filter((g) => !g.hidden);
@@ -1259,12 +1300,12 @@ function bindSettingsCategory() {
 
 /** 自动检测的问题分类名（与 src/core/autodebug.js 的 CATEGORIES 对应） */
 const DEBUG_CATS = [
-  { id: 'runtime', name: '运行时' },
-  { id: 'device', name: '设备连接' },
-  { id: 'storage', name: '存储' },
-  { id: 'settings', name: '设置' },
-  { id: 'network', name: '网络' },
-  { id: 'logs', name: '日志' },
+  { id: 'runtime', name: 'Runtime' },
+  { id: 'device', name: 'Device Connection' },
+  { id: 'storage', name: 'Storage' },
+  { id: 'settings', name: 'Settings' },
+  { id: 'network', name: 'Network' },
+  { id: 'logs', name: 'Logs' },
 ];
 
 let autodebugLast = null;
@@ -1278,16 +1319,16 @@ function renderAutodebug(res) {
   const at = res && res.at;
 
   if (txt) {
-    if (res && res.running) txt.textContent = '正在检测…';
-    else if (!at) txt.textContent = '尚未检测';
-    else if (!issues.length) txt.textContent = `上次检测 ${relTime(at)} · 一切正常`;
-    else txt.textContent = `上次检测 ${relTime(at)} · ${issues.length} 项待处理`;
+    if (res && res.running) txt.textContent = t('autodebug.checking');
+    else if (!at) txt.textContent = t('autodebug.notChecked');
+    else if (!issues.length) txt.textContent = t('autodebug.lastCheckOk', { time: relTime(at) });
+    else txt.textContent = t('autodebug.lastCheckIssues', { time: relTime(at), n: issues.length });
   }
 
   if (!issues.length) {
     list.innerHTML = `<div class="dbg-ok">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
-      <span>没有发现影响使用的问题。运行时、adb 授权、磁盘、数据分区、快照与设置冲突都检查过了。</span>
+      <span>${esc(t('autodebug.allClean'))}</span>
     </div>`;
     updateCatBadges();
     return;
@@ -1306,21 +1347,25 @@ function renderAutodebug(res) {
   });
 
   list.innerHTML = keys.map((key) => {
-    const name = (DEBUG_CATS.find((c) => c.id === key) || {}).name || key;
+    const name = t('autodebug.cat.' + key) || (DEBUG_CATS.find((c) => c.id === key) || {}).name || key;
     const items = byCat.get(key);
     return `<div class="dbg-group">
       <div class="dbg-group-title">${esc(name)}<span class="dbg-count">${items.length}</span></div>
-      ${items.map((it) => `
+      ${items.map((it) => {
+        const itemTitle = t('issue.' + it.code + '.title') || it.title || '';
+        const itemHint = t('issue.' + it.code + '.hint') || it.hint || '';
+        return `
         <div class="dbg-item ${esc(it.severity || 'info')}">
           <span class="dbg-sev"></span>
           <div class="dbg-body">
-            <div class="dbg-name">${esc(it.title || '')}</div>
-            <div class="dbg-hint">${esc(it.hint || '')}</div>
+            <div class="dbg-name">${esc(itemTitle)}</div>
+            <div class="dbg-hint">${esc(itemHint)}</div>
             ${it.detail ? `<div class="dbg-detail">${esc(it.detail)}</div>` : ''}
           </div>
-          ${it.fix ? `<button class="dbg-fix" data-code="${esc(it.code)}">处理</button>` : ''}
-          <button class="dbg-help" data-code="${esc(it.code)}" title="打开内置教程">教程</button>
-        </div>`).join('')}
+          ${it.fix ? `<button class="dbg-fix" data-code="${esc(it.code)}">${esc(t('autodebug.fix'))}</button>` : ''}
+          <button class="dbg-help" data-code="${esc(it.code)}" title="${esc(t('autodebug.openTutorial'))}">${esc(t('autodebug.tutorial'))}</button>
+        </div>`;
+      }).join('')}
     </div>`;
   }).join('');
 
@@ -1359,11 +1404,11 @@ function bindAutodebug() {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       const old = btn.textContent;
-      btn.textContent = '检测中…';
+      btn.textContent = t('autodebug.checking');
       try {
         const r = await api.autodebugRun().catch(() => null);
         if (r) renderAutodebug(r);
-        else toast({ title: '检测失败', body: '采集状态时出错，稍后再试一次', type: 'error' });
+        else toast({ title: t('toast.debugFailed'), body: t('toast.debugFailedBody'), type: 'error' });
       } finally {
         btn.disabled = false;
         btn.textContent = old;
@@ -1375,8 +1420,8 @@ function bindAutodebug() {
   if (report) {
     report.addEventListener('click', async () => {
       const r = await api.doctorReport().catch(() => null);
-      if (r && r.ok !== false) toast({ title: '诊断报告已导出', body: '把报告发给作者可以最快定位问题', type: 'ok' });
-      else toast({ title: '导出失败', body: (r && r.error) || '请重试', type: 'error' });
+      if (r && r.ok !== false) toast({ title: t('toast.reportExported'), body: t('toast.reportExportedBody'), type: 'ok' });
+      else toast({ title: t('toast.exportFailed'), body: (r && r.error) || t('common.retry'), type: 'error' });
     });
   }
 
@@ -1386,8 +1431,8 @@ function bindAutodebug() {
       const r = await api.autodebugConfig({ auto: auto.checked }).catch(() => null);
       if (r) fillAutodebugSettings(r);
       toast({
-        title: auto.checked ? '已开启自动检测' : '已关闭自动检测',
-        body: auto.checked ? '后台会定时检查，发现新问题才提醒' : '随时可以点「立即检测」手动跑一次',
+        title: auto.checked ? t('toast.autodebugEnabled') : t('toast.autodebugDisabled'),
+        body: auto.checked ? t('toast.autodebugEnabledBody') : t('toast.autodebugDisabledBody'),
         type: 'info',
       });
     });
@@ -1398,7 +1443,7 @@ function bindAutodebug() {
     interval.addEventListener('change', async () => {
       const r = await api.autodebugConfig({ intervalMin: Number(interval.value) }).catch(() => null);
       if (r) fillAutodebugSettings(r);
-      toast({ title: '检测间隔已更新', body: `每 ${r ? r.intervalMin : interval.value} 分钟检测一次`, type: 'ok' });
+      toast({ title: t('toast.intervalUpdated'), body: t('toast.intervalUpdatedBody', { n: r ? r.intervalMin : interval.value }), type: 'ok' });
     });
   }
 
@@ -1437,17 +1482,17 @@ async function openSettings() {
   if (curVerEl && info.version) curVerEl.textContent = `v${info.version}`;
   const assoc = await api.assocStatus();
   const btn = $('btnAssoc');
-  btn.textContent = assoc.registered ? '已关联 · 点击取消' : '未关联 · 点击开启';
+  btn.textContent = assoc.registered ? t('settings.assocLinked') : t('settings.assocUnlinked');
   btn.dataset.on = assoc.registered ? '1' : '0';
 
   api.doctorProfile().then((r) => {
     if (r && r.text) $('autoProfileText').textContent = r.text;
-  }).catch(() => { $('autoProfileText').textContent = '自动模式'; });
+  }).catch(() => { $('autoProfileText').textContent = t('common.auto'); });
   api.runtimeUsage().then((u) => {
     $('usageText').textContent = u
-      ? `共 ${u.totalText}${u.reclaimable ? ` · 可回收 ${u.reclaimableText}（${u.count} 项）` : ' · 已是精简状态'}`
-      : '统计不可用';
-  }).catch(() => { $('usageText').textContent = '统计不可用'; });
+      ? `${t('common.total')} ${u.totalText}${u.reclaimable ? ` · ${t('settings.reclaimable')} ${u.reclaimableText} (${u.count})` : ` · ${t('toast.alreadyClean')}`}`
+      : t('common.calculating');
+  }).catch(() => { $('usageText').textContent = t('common.calculating'); });
 
   $('settingsMask').classList.add('on');
   refreshAndroid();
@@ -1477,36 +1522,29 @@ function renderUpdate(info) {
   if (info.current) cur.textContent = `v${info.current}`;
 
   if (info.ok === false) {
-    st.textContent = `检查失败：${info.error || '网络不可用'}`;
-    // 检查失败也要给一条出路：直接把发布页打开，用户至少能手动下载。
-    // 以前这里是「什么都不显示」，用户只会觉得「更新功能坏了」。
+    st.textContent = t('update.failed', { error: info.error || 'Network error' });
     showUpdateBtn(true);
-    btn.textContent = '打开下载页';
+    btn.textContent = t('update.openDownload');
     btn.dataset.mode = 'manual';
     lastUpdate = { htmlUrl: info.htmlUrl || '' };
     if (bar) bar.hidden = true;
     return;
   }
   if (info.hasUpdate) {
-    // 如实说明这次是哪个源给出的版本、另一个源为什么没参与 ——
-    // 用户排查「为什么检查更新很慢」时，这一行比任何日志都直接。
     const src = (info.sources || []).map((x) => `${x.name} ${x.tag || ''}`.trim()).join(' / ');
-    const bad = (info.unreachable || []).map((x) => x.name).join('、');
-    const stale = info.stale ? '（离线缓存，可能不是最新）' : '';
-    st.textContent = `发现新版本 ${info.tag}${src ? `（${src}）` : ''}${bad ? `；${bad} 不可达` : ''}${stale}`;
+    st.textContent = `${t('update.newVersionFound', { tag: info.tag })} ${src ? `(${src})` : ''}`;
     showUpdateBtn(true);
-    btn.textContent = info.asset ? '立即更新' : '打开下载页';
+    btn.textContent = info.asset ? t('update.updateNow') : t('update.openDownload');
     btn.dataset.mode = info.asset ? 'auto' : 'manual';
     const note = $('updateNote');
     if (note && info.notes) {
       const brief = String(info.notes).split('\n').slice(0, 8).join('\n').trim();
-      if (brief) note.textContent = `更新内容：\n${brief}`;
+      if (brief) note.textContent = brief;
     }
     if (bar) bar.hidden = true;
   } else {
     const src = (info.sources || []).map((x) => x.name).join(' / ');
-    const stale = info.stale ? '（离线缓存）' : '';
-    st.textContent = `已是最新版本（v${info.current}）${src ? ` · 经由 ${src}` : ''}${stale}`;
+    st.textContent = `${t('update.isLatest')} (v${info.current}) ${src ? `· ${src}` : ''}`;
     showUpdateBtn(false);
     if (bar) bar.hidden = true;
   }
@@ -1526,12 +1564,12 @@ function renderUpdateProgress(p) {
   const bar = $('updateBar');
   const fill = $('updateBarFill');
   if (p.stage === 'error') {
-    if (st) st.textContent = `更新失败：${p.message || ''}`;
+    if (st) st.textContent = `${t('common.failed')}：${p.message || ''}`;
     if (bar) bar.hidden = true;
-    toast({ title: '更新失败', body: p.message || '', type: 'error' });
+    toast({ title: t('common.failed'), body: p.message || '', type: 'error' });
     return;
   }
-  if (st) st.textContent = p.message || '正在更新…';
+  if (st) st.textContent = p.message || t('common.loading');
   if (bar && fill) {
     bar.hidden = false;
     fill.style.width = `${Math.max(0, Math.min(100, p.percent || 0))}%`;
@@ -1547,15 +1585,15 @@ function bindUpdate() {
     if (!silent) {
       check.disabled = true;
       const old = check.textContent;
-      check.textContent = '检查中…';
-      $('updateState').textContent = '正在连接 GitHub…';
+      check.textContent = t('update.checking');
+      $('updateState').textContent = t('update.connecting');
       try {
         const info = await api.updateCheck();
         renderUpdate(info);
-        if (info && info.hasUpdate) toast({ title: `发现新版本 ${info.tag}`, body: '点「立即更新」自动下载安装', type: 'info' });
-        else if (info && info.ok !== false) toast({ title: '已是最新版本', body: `v${info.current}`, type: 'ok' });
+        if (info && info.hasUpdate) toast({ title: t('update.newVersionFound', { tag: info.tag }), body: t('update.clickToUpdate'), type: 'info' });
+        else if (info && info.ok !== false) toast({ title: t('update.isLatest'), body: `v${info.current}`, type: 'ok' });
       } catch (e) {
-        $('updateState').textContent = `检查失败：${e.message}`;
+        $('updateState').textContent = t('update.failed', { error: e.message });
       } finally {
         check.disabled = false;
         check.textContent = old;
@@ -1574,17 +1612,17 @@ function bindUpdate() {
       return;
     }
     go.disabled = true;
-    go.textContent = '更新中…';
+    go.textContent = t('update.updating');
     const r = await api.updateApply().catch((e) => ({ ok: false, error: e.message }));
     if (!r || !r.ok) {
       go.disabled = false;
-      go.textContent = '立即更新';
+      go.textContent = t('update.updateNow');
       if (r && r.error && !r.manual) {
-        $('updateState').textContent = `更新失败：${r.error}`;
-        toast({ title: '更新失败', body: r.error, type: 'error' });
+        $('updateState').textContent = t('update.failed', { error: r.error });
+        toast({ title: t('common.failed'), body: r.error, type: 'error' });
       }
     } else {
-      $('updateState').textContent = `已下载 v${r.version}，正在重启完成安装…`;
+      $('updateState').textContent = t('update.readyRestart', { ver: 'v' + r.version });
     }
   });
 
@@ -1597,6 +1635,18 @@ function bindSettings() {
     state.settings = await api.setSettings(patch);
   };
 
+  if ($('setLanguage')) {
+    $('setLanguage').addEventListener('change', async (e) => {
+      const lang = e.target.value;
+      await save({ language: lang });
+      applyLanguage(lang);
+      const engLocale = state.settings?.engine?.locale || 'auto';
+      if (engLocale === 'auto') {
+        toast({ title: t('toast.systemLangUpdated'), body: t('toast.systemLangUpdatedBody'), type: 'ok' });
+      }
+    });
+  }
+
   if ($('btnPreflight')) $('btnPreflight').addEventListener('click', () => runPreflight());
   if ($('btnPreflightApply')) {
     $('btnPreflightApply').addEventListener('click', async () => {
@@ -1605,17 +1655,21 @@ function bindSettings() {
       const r = await api.preflightApply().catch(() => null);
       btn.disabled = false;
       if (!r || !r.ok) {
-        toast({ type: 'error', title: '应用失败', body: (r && r.error) || '请稍后再试' });
+        toast({ type: 'error', title: t('toast.saveFailed'), body: (r && r.error) || t('common.retry') });
         return;
       }
       state.settings = r.settings;
       toast({
         type: 'ok',
-        title: '已按这台机器配置好',
-        body: `内存 ${Math.round((r.recommended.memoryMB || 0) / 1024)} GB / ${r.recommended.cores} 核 / ${r.recommended.renderSize}`
-          + (r.driverFile ? '；已生成驱动，下次开机会自动套用' : ''),
+        title: t('toast.appliedPreset'),
+        body: t('toast.appliedPresetBody', {
+          ram: Math.round((r.recommended.memoryMB || 0) / 1024),
+          cores: r.recommended.cores,
+          render: r.recommended.renderSize,
+          driver: r.driverFile ? t('toast.driverGenNote') : '',
+        }),
       });
-      if (r.driverError) toast({ type: 'warn', title: '驱动没写成功', body: r.driverError });
+      if (r.driverError) toast({ type: 'warn', title: t('toast.driverWriteWarn'), body: r.driverError });
       fillSettings(r.settings);
       refreshStatus();
     });
@@ -1624,7 +1678,7 @@ function bindSettings() {
   if ($('btnDrvFolder')) {
     $('btnDrvFolder').addEventListener('click', async () => {
       const r = await api.driversOpenFolder().catch(() => null);
-      if (!r || !r.ok) toast({ type: 'error', title: '打不开驱动目录' });
+      if (!r || !r.ok) toast({ type: 'error', title: t('toast.cannotOpenDriverDir') });
     });
   }
   if ($('btnDrvImport')) {
@@ -1632,10 +1686,10 @@ function bindSettings() {
       const r = await api.driversImport().catch(() => null);
       if (!r || r.canceled) return;
       if (!r.ok) {
-        toast({ type: 'error', title: '导入失败', body: (r.errors || []).slice(0, 3).join('；') });
+        toast({ type: 'error', title: t('toast.driverImportFailed'), body: (r.errors || []).slice(0, 3).join('; ') });
         return;
       }
-      toast({ type: 'ok', title: '驱动已导入并启用', body: `${r.driver.name} v${r.driver.version}` });
+      toast({ type: 'ok', title: t('toast.driverImported'), body: `${r.driver.name} v${r.driver.version}` });
       if (r.overview) renderDrivers(r.overview);
     });
   }
@@ -1643,8 +1697,8 @@ function bindSettings() {
     $('btnDrvExport').addEventListener('click', async () => {
       const r = await api.driversExportTemplate().catch(() => null);
       if (!r || r.canceled) return;
-      if (!r.ok) { toast({ type: 'error', title: '导出失败' }); return; }
-      toast({ type: 'ok', title: '模板已导出', body: '改完 effect 后放到驱动目录，点「刷新」即可生效' });
+      if (!r.ok) { toast({ type: 'error', title: t('toast.diagExportFailed') }); return; }
+      toast({ type: 'ok', title: t('toast.templateExported'), body: t('toast.templateExportedBody') });
       refreshDrivers();
     });
   }
@@ -1667,7 +1721,7 @@ function bindSettings() {
       // 资源策略会连带改 liteMode / priorityMode / renderSize（主进程里翻译）
       state.settings = await api.setSettings({ engine: { resourceMode: e.target.value } });
       fillSettings(state.settings);
-      toast({ title: '资源策略已切换', body: '下一次打开应用生效', type: 'ok' });
+      toast({ title: t('toast.resourcePolicySwitched'), body: t('toast.takesEffectNextApp'), type: 'ok' });
     });
   }
   if ($('setRenderSize')) {
@@ -1678,16 +1732,16 @@ function bindSettings() {
   }
   if ($('setLocale')) {
     $('setLocale').addEventListener('change', async (e) => {
-      state.settings = await api.setSettings({ engine: { locale: e.target.value } });
-      toast({ title: '系统语言已更新', body: '下次重启安卓运行时后生效', type: 'ok' });
+      state.settings = await api.setSettings({ engine: { locale: e.target.value, _localeExplicit: true } });
+      toast({ title: t('toast.systemLangUpdated'), body: t('toast.systemLangUpdatedBody'), type: 'ok' });
     });
   }
   if ($('setChineseIme')) {
     $('setChineseIme').addEventListener('change', async (e) => {
-      state.settings = await api.setSettings({ engine: { chineseIme: e.target.checked } });
+      state.settings = await api.setSettings({ engine: { chineseIme: e.target.checked, _chineseImeExplicit: true } });
       toast({
-        title: e.target.checked ? '已开启中文输入法' : '已关闭中文输入法',
-        body: '下次重启安卓运行时后生效',
+        title: e.target.checked ? t('toast.chineseImeEnabled') : t('toast.chineseImeDisabled'),
+        body: t('toast.systemLangUpdatedBody'),
         type: 'ok',
       });
     });
@@ -1704,17 +1758,17 @@ function bindSettings() {
   if ($('btnGrowData')) {
     $('btnGrowData').addEventListener('click', async () => {
       const gb = Number($('setDataGB').value) || 0;
-      if (!gb) { toast({ title: '先选一个容量', body: '「自动」表示由软件按磁盘余量决定，不需要扩容', type: 'info' }); return; }
+      if (!gb) { toast({ title: t('settings.dataPartition'), body: t('setup.fullAutoDesc'), type: 'info' }); return; }
       const { response } = await api.confirm({
-        title: '立刻把安卓数据分区扩容？',
-        message: `将把 /data 调整为 ${gb} GB（就地扩容，已装应用和存档都会保留）。`,
-        detail: '扩容需要先关掉正在运行的安卓应用，完成后下次打开应用会重新引导，约多花十几秒。',
-        okLabel: '开始扩容',
+        title: t('confirm.growDataTitle'),
+        message: t('confirm.growDataMsg', { gb }),
+        detail: t('confirm.growDataDetail'),
+        okLabel: t('confirm.growDataOk'),
       });
       if (response !== 1) return;
       $('btnGrowData').disabled = true;
       const old = $('btnGrowData').textContent;
-      $('btnGrowData').textContent = '扩容中…';
+      $('btnGrowData').textContent = t('setup.preparing');
       const r = await api.setDataSize(gb).catch((e) => ({ ok: false, error: e.message }));
       $('btnGrowData').disabled = false;
       $('btnGrowData').textContent = old;
@@ -1722,31 +1776,29 @@ function bindSettings() {
         // 快速启动的差量盘挡着：就地扩容做不到，只能按新容量重建 /data。
         // 这是明确的数据丢失操作，必须单独再确认一次。
         const again = await api.confirm({
-          title: '需要重置安卓数据才能扩容',
-          message: `安卓正在使用快速启动差量盘，就地扩容改不到它。要拿到 ${gb} GB 空间，必须按新容量重建 /data。`,
-          detail: '重建会清空已安装的应用与存档（模拟器本身和镜像不受影响）。确定继续吗？',
-          okLabel: '清空并重建',
+          title: t('confirm.growDataResetTitle'),
+          message: t('confirm.growDataResetMsg', { gb }),
+          detail: t('confirm.growDataResetDetail'),
+          okLabel: t('confirm.growDataResetOk'),
         });
         if (again.response !== 1) { refreshDataInfo(); return; }
         $('btnGrowData').disabled = true;
-        $('btnGrowData').textContent = '重建中…';
+        $('btnGrowData').textContent = t('setup.preparing');
         const rr = await api.resetAndResize(gb).catch((e) => ({ ok: false, error: e.message }));
         $('btnGrowData').disabled = false;
         $('btnGrowData').textContent = old;
         toast({
           type: rr && rr.ok ? 'ok' : 'error',
-          title: rr && rr.ok ? '已按新容量重建' : '重建失败',
-          body: rr && rr.ok
-            ? `下次打开应用会按 ${gb} GB 重建 /data（首次进入会多等几十秒）`
-            : (rr && rr.error) || '未知错误',
+          title: rr && rr.ok ? t('toast.snapshotInvalidated') : t('common.failed'),
+          body: (rr && rr.error) || '',
         });
         refreshDataInfo();
         return;
       }
       toast({
         type: r && r.ok ? 'ok' : 'error',
-        title: r && r.ok ? '数据分区已扩容' : '扩容失败',
-        body: r && r.ok ? `现在约 ${r.fsGB || r.imageGB || gb} GB 可用` : (r && r.error) || '未知错误',
+        title: r && r.ok ? t('settings.btnGrowData') : t('common.failed'),
+        body: r && r.ok ? `${r.fsGB || r.imageGB || gb} GB` : ((r && r.error) || ''),
       });
       refreshDataInfo();
     });
@@ -1786,7 +1838,7 @@ function bindSettings() {
   if ($('setKeymapEnabled')) {
     $('setKeymapEnabled').addEventListener('change', async (e) => {
       await api.keymap.setEnabled(e.target.checked);
-      toast({ title: e.target.checked ? '键盘映射已开启' : '键盘映射已关闭', type: 'ok' });
+      toast({ title: e.target.checked ? t('toast.keymapEnabled') : t('toast.keymapDisabled'), type: 'ok' });
     });
   }
   $('setDeepTrim').addEventListener('change', async (e) => {
@@ -1794,7 +1846,7 @@ function bindSettings() {
     // 关掉深度裁剪必须把之前 pm disable-user 的包恢复回来，否则影响是持久的
     if (!e.target.checked) {
       api.restoreSystemApps().catch(() => {});
-      toast({ title: '已恢复系统组件', body: '深度裁剪关闭，后台包正在恢复', type: 'info' });
+      toast({ title: t('toast.systemComponentsRestored'), body: t('toast.systemComponentsRestoredBody'), type: 'info' });
     }
   });
   $('setCompat').addEventListener('change', async (e) => {
@@ -1803,8 +1855,8 @@ function bindSettings() {
     const env = ((state.status = await api.runtimeStatus()).env) || {};
     const ok = env.playImage && env.playImage.ok;
     $('compatInstallField').hidden = !on || !!ok;
-    if (on && !ok) toast({ title: 'ARM 兼容模式已开启', body: '还需要下载 Google Play 兼容镜像（Android 14，约 1.5GB），点击下方按钮开始', type: 'info' });
-    else if (on) toast({ title: 'ARM 兼容模式已开启', body: '重启运行时后生效', type: 'info' });
+    if (on && !ok) toast({ title: t('toast.armCompatEnabled'), body: t('toast.armCompatNeedDownload'), type: 'info' });
+    else if (on) toast({ title: t('toast.armCompatEnabled'), body: t('toast.armImgReadyBody'), type: 'info' });
   });
   $('setAutoShortcut').addEventListener('change', (e) => save({ createShortcutOnInstall: e.target.checked }));
   $('setStartMenuShortcut').addEventListener('change', (e) => save({ createStartMenuShortcut: e.target.checked }));
@@ -1815,13 +1867,13 @@ function bindSettings() {
     const mode = e.target.value;
     $('portraitField').hidden = mode === 'fullscreen';
     state.settings = await api.setSettings({ display: { mode } });
-    toast({ title: mode === 'fullscreen' ? '已切全屏' : '已切竖屏窗口', type: 'ok' });
+    toast({ title: mode === 'fullscreen' ? t('toast.switchedFullscreen') : t('toast.switchedPortraitWindow'), type: 'ok' });
   });
   if ($('setAutoFullscreen')) {
     $('setAutoFullscreen').addEventListener('change', async (e) => {
       const on = e.target.value === 'on';
       state.settings = await api.setSettings({ display: { autoFullscreenOnLaunch: on } });
-      toast({ title: on ? '已开启自动全屏' : '已关闭自动全屏', body: '下次打开应用时生效', type: 'ok' });
+      toast({ title: on ? t('toast.autoFullscreenEnabled') : t('toast.autoFullscreenDisabled'), body: t('toast.takesEffectNextApp'), type: 'ok' });
     });
   }
   if ($('setOrientationMode')) {
@@ -1829,10 +1881,8 @@ function bindSettings() {
       const mode = e.target.value;
       state.settings = await api.setSettings({ display: { orientationMode: mode } });
       toast({
-        title: mode === 'auto' ? '已设为跟随应用' : (mode === 'landscape' ? '已强制横屏' : '已强制竖屏'),
-        body: mode === 'auto'
-          ? '下次打开应用时会按应用自己的方向选面板，方向不一致的话会重启一次运行时。'
-          : '下次打开应用时会重启一次运行时把面板切到指定方向，之后不再重启。',
+        title: mode === 'auto' ? t('toast.orientationSetAuto') : (mode === 'landscape' ? t('toast.orientationSetLandscape') : t('toast.orientationSetPortrait')),
+        body: mode === 'auto' ? t('toast.orientationAutoDesc') : t('toast.orientationForcedDesc'),
         type: 'ok',
       });
     });
@@ -1842,8 +1892,8 @@ function bindSettings() {
       const on = e.target.value === 'on';
       state.settings = await api.setSettings({ display: { autoRotate: on } });
       toast({
-        title: on ? '已打开镜像自动旋转' : '已关闭镜像自动旋转',
-        body: '下次打开应用时写进安卓镜像。画面方向仍由屏幕方向策略决定，不受此开关影响。',
+        title: on ? t('toast.autoRotateEnabled') : t('toast.autoRotateDisabled'),
+        body: t('toast.autoRotateBody'),
         type: 'ok',
       });
     });
@@ -1853,8 +1903,8 @@ function bindSettings() {
       const on = e.target.value === 'on';
       state.settings = await api.setSettings({ display: { tabletMode: on } });
       toast({
-        title: on ? '已打开平板排版' : '已关闭平板排版',
-        body: '下次打开应用时生效（会重启一次运行时来改逻辑密度）。',
+        title: on ? t('toast.tabletLayoutEnabled') : t('toast.tabletLayoutDisabled'),
+        body: t('toast.tabletLayoutBody'),
         type: 'ok',
       });
     });
@@ -1864,15 +1914,15 @@ function bindSettings() {
       const landscape = e.target.value === 'landscape';
       state.settings = await api.setSettings({ display: { landscape } });
       toast({
-        title: landscape ? '面板已设为横屏' : '面板已设为竖屏',
-        body: '下次打开应用时会重启一次运行时来切换物理面板方向（约十几秒），之后就不会再重启。',
+        title: landscape ? t('toast.panelLandscape') : t('toast.panelPortrait'),
+        body: t('toast.panelChangeBody'),
         type: 'ok',
       });
     });
   }
   $('setPortrait').addEventListener('change', async (e) => {
     state.settings = await api.setSettings({ display: { portrait: e.target.value } });
-    toast({ title: '画面大小已更新', body: '下次打开应用或切换应用时生效', type: 'ok' });
+    toast({ title: t('toast.renderSizeUpdated'), body: t('toast.renderSizeBody'), type: 'ok' });
   });
   $('setWindowEmbed').addEventListener('change', async (e) => {
     const embed = e.target.value === 'embed';
@@ -1881,18 +1931,18 @@ function bindSettings() {
       display: { windowEmbed: embed, windowEmbedChosen: true },
     });
     toast({
-      title: embed ? '已切回嵌入模式' : '已切到原生窗口',
+      title: embed ? t('toast.switchedToEmbed') : t('toast.switchedToNative'),
       body: embed
-        ? '下次打开应用时生效。嵌入模式观感统一、标题栏带旋转按钮，但缩放/旋转时更容易掉帧或出现黑边。'
-        : '下次打开应用时生效。原生窗口由模拟器自己渲染与排布，帧率和缩放更稳，横屏可用托盘菜单或 Ctrl+Alt+R。',
+        ? t('toast.embedDesc')
+        : t('toast.nativeDesc'),
       type: 'ok',
     });
   });
   $('btnRebuildShortcuts').addEventListener('click', async () => {
     const r = await api.rebuildShortcuts();
     toast({
-      title: r && r.fixed && r.fixed.length ? '已补齐快捷方式' : '快捷方式都还在',
-      body: r && r.fixed && r.fixed.length ? r.fixed.join('、') : '桌面与开始菜单入口正常',
+      title: r && r.fixed && r.fixed.length ? t('toast.shortcutsRestored') : t('toast.shortcutsIntact'),
+      body: r && r.fixed && r.fixed.length ? r.fixed.join(', ') : t('toast.shortcutsIntactBody'),
       type: 'ok',
     });
   });
@@ -1900,9 +1950,9 @@ function bindSettings() {
   $('btnDiagnostics').addEventListener('click', async () => {
     try {
       const r = await api.doctorReport();
-      toast({ title: '诊断报告已导出', body: `${r.diagnosis.title} · ${r.file}`, type: 'ok', sticky: true });
+      toast({ title: t('toast.diagReportExported'), body: `${(r.diagnosis && r.diagnosis.title) || ''} · ${r.file}`, type: 'ok', sticky: true });
     } catch (e) {
-      toast({ title: '导出失败', body: e.message, type: 'error' });
+      toast({ title: t('toast.diagExportFailed'), body: e.message, type: 'error' });
     }
   });
 
@@ -1913,20 +1963,20 @@ function bindSettings() {
     try {
       const preview = await api.runtimeCleanup({ apply: false, includeSnapshots });
       if (!preview.candidates.length) {
-        toast({ title: '已经是精简状态', body: '没有可回收的旧镜像或快照。', type: 'ok' });
+        toast({ title: t('toast.alreadyClean'), body: t('toast.alreadyCleanBody'), type: 'ok' });
         return;
       }
       const r = await api.runtimeCleanup({ apply: true, includeSnapshots });
       if (r.cancelled) return;
       toast({
-        title: '清理完成',
-        body: `释放约 ${(r.saved / 1048576).toFixed(0)} MB（${r.removed.length} 项），已安装应用保留。`,
+        title: t('toast.cleanupDone'),
+        body: t('toast.cleanupDoneBody', { mb: (r.saved / 1048576).toFixed(0), count: r.removed.length }),
         type: 'ok',
       });
       const u = await api.runtimeUsage();
-      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+      $('usageText').textContent = `${t('common.total')} ${u.totalText} · ${t('settings.reclaimable')} ${u.reclaimableText} (${u.count})`;
     } catch (e) {
-      toast({ title: '清理失败', body: e.message, type: 'error' });
+      toast({ title: t('toast.cleanupFail'), body: e.message, type: 'error' });
     } finally {
       btn.disabled = false;
     }
@@ -1939,41 +1989,38 @@ function bindSettings() {
     try {
       const first = await api.confirm({
         type: 'warning',
-        title: '重置安卓数据？',
-        message: '这会把安卓系统还原成「刚装好系统」的干净状态：',
-        detail: '• 删除全部已安装的第三方 app（含红果、游戏等）及其数据、登录态\n'
-          + '• 删除当前 AVD 的快速启动快照\n'
-          + '• 系统镜像本身不受影响，重新打开应用会再次冷启动建数据\n\n'
-          + '此操作不可撤销。是否继续？',
-        buttons: ['取消', '继续'],
+        title: t('confirm.resetDataTitle'),
+        message: t('confirm.resetDataTitle'),
+        detail: t('confirm.resetDataMsg'),
+        buttons: [t('common.cancel'), t('common.confirm')],
         defaultId: 0,
         cancelId: 0,
       });
       if (!first || first.response !== 1) return;
       const second = await api.confirm({
         type: 'warning',
-        title: '再确认一次',
-        message: '已安装的 app 和它们的数据将被永久删除，确定要重置吗？',
-        detail: '可放心的是：系统镜像、其它 AVD、本机的 APK 缓存和图标都不会动。',
-        buttons: ['取消', '确定重置'],
+        title: t('confirm.resetDataAgainTitle'),
+        message: t('confirm.resetDataAgainMsg'),
+        detail: t('confirm.resetDataAgainDetail'),
+        buttons: [t('common.cancel'), t('common.confirm')],
         defaultId: 0,
         cancelId: 0,
       });
       if (!second || second.response !== 1) return;
       const r = await api.runtimeResetData();
       if (!r || !r.ok) {
-        toast({ title: '重置失败', body: (r && r.error) || '请重试', type: 'error' });
+        toast({ title: t('common.failed'), body: (r && r.error) || t('common.retry'), type: 'error' });
         return;
       }
       toast({
-        title: '安卓数据已重置',
-        body: `释放约 ${r.reclaimedMB} MB，已安装应用记录已清空。`,
+        title: t('toast.androidDataResetDone'),
+        body: t('toast.androidDataResetBody', { mb: r.reclaimedMB }),
         type: 'ok',
       });
       const u = await api.runtimeUsage();
-      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+      $('usageText').textContent = `${t('common.total')} ${u.totalText} · ${t('settings.reclaimable')} ${u.reclaimableText} (${u.count})`;
     } catch (e) {
-      toast({ title: '重置失败', body: e.message, type: 'error' });
+      toast({ title: t('common.failed'), body: e.message, type: 'error' });
     } finally {
       btn.disabled = false;
     }
@@ -1988,14 +2035,10 @@ function bindSettings() {
     try {
       const ok = await api.confirm({
         type: 'warning',
-        title: '修复虚拟机网络？',
-        message: '应用里需要联网的页面一直黑屏/转圈，通常是安卓虚拟机没有网络。',
-        detail: '修复会按「代价从小到大」依次尝试：\n\n'
-          + '1. 冷启动虚拟机（不加载快照）后等待联网 —— 不影响任何数据\n'
-          + '2. 仍不行才重置安卓数据 —— 应用清单保留、点开会自动重装，\n'
-          + '   但应用内的登录态、追剧记录等会丢失\n\n'
-          + '只影响当前 AVD，系统镜像和本机 APK 缓存都不动。整个过程约 1–5 分钟。是否继续？',
-        buttons: ['取消', '开始修复'],
+        title: t('confirm.repairNetworkTitle'),
+        message: t('confirm.repairNetworkMsg'),
+        detail: t('confirm.repairNetworkDetail'),
+        buttons: [t('common.cancel'), t('common.confirm')],
         defaultId: 0,
         cancelId: 0,
       });
@@ -2003,19 +2046,19 @@ function bindSettings() {
       const r = await api.runtimeRepairNetwork();
       if (!r || !r.ok) {
         toast({
-          title: '网络仍未恢复',
-          body: (r && r.error) || '重置后虚拟机还是没网，请检查本机网络/防火墙是否拦住了模拟器。',
+          title: t('toast.networkStillDown'),
+          body: (r && r.error) || t('toast.networkStillDownBody'),
           type: 'error',
         });
         return;
       }
       toast({
-        title: '网络已恢复',
-        body: `${(r.network && r.network.ip) || '已联网'}${r.wiped ? '（为修复网络重置过安卓数据，点开应用会自动重装）' : '（未动你的数据）'}`,
+        title: t('toast.networkRestored'),
+        body: r.wiped ? t('toast.networkRestoredWipedBody', { ip: (r.network && r.network.ip) || '' }) : t('toast.networkRestoredSafeBody', { ip: (r.network && r.network.ip) || '' }),
         type: 'ok',
       });
     } catch (e) {
-      toast({ title: '修复失败', body: e.message, type: 'error' });
+      toast({ title: t('toast.repairFailed'), body: e.message, type: 'error' });
     } finally {
       btn.disabled = false;
     }
@@ -2028,43 +2071,40 @@ function bindSettings() {
     try {
       const r = await api.leftoversScan();
       if (!r || !r.ok) {
-        toast({ title: '扫描失败', body: (r && r.error) || '请重试', type: 'error' });
+        toast({ title: t('common.failed'), body: (r && r.error) || t('common.retry'), type: 'error' });
         return;
       }
       const items = r.items || [];
       if (!items.length) {
-        toast({ title: '很干净', body: '没有发现旧版本残留。', type: 'ok' });
+        toast({ title: t('toast.leftoversNone'), body: t('toast.alreadyCleanBody'), type: 'ok' });
         return;
       }
       const mb = Math.round((r.totalBytes || 0) / 1048576);
       const lines = items.slice(0, 8).map((x) => `• ${x.note}：${x.path}`);
-      if (items.length > 8) lines.push(`…另有 ${items.length - 8} 项`);
+      if (items.length > 8) lines.push(`... +${items.length - 8}`);
       const ok = await api.confirm({
         type: 'warning',
-        title: '清理旧版本残留？',
-        message: `找到 ${items.length} 项残留，约 ${mb} MB：`,
-        detail: `${lines.join('\n')}\n\n只删除「旧版本程序目录 / 已失效的卸载项 / 更新临时文件」，`
-          + '当前正在运行的版本和你的应用数据都不会动。',
-        buttons: ['取消', '开始清理'],
+        title: t('confirm.cleanupLeftovers', { n: items.length, details: lines.join('\n') }),
+        buttons: [t('common.cancel'), t('common.confirm')],
         defaultId: 1,
         cancelId: 0,
       });
       if (!ok || ok.response !== 1) return;
       const c = await api.leftoversClean(items);
       if (!c || !c.ok) {
-        toast({ title: '清理失败', body: (c && c.error) || '请重试', type: 'error' });
+        toast({ title: t('toast.cleanupFail'), body: (c && c.error) || t('common.retry'), type: 'error' });
         return;
       }
-      const failNote = (c.failed && c.failed.length) ? `，${c.failed.length} 项被占用未删` : '';
+      const failNote = '';
       toast({
-        title: '已清理旧版本残留',
-        body: `删除 ${c.removed.length} 项，释放 ${c.freedMB || 0} MB${failNote}。`,
+        title: t('toast.cleanupDone'),
+        body: t('toast.cleanupDoneBody', { mb: c.freedMB || 0, count: c.removed.length }),
         type: 'ok',
       });
       const u = await api.runtimeUsage();
-      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+      $('usageText').textContent = `${t('common.total')} ${u.totalText} · ${t('settings.reclaimable')} ${u.reclaimableText} (${u.count})`;
     } catch (e) {
-      toast({ title: '清理失败', body: e.message, type: 'error' });
+      toast({ title: t('toast.cleanupFail'), body: e.message, type: 'error' });
     } finally {
       btn.disabled = false;
     }
@@ -2080,8 +2120,8 @@ function bindSettings() {
       const r = await api.rebuildShortcuts().catch(() => ({ ok: false }));
       const fixed = (r && r.fixed) || [];
       toast(fixed.length
-        ? { title: '快捷方式已重建', body: fixed.join('、'), type: 'ok' }
-        : { title: '快捷方式都在', body: '没有需要重建的入口', type: 'info' });
+        ? { title: t('toast.shortcutsRestored'), body: fixed.join(', '), type: 'ok' }
+        : { title: t('toast.shortcutsIntact'), body: t('toast.shortcutsIntactBody'), type: 'info' });
     } finally {
       btn.disabled = false;
     }
@@ -2092,26 +2132,26 @@ function bindSettings() {
     const picked = await api.openDir();
     if (!picked) return;
     $('setSharedDir').value = picked;
-    toast({ title: '已选新目录', body: '点「保存并迁移」把旧文件搬过去', type: 'info' });
+    toast({ title: t('toast.dirSelected'), body: t('toast.dirSelectedBody'), type: 'info' });
   });
   $('btnSaveShared').addEventListener('click', async () => {
     const dir = $('setSharedDir').value.trim();
-    if (!dir) { toast({ title: '请先填写或浏览目录', type: 'error' }); return; }
+    if (!dir) { toast({ title: t('toast.fillDirFirst'), type: 'error' }); return; }
     const btn = $('btnSaveShared');
     btn.disabled = true;
     const r = await api.setSharedDir(dir).catch(() => ({ ok: false }));
     btn.disabled = false;
     if (r.ok) {
       const moved = r.oldDir && r.oldDir !== r.newDir;
-      toast({ title: '共享目录已更新', body: moved ? '旧目录里已有的文件已迁移到新目录' : '已保存', type: 'ok' });
+      toast({ title: t('toast.sharedDirUpdated'), body: moved ? t('toast.sharedDirMoved') : t('common.done'), type: 'ok' });
     } else {
-      toast({ title: '保存失败', body: r.error, type: 'error' });
+      toast({ title: t('toast.saveFailed'), body: r.error, type: 'error' });
     }
   });
 
   // 一键卸载 ApkStart 本体（取消 .apk 关联 + 启动卸载程序；便携版手动删除）
   $('btnUninstall').addEventListener('click', async () => {
-    const ok = window.confirm('确定卸载 ApkStart？\n\n将取消 .apk 文件关联并移除程序。此操作不可撤销。');
+    const ok = window.confirm(t('confirm.uninstallApp'));
     if (!ok) return;
     const btn = $('btnUninstall');
     btn.disabled = true;
@@ -2119,44 +2159,44 @@ function bindSettings() {
     if (r.ok && r.portable) {
       btn.disabled = false;
       toast({
-        title: '便携版无法自动卸载',
-        body: `请手动删除程序目录（${r.exeDir}）与数据目录（${r.dataDir}）`,
+        title: t('toast.portableCannotAutoUninstall'),
+        body: t('toast.portableManualDelete', { exeDir: r.exeDir, dataDir: r.dataDir }),
         type: 'info', sticky: true,
       });
       return;
     }
     if (!r.ok) {
       btn.disabled = false;
-      toast({ title: '卸载失败', body: r.error, type: 'error' });
+      toast({ title: t('toast.uninstallFailed'), body: r.error, type: 'error' });
       return;
     }
-    toast({ title: '正在卸载…', body: '卸载程序已启动，ApkStart 即将退出', type: 'ok', sticky: true });
+    toast({ title: t('toast.uninstalling'), body: t('toast.uninstallingBody'), type: 'ok', sticky: true });
   });
 
   // ARM 兼容镜像下载（带进度 toast）
   $('btnInstallPlay').addEventListener('click', async () => {
     const btn = $('btnInstallPlay');
     btn.disabled = true;
-    const t = toast({ title: '开始下载 ARM 兼容镜像', body: '准备中…', sticky: true, spinner: true, progress: 3 });
+    const t = toast({ title: t('toast.downloadArmImgStart'), body: t('common.loading'), sticky: true, spinner: true, progress: 3 });
     const un = api.on('provision:progress', (p) => {
       if (p.component !== 'playimg') return;
-      t.update({ title: '下载 ARM 兼容镜像', body: p.message || '', progress: p.percent });
+      t.update({ title: t('toast.downloadArmImgTitle'), body: p.message || '', progress: p.percent });
     });
     try {
       const r = await api.installPlayImage();
       if (r && r.ok) {
-        t.update({ title: 'ARM 兼容镜像就绪', body: '重启运行时后生效', progress: 100 });
+        t.update({ title: t('toast.armImgReady'), body: t('toast.armImgReadyBody'), progress: 100 });
         setTimeout(() => t.dismiss(), 3000);
         $('compatInstallField').hidden = true;
         refreshStatus();
       } else {
-        t.update({ title: '兼容镜像下载失败', body: (r && r.error) || '未知错误', progress: null });
+        t.update({ title: t('toast.armImgFailed'), body: (r && r.error) || t('common.unknown'), progress: null });
         t.dismiss();
-        toast({ title: '兼容镜像下载失败', body: (r && r.error) || '未知错误', type: 'error' });
+        toast({ title: t('toast.armImgFailed'), body: (r && r.error) || t('common.unknown'), type: 'error' });
       }
     } catch (e) {
       t.dismiss();
-      toast({ title: '兼容镜像下载失败', body: e.message, type: 'error' });
+      toast({ title: t('toast.armImgFailed'), body: e.message, type: 'error' });
     } finally {
       un();
       btn.disabled = false;
@@ -2172,7 +2212,7 @@ function bindSettings() {
     $('compatInstallField').hidden = !on || !!ok;
     if (env.playImage) {
       $('compatImgStatus').textContent = ok
-        ? `已就绪（${(env.playImage.size / 1073741824).toFixed(2)} GB）` : '未下载';
+        ? t('android.armReady', { size: (env.playImage.size / 1073741824).toFixed(2) }) : t('android.armNotDownloaded');
     }
   })();
   $('btnOpenData').addEventListener('click', async () => {
@@ -2186,7 +2226,7 @@ function bindSettings() {
     if (!picked) return;
     await api.setSettings({ runtime: { dir: picked } });
     $('setRuntimeDir').value = picked;
-    toast({ title: '数据目录已更新', body: '请重启 ApkStart 使其生效（旧数据不会自动搬移）', type: 'ok', sticky: true });
+    toast({ title: t('toast.dataDirUpdated'), body: t('toast.restartApkStartEffective'), type: 'ok', sticky: true });
   });
 
   // 安卓数据目录（AVD + 快照）：真正吃盘的那块，单独指到别的盘
@@ -2197,8 +2237,8 @@ function bindSettings() {
       await api.setSettings({ runtime: { avdDir: picked } });
       $('setAvdDir').value = picked;
       toast({
-        title: '安卓数据目录已更新',
-        body: '请重启 ApkStart 使其生效。旧目录里的 apkstart.avd 可以整体搬到新目录，再删掉旧的。',
+        title: t('toast.dataDirUpdated'),
+        body: t('toast.androidDataDirUpdatedBody'),
         type: 'ok',
         sticky: true,
       });
@@ -2214,15 +2254,15 @@ function bindSettings() {
 
   $('btnRuntimeStart').addEventListener('click', async () => {
     const el = $('probeResult');
-    el.textContent = '正在启动…';
+    el.textContent = t('android.starting');
     const r = await api.runtimeStart();
-    el.textContent = r.ok ? `已就绪：${r.engine}` : `启动失败：${r.error}`;
+    el.textContent = r.ok ? t('android.readyEngine', { engine: r.engine }) : t('android.startFailed', { error: r.error });
     refreshStatus();
   });
 
   $('btnRuntimeStop').addEventListener('click', async () => {
     await api.runtimeStop();
-    $('probeResult').textContent = '已停止内置虚拟机';
+    $('probeResult').textContent = t('android.stoppedBuiltinVm');
     refreshStatus();
   });
 
@@ -2230,14 +2270,14 @@ function bindSettings() {
     const btn = $('btnAssoc');
     if (btn.dataset.on === '1') {
       await api.assocUnregister();
-      btn.textContent = '未关联 · 点击开启';
+      btn.textContent = t('settings.assocUnlinked');
       btn.dataset.on = '0';
-      toast({ title: '.apk 关联已取消' });
+      toast({ title: t('toast.assocCancelled') });
     } else {
       const r = await api.assocRegister();
-      btn.textContent = '已关联 · 点击取消';
+      btn.textContent = t('settings.assocLinked');
       btn.dataset.on = '1';
-      toast({ title: '.apk 关联已开启', body: r.ok ? '现在双击 APK 会直接安装到 ApkStart' : '', type: r.ok ? 'ok' : 'error' });
+      toast({ title: t('toast.assocEnabled'), body: r.ok ? t('toast.assocEnabledBody') : '', type: r.ok ? 'ok' : 'error' });
     }
   });
 }
@@ -2293,33 +2333,33 @@ function bindEvents() {
     if (act === 'emulator' || act === 'sysimg' || act === 'accel'
       || act === 'adb' || act === 'qemu' || act === 'iso' || act === 'disk') {
       const r = await runStep(act);
-      if (!r.ok) toast({ title: '操作失败', body: r.error, type: 'error', sticky: true });
+      if (!r.ok) toast({ title: t('toast.opFailed'), body: r.error, type: 'error', sticky: true });
       return;
     }
     if (act === 'isoImport') {
       const r = await api.importIso();
-      if (r.ok) { toast({ title: '系统镜像已导入', body: r.path, type: 'ok' }); refreshStatus(); }
-      else if (!r.canceled) toast({ title: '导入失败', body: r.error, type: 'error' });
+      if (r.ok) { toast({ title: t('toast.sysimgImported'), body: r.path, type: 'ok' }); refreshStatus(); }
+      else if (!r.canceled) toast({ title: t('toast.importFailed'), body: r.error, type: 'error' });
       return;
     }
     if (act === 'diskImport') {
       const r = await api.importDisk();
-      if (r.ok) { toast({ title: '虚拟磁盘已导入', body: '可直接启动运行时', type: 'ok' }); refreshStatus(); }
-      else if (!r.canceled) toast({ title: '导入失败', body: r.error, type: 'error' });
+      if (r.ok) { toast({ title: t('toast.vdiskImported'), body: t('toast.canStartRuntime'), type: 'ok' }); refreshStatus(); }
+      else if (!r.canceled) toast({ title: t('toast.importFailed'), body: r.error, type: 'error' });
       return;
     }
     if (act === 'install') { await startInstall(); return; }
     if (act === 'vmStart') {
-      const t = toast({ title: '正在启动运行时…', body: '首次启动需要引导 Android 系统', sticky: true, spinner: true });
+      const t = toast({ title: t('toast.startingRuntime'), body: t('toast.firstBootGuide'), sticky: true, spinner: true });
       const r = await api.runtimeStart();
-      if (r.ok) { t.update({ title: '运行时已就绪', type: 'ok' }); setTimeout(t.dismiss, 2200); }
-      else t.update({ title: '启动失败', body: r.error, type: 'error' });
+      if (r.ok) { t.update({ title: t('toast.runtimeReady'), type: 'ok' }); setTimeout(t.dismiss, 2200); }
+      else t.update({ title: t('android.startFailed', { error: r.error }), body: r.error, type: 'error' });
       refreshStatus();
       return;
     }
     if (act === 'vmStop') {
       await api.runtimeStop();
-      toast({ title: '运行时会话已结束' });
+      toast({ title: t('toast.runtimeSessionEnded') });
       refreshStatus();
     }
   });
@@ -2336,9 +2376,9 @@ function bindEvents() {
     btnSync.disabled = true;
     try {
       await api.syncShared();
-      toast({ title: '已同步共享目录', type: 'ok' });
+      toast({ title: t('toast.syncedSharedDir'), type: 'ok' });
     } catch (_) {
-      toast({ title: '同步失败', body: '运行时未就绪时会跳过同步', type: 'error' });
+      toast({ title: t('toast.syncFailed'), body: t('toast.syncSkipNotReady'), type: 'error' });
     } finally {
       btnSync.disabled = false;
     }
@@ -2412,7 +2452,7 @@ function bindEvents() {
       .map((f) => { try { return api.pathForFile(f); } catch (_) { return null; } })
       .filter((p) => p && /\.apk$/i.test(p));
     if (paths.length) installFiles(paths);
-    else toast({ title: '只能拖入 .apk 文件', type: 'error' });
+    else toast({ title: t('toast.onlyApkAllowed'), type: 'error' });
   });
 
   // 主进程事件
@@ -2420,9 +2460,9 @@ function bindEvents() {
     // 报错了就别再让「正在安装…」那条一直转圈（可能来自双击 APK 的另一条链路）
     if (installToast) { try { installToast.dismiss(); } catch (_) { /* ignore */ } installToast = null; }
     const name = p && p.file ? String(p.file).split(/[\\/]/).pop() : '';
-    const raw = (p && p.message) || '未知错误';
+    const raw = (p && p.message) || t('common.unknown');
     toast({
-      title: name ? `安装失败：${name}` : '安装失败',
+      title: name ? t('toast.installFailedApp', { name }) : t('toast.installFailed'),
       body: friendlyInstallErrorText(raw),
       type: 'error',
     });
@@ -2451,11 +2491,39 @@ function bindEvents() {
   api.on('autodebug:state', (r) => {
     if (r && r.running) {
       const txt = $('autodebugStateText');
-      if (txt) txt.textContent = '正在检测…';
+      if (txt) txt.textContent = t('autodebug.running');
       return;
     }
     renderAutodebug(r);
   });
+}
+
+/* ---------------- 语言切换 ---------------- */
+
+function applyLanguage(lang) {
+  state.locale = lang || 'en';
+  if (api && api.i18n) {
+    api.i18n.setLocale(state.locale);
+  } else if (window.apkstartI18n) {
+    window.apkstartI18n.setLocale(state.locale);
+  }
+  const i18n = window.apkstartI18n || (api && api.i18n);
+  if (i18n) {
+    i18n.translateDOM(document, state.locale);
+  }
+  document.documentElement.lang = state.locale;
+  document.documentElement.dir = (state.locale === 'ar' ? 'rtl' : 'ltr');
+
+  if ($('setLanguage')) $('setLanguage').value = state.locale;
+  try { renderGrid(); } catch (_) {}
+  try { updateStats(); } catch (_) {}
+  try { refreshStatus(); } catch (_) {}
+  try { if (state.status) renderSetup(state.status); } catch (_) {}
+  try { if (lastEnvCheck) renderEnvCheck(lastEnvCheck); } catch (_) {}
+  try { if (lastDrivers) renderDrivers(lastDrivers); } catch (_) {}
+  try { if (lastPreflight) renderPreflight(lastPreflight); } catch (_) {}
+  try { if (state.autodebug) renderAutodebug(state.autodebug); } catch (_) {}
+  try { if (lastUpdate) renderUpdate(lastUpdate); } catch (_) {}
 }
 
 /* ---------------- 启动 ---------------- */
@@ -2468,7 +2536,13 @@ async function init() {
   bindUpdate();
   bindAndroid();
   bindWelcome();
-  state.settings = await api.getSettings();
+  state.settings = await api.getSettings().catch(() => ({}));
+  applyLanguage(state.settings?.language || 'en');
+  if (api && api.on) {
+    api.on('i18n:change', (lang) => {
+      if (lang && lang !== state.locale) applyLanguage(lang);
+    });
+  }
   await refreshStatus();
   await refreshApps();
   refreshAndroid();
@@ -2484,11 +2558,11 @@ async function init() {
 let startupInfo = null;
 
 function greetingOf(h) {
-  if (h < 5) return '夜深了';
-  if (h < 11) return '早上好';
-  if (h < 13) return '中午好';
-  if (h < 18) return '下午好';
-  return '晚上好';
+  if (h < 5) return t('greeting.lateNight');
+  if (h < 11) return t('greeting.morning');
+  if (h < 13) return t('greeting.noon');
+  if (h < 18) return t('greeting.afternoon');
+  return t('greeting.evening');
 }
 
 function bindWelcome() {
@@ -2518,17 +2592,17 @@ async function maybeShowWelcome() {
   if (!(startupInfo && startupInfo.autostart) && cfg.lastDate === today) return;
 
   const h = new Date().getHours();
-  $('welcomeHi').textContent = `${greetingOf(h)}，欢迎回来`;
+  $('welcomeHi').textContent = t('welcome.title', { greeting: greetingOf(h) });
   const ver = (startupInfo && startupInfo.version) || (state.status && state.status.version) || '';
   const ready = state.status && state.status.ready;
-  $('welcomeSub').textContent = `ApkStart${ver ? ` v${ver}` : ''} · ${ready ? '运行时就绪，点开即用' : '运行时会按需自动准备'}`;
+  $('welcomeSub').textContent = `ApkStart${ver ? ` v${ver}` : ''} · ${ready ? t('welcome.ready') : t('welcome.autoPrepare')}`;
 
   const apps = (state.apps || []).length;
   const dev = $('statusDevice') ? $('statusDevice').textContent.trim() : '';
   const chips = [
-    { k: String(apps), v: '已装应用' },
-    { k: ready ? '就绪' : '待命', v: '安卓运行时' },
-    { k: dev ? dev.replace(/^.*?(\d+)/, '$1') : '—', v: '设备 / 端口' },
+    { k: String(apps), v: t('welcome.installedApps') },
+    { k: ready ? t('welcome.ready') : t('welcome.standby'), v: t('welcome.runtime') },
+    { k: dev ? dev.replace(/^.*?(\d+)/, '$1') : '—', v: t('welcome.devicePort') },
   ];
   $('welcomeStats').innerHTML = chips
     .map((c) => `<div class="welcome-stat"><b>${esc(c.k)}</b><span>${esc(c.v)}</span></div>`)
@@ -2548,14 +2622,14 @@ function renderWelcomeTips() {
   const apps = (state.apps || []).length;
   const tips = [];
   if (lastUpdate && lastUpdate.hasUpdate) {
-    tips.push(`发现新版本 <b>${esc(lastUpdate.tag || '')}</b>，可在「设置 → 软件更新」一键更新`);
+    tips.push(t('welcome.tipNewVersion', { tag: esc(lastUpdate.tag || '') }));
   }
   if (!apps) {
-    tips.push('把 APK 拖进窗口就能安装，装完会自动生成桌面图标');
+    tips.push(t('welcome.tipDragApk'));
   } else {
-    tips.push('双击应用卡片即可在独立窗口中运行，右上角可旋转 / 缩放 / 关闭');
+    tips.push(t('welcome.tipDoubleClick'));
   }
-  tips.push('关窗口只是退出那个应用，安卓环境会留着，下次点开更快');
+  tips.push(t('welcome.tipCloseWindow'));
   box.innerHTML = tips
     .map((t, i) => `<div class="welcome-tip"><i>${i + 1}</i><span>${t}</span></div>`)
     .join('');
@@ -2576,7 +2650,10 @@ async function selfCheck() {
   finally { envBusy = false; }
 }
 
+let lastEnvCheck = null;
+
 function renderEnvCheck(r) {
+  lastEnvCheck = r;
   const box = $('envCheck');
   if (!box) return;
   // 「组件缺失」在同一个面板的一键完成里已经覆盖，不再重复列出
@@ -2588,9 +2665,9 @@ function renderEnvCheck(r) {
   if (chip) {
     const errs = issues.filter((i) => i.severity === 'error').length;
     chip.hidden = issues.length === 0;
-    chip.textContent = errs ? `${errs} 项待修复` : `${issues.length} 项提示`;
+    chip.textContent = errs ? t('envcheck.itemsPending', { n: errs }) : t('envcheck.itemsNotice', { n: issues.length });
     chip.className = `status-chip${errs ? ' err' : ''}`;
-    chip.title = issues.map((i) => i.title).join('；');
+    chip.title = issues.map((i) => t('issue.' + i.code + '.title') || i.title).join('；');
   }
 
   if (!issues.length) {
@@ -2598,9 +2675,9 @@ function renderEnvCheck(r) {
     box.innerHTML = `
       <div class="env-check-ok">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
-        <span>环境自检通过，没有发现会影响运行的问题。</span>
+        <span>${esc(t('envcheck.passMsg'))}</span>
         <span style="flex:1"></span>
-        <button class="btn ghost sm" id="btnEnvRecheck">重新检查</button>
+        <button class="btn ghost sm" id="btnEnvRecheck">${esc(t('envcheck.recheck'))}</button>
       </div>`;
     const re = $('btnEnvRecheck');
     if (re) re.addEventListener('click', selfCheck);
@@ -2611,24 +2688,28 @@ function renderEnvCheck(r) {
   box.hidden = false;
   box.innerHTML = `
     <div class="env-check-head">
-      <span class="ec-title">环境自检</span>
-      ${errs ? `<span class="ec-count">${errs} 个严重</span>` : ''}
-      ${warns ? `<span class="ec-count warn">${warns} 个提示</span>` : ''}
+      <span class="ec-title">${esc(t('envcheck.title'))}</span>
+      ${errs ? `<span class="ec-count">${esc(t('envcheck.errorCount', { n: errs }))}</span>` : ''}
+      ${warns ? `<span class="ec-count warn">${esc(t('envcheck.warnCount', { n: warns }))}</span>` : ''}
       <span class="ec-spacer"></span>
-      <button class="btn ghost sm" id="btnEnvRecheck">重新检查</button>
-      <button class="btn primary sm" id="btnEnvFixAll">一键修复全部</button>
+      <button class="btn ghost sm" id="btnEnvRecheck">${esc(t('envcheck.recheck'))}</button>
+      <button class="btn primary sm" id="btnEnvFixAll">${esc(t('envcheck.fixAll'))}</button>
     </div>
     <div class="env-check-list">
-      ${issues.map((i) => `
+      ${issues.map((i) => {
+        const itemTitle = t('issue.' + i.code + '.title') || i.title;
+        const itemHint = t('issue.' + i.code + '.hint') || i.hint || '';
+        return `
         <div class="env-check-item ${i.severity}">
           <span class="ec-sev"></span>
           <div class="ec-body">
-            <div class="ec-name">${esc(i.title)}</div>
-            <div class="ec-hint">${esc(i.hint || '')}</div>
+            <div class="ec-name">${esc(itemTitle)}</div>
+            <div class="ec-hint">${esc(itemHint)}</div>
           </div>
-          ${i.fix ? `<button class="ec-fix" data-code="${esc(i.code)}">修复</button>` : ''}
-          <button class="ec-help" data-code="${esc(i.code)}" title="打开内置教程">教程</button>
-        </div>`).join('')}
+          ${i.fix ? `<button class="ec-fix" data-code="${esc(i.code)}">${esc(t('envcheck.fix'))}</button>` : ''}
+          <button class="ec-help" data-code="${esc(i.code)}" title="${esc(t('autodebug.openTutorial'))}">${esc(t('autodebug.tutorial'))}</button>
+        </div>`;
+      }).join('')}
     </div>`;
   const re = $('btnEnvRecheck');
   if (re) re.addEventListener('click', selfCheck);
@@ -2650,9 +2731,9 @@ function renderEnvCheck(r) {
 
 /** 修复没成功：如实报错，并把对应教程自动打开（同一章节主进程 60 秒内只弹一次） */
 function failFix(issue, ctl, body) {
-  const msg = body || '请按教程手动处理';
+  const msg = body || t('envcheck.followTutorial');
   if (ctl && typeof ctl.update === 'function') ctl.update({ body: msg, type: 'error', sticky: true });
-  else toast({ title: '修复未完成', body: msg, type: 'error' });
+  else toast({ title: t('envcheck.fixNotComplete'), body: msg, type: 'error' });
   openManualForIssue(issue, 'fix-failed');
 }
 
@@ -2662,97 +2743,89 @@ async function fixIssue(issue) {
       const r = await api.installVcRedist().catch(() => ({ ok: false }));
       if (!r.ok && r.reason === 'no-installer') {
         api.openExternal('https://learn.microsoft.com/zh-CN/cpp/windows/latest-supported-vc-redist?view=msvc-170#visual-studio-2015-2017-2019-and-2022');
-        toast({ title: '未找到内置安装包', body: '已打开微软官方下载页，请下载 x64 版本', type: 'info' });
+        toast({ title: t('toast.actionCancelled'), body: 'https://learn.microsoft.com', type: 'info' });
         break;
       }
       toast(r.ok
-        ? { title: 'VC++ 运行库已安装', type: 'ok' }
-        : { title: '安装未完成', body: r.error || '请重试', type: 'error' });
+        ? { title: t('setup.accelEnabled'), type: 'ok' }
+        : { title: t('setup.accelFailed'), body: r.error || t('common.retry'), type: 'error' });
       break;
     }
     case 'virtualization': {
-      const t = toast({ title: '正在开启硬件加速…', body: '请在弹出的窗口点「是」', sticky: true, spinner: true });
+      const tEl = toast({ title: t('setup.accelInstalling'), body: t('setup.accelInstallHint'), sticky: true, spinner: true });
       const r = await api.enableVirtualization().catch(() => ({ ok: false }));
       if (r.ok) {
-        t.update({ title: '硬件加速已启用', body: r.restartNeeded ? '请重启电脑以获得最佳性能' : (r.note || ''), type: 'ok' });
-        setTimeout(t.dismiss, 3200);
+        tEl.update({ title: t('setup.accelEnabled'), body: r.restartNeeded ? t('issue.accel.store.hint') : (r.note || ''), type: 'ok' });
+        setTimeout(tEl.dismiss, 3200);
       } else if (r.manual) {
-        // 商店（MSIX）版：包固定 mediumIL，通常拿不到管理员授权。
-        // 与其让用户点一个注定失败的按钮，不如直接把「启用或关闭 Windows 功能」
-        // 对话框弹出来，并告诉他勾哪一项。
-        t.dismiss();
+        tEl.dismiss();
         await api.openWindowsFeatures?.().catch(() => null);
         toast({
-          title: '需要手动开启一次（仅此一次）',
-          body: r.note || '在打开的窗口里勾选「Windows 虚拟机监控程序平台」，确定后重启电脑。',
+          title: t('issue.accel.store.title'),
+          body: r.note || t('issue.accel.store.hint'),
           type: 'info',
           sticky: true,
         });
-        // 自动提权走不通时，同步把图文教程打开，避免用户对着系统窗口不知道勾哪个
         openManualForIssue(issue, 'fix-failed');
       } else if (r.cancelled) {
-        t.update({ title: '已取消', body: r.error || '没有拿到管理员授权，硬件加速没有改动。', type: 'info', spinner: false });
-        setTimeout(t.dismiss, 4200);
+        tEl.update({ title: t('toast.actionCancelled'), body: r.error || t('toast.actionCancelledDesc'), type: 'info', spinner: false });
+        setTimeout(tEl.dismiss, 4200);
       } else {
-        failFix(issue, t, r.error || r.note || '未能开启硬件加速，已打开对应教程');
+        failFix(issue, tEl, r.error || r.note || t('setup.accelFailed'));
       }
       break;
     }
     case 'disk': {
-      // 主进程会弹出原生确认框（含可释放空间预览），这里不再重复 confirm
       const r = await api.runtimeCleanup({ apply: true }).catch(() => null);
-      if (!r) { toast({ title: '清理失败', body: '请重试', type: 'error' }); break; }
+      if (!r) { toast({ title: t('toast.cleanupFailed'), body: t('common.retry'), type: 'error' }); break; }
       if (r.cancelled) break;
-      toast({ title: '清理完成', body: `释放约 ${((r.saved || 0) / 1048576).toFixed(0)} MB`, type: 'ok' });
+      toast({ title: t('toast.cleanupSuccess'), body: t('toast.cleanupFreed', { mb: ((r.saved || 0) / 1048576).toFixed(0) }), type: 'ok' });
       break;
     }
     case 'path': {
-      toast({ title: '建议改到纯英文目录', body: '在 设置 → 系统集成 里修改「运行时数据目录」，再重启软件。', type: 'info', sticky: true });
+      toast({ title: t('toast.suggestAsciiPath'), body: t('toast.suggestAsciiPathBody'), type: 'info', sticky: true });
       openSettings();
       break;
     }
     case 'deploy': {
-      toast({ title: '正在补齐缺失的运行时组件…', type: 'info', sticky: true, spinner: true });
+      toast({ title: t('setup.preparing'), type: 'info', sticky: true, spinner: true });
       await deployAll();
       break;
     }
     case 'lock': {
       const r = await api.clearLocks().catch(() => ({ ok: false }));
-      toast(r.ok ? { title: '已清理残留锁文件', type: 'ok' } : { title: '清理失败', body: r.error, type: 'error' });
+      toast(r.ok ? { title: t('toast.lockingCleaned'), type: 'ok' } : { title: t('toast.cleanupFailed'), body: r.error, type: 'error' });
       break;
     }
-    // ---- 自动检测（自动 debug）新增的修复动作 ----
     case 'restartRuntime': {
-      // unauthorized / 引导卡死 / 孤儿锁的首选自愈动作：停一次再拉起来（走冷启动）
-      const t = toast({ title: '正在重启安卓运行时…', body: '会重新引导一次，大约十几秒', type: 'info', sticky: true, spinner: true });
+      const tEl = toast({ title: t('toast.restartingRuntime'), body: t('toast.restartingRuntimeBody'), type: 'info', sticky: true, spinner: true });
       const r = await api.restartRuntime().catch(() => ({ ok: false }));
       if (r && r.ok) {
-        t.update({ title: '安卓运行时已重启', body: '授权弹窗请点「允许」', type: 'ok' });
-        setTimeout(t.dismiss, 3000);
+        tEl.update({ title: t('toast.runtimeRestarted'), body: t('toast.allowUsbDebugging'), type: 'ok' });
+        setTimeout(tEl.dismiss, 3000);
       } else {
-        failFix(issue, t, (r && r.error) || '重启失败，已打开对应教程');
+        failFix(issue, tEl, (r && r.error) || t('common.retry'));
       }
       break;
     }
     case 'orphans': {
       const r = await api.clearOrphans().catch(() => ({ ok: false }));
       toast(r && r.ok
-        ? { title: '已清理残留的模拟器进程', type: 'ok' }
-        : { title: '清理失败', body: (r && r.error) || '请重试', type: 'error' });
+        ? { title: t('toast.orphansCleaned'), type: 'ok' }
+        : { title: t('toast.cleanupFailed'), body: (r && r.error) || t('common.retry'), type: 'error' });
       break;
     }
     case 'snapshots': {
       const r = await api.clearSnapshot().catch(() => ({ ok: false }));
       toast(r && r.ok
-        ? { title: '已作废快速启动快照', body: '下次打开应用会走一次完整冷启动', type: 'ok' }
-        : { title: '作废失败', body: (r && r.error) || '请重试', type: 'error' });
+        ? { title: t('toast.snapshotInvalidated'), body: t('toast.snapshotInvalidatedBody'), type: 'ok' }
+        : { title: t('toast.cleanupFailed'), body: (r && r.error) || t('common.retry'), type: 'error' });
       break;
     }
     case 'dataReset': {
-      // 扩容被差量盘挡住时必须重建：会清掉已装应用，所以只引导、不自动做。
       toast({
-        title: '需要重建安卓数据分区',
-        body: '到「设置 → 性能与资源」点「立即扩容」；提示需要重置时确认一次（会清空已装应用）。',
+        title: t('confirm.growDataResetTitle'),
+        body: t('confirm.growDataResetDetail'),
         type: 'info',
         sticky: true,
       });
@@ -2760,66 +2833,63 @@ async function fixIssue(issue) {
       break;
     }
     case 'orientation': {
-      // 让物理面板方向跟上策略：策略要横屏就切横屏，要竖屏就切竖屏
       const s = (state.settings && state.settings.display) || {};
       const mode = s.orientationMode || 'auto';
       if (mode === 'auto') {
-        toast({ title: '当前是「跟随应用」', body: '面板方向会按应用自动切换；若某个应用方向不对，可对它单独指定。', type: 'info' });
+        toast({ title: t('toast.orientationSet', { mode: t('toast.orientAuto') }), body: t('toast.orientationNote'), type: 'info' });
         break;
       }
       const wantLandscape = mode === 'landscape';
       state.settings = await api.setSettings({ display: { landscape: wantLandscape } });
       fillSettings(state.settings);
       toast({
-        title: wantLandscape ? '面板已切成横屏' : '面板已切成竖屏',
-        body: '下次打开应用生效',
+        title: wantLandscape ? t('toast.orientationSet', { mode: t('toast.orientLandscape') }) : t('toast.orientationSet', { mode: t('toast.orientPortrait') }),
+        body: t('toast.orientationNote'),
         type: 'ok',
       });
       break;
     }
     case 'shared': {
-      toast({ title: '请检查共享目录', body: '到「设置 → 集成与文件」确认本机共享目录存在且可写。', type: 'info', sticky: true });
+      toast({ title: t('settings.localSharedDir'), body: t('settings.sharedSub'), type: 'info', sticky: true });
       openSettings().then(() => focusGroup(document.querySelector('#settingsBody [data-cat="files"]'))).catch(() => {});
       break;
     }
-    // ---- 0.6.2 声音检测对应的修复动作 ----
     case 'audio': {
-      const t = toast({ title: '正在打开安卓应用声音…', body: '马上重启运行时让 -no-audio 失效', type: 'info', sticky: true, spinner: true });
+      const tEl = toast({ title: t('settings.audio'), body: t('toast.restartingRuntime'), type: 'info', sticky: true, spinner: true });
       const s = await api.setSettings({ engine: { audio: true } }).catch(() => null);
-      if (!s) { failFix(issue, t, '没能保存声音设置，已打开对应教程'); break; }
+      if (!s) { failFix(issue, tEl, t('toast.saveFailed')); break; }
       state.settings = s;
       fillSettings(s);
       const r = await api.restartRuntime().catch(() => ({ ok: false }));
       if (r && r.ok !== false) {
-        t.update({ title: '声音已打开', body: '运行时已重启，现在应该能听到应用声音了', type: 'ok' });
-        setTimeout(t.dismiss, 3600);
+        tEl.update({ title: t('toast.audioTurnedOn'), body: t('toast.audioTurnedOnBody'), type: 'ok' });
+        setTimeout(tEl.dismiss, 3600);
       } else {
-        failFix(issue, t, '声音开关已打开，但运行时重启失败，已打开对应教程');
+        failFix(issue, tEl, t('toast.saveFailed'));
       }
       break;
     }
     case 'audioService': {
-      // MSIX / 普通权限都拿不到系统服务的提权操作，直接把教程送到用户面前
-      toast({ title: '需要手动启动 Windows Audio', body: '已打开教程，照着做一次即可', type: 'info', sticky: true });
+      toast({ title: t('issue.audio.windowsServiceStopped.title'), body: t('envcheck.followTutorial'), type: 'info', sticky: true });
       openManualForIssue(issue, 'clicked');
       break;
     }
     case 'repairNetwork': {
-      const t = toast({ title: '正在重置安卓网络…', body: '应用清单会保留', type: 'info', sticky: true, spinner: true });
+      const t = toast({ title: t('toast.resettingNetwork'), body: t('toast.appManifestKept'), type: 'info', sticky: true, spinner: true });
       const r = await api.runtimeRepairNetwork().catch(() => ({ ok: false }));
       if (r && r.ok !== false) {
-        t.update({ title: '安卓网络已重置', body: '下次打开应用重新联网', type: 'ok' });
+        t.update({ title: t('toast.networkReset'), body: t('toast.reconnectOnLaunch'), type: 'ok' });
         setTimeout(t.dismiss, 3000);
       } else {
-        t.update({ title: '重置失败', body: (r && r.error) || '请重试', type: 'error' });
+        t.update({ title: t('toast.resetFailed'), body: (r && r.error) || t('common.retry'), type: 'error' });
       }
       break;
     }
     case 'report': {
       const r = await api.doctorReport().catch(() => null);
       toast(r && r.ok !== false
-        ? { title: '诊断报告已导出', body: '把报告发给作者可以最快定位问题', type: 'ok' }
-        : { title: '导出失败', body: (r && r.error) || '请重试', type: 'error' });
+        ? { title: t('toast.diagReportExported'), body: t('toast.diagReportBody'), type: 'ok' }
+        : { title: t('toast.diagExportFailed'), body: (r && r.error) || t('common.retry'), type: 'error' });
       break;
     }
     case 'settings': {
@@ -2827,7 +2897,7 @@ async function fixIssue(issue) {
       break;
     }
     default:
-      toast({ title: '暂不支持自动修复', body: issue.hint || '', type: 'info' });
+      toast({ title: t('toast.autoFixNotSupported'), body: issue.hint || '', type: 'info' });
   }
   // 修复后重新自检，刷新横幅与状态
   setTimeout(selfCheck, 600);
@@ -2846,5 +2916,5 @@ async function fixAllIssues(issues) {
 
 init().catch((e) => {
   console.error(e);
-  toast({ title: '初始化失败', body: e.message, type: 'error', sticky: true });
+  toast({ title: t('toast.initFailed'), body: e.message, type: 'error', sticky: true });
 });

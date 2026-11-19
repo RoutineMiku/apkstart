@@ -102,7 +102,7 @@ html, body {
 
 .first-run-list li::before {
   content: '·';
-  margin-right: 8px;
+  margin-inline-end: 8px;
   color: #0f9d63;
 }
 

@@ -51,7 +51,7 @@ body {
   background: var(--bg);
   border-bottom: 1px solid transparent;
   -webkit-app-region: drag;
-  padding-right: 148px; /* 给系统窗口按钮留位 */
+  padding-inline-end: 148px; /* 给系统窗口按钮留位 */
 }
 
 .brand { display: flex; align-items: center; gap: 8px; }
@@ -64,7 +64,7 @@ body {
 }
 .brand-name { font-weight: 650; font-size: 13.5px; letter-spacing: .2px; }
 .brand-tag {
-  margin-left: 4px;
+  margin-inline-start: 4px;
   font-size: 11px;
   color: var(--muted);
   background: #eef1f4;
@@ -125,7 +125,7 @@ body {
 }
 .search input::placeholder { color: var(--faint); }
 
-.toolbar-right { margin-left: auto; display: flex; gap: 8px; }
+.toolbar-right { margin-inline-start: auto; display: flex; gap: 8px; }
 
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -222,13 +222,15 @@ body {
 }
 
 .card .badge-run {
-  position: absolute; top: 9px; right: 9px;
+  position: absolute; top: 9px;
+  inset-inline-end: 9px;
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-soft);
 }
 .card .pin {
-  position: absolute; top: 8px; left: 9px;
+  position: absolute; top: 8px;
+  inset-inline-start: 9px;
   font-size: 11px; color: var(--faint);
 }
 
@@ -272,7 +274,7 @@ body {
   color: var(--muted);
 }
 .status-left { display: flex; align-items: center; gap: 7px; }
-.status-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.status-right { margin-inline-start: auto; display: flex; align-items: center; gap: 8px; }
 .status-item { white-space: nowrap; }
 .sep { width: 1px; height: 11px; background: var(--line-strong); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: #cbd2da; }
@@ -293,7 +295,7 @@ body {
 
 .toast-wrap {
   position: fixed;
-  right: 16px; bottom: 44px;
+  inset-inline-end: 16px; bottom: 44px;
   display: flex; flex-direction: column-reverse; gap: 8px;
   z-index: 60;
   pointer-events: none;
@@ -368,7 +370,7 @@ body {
 }
 .ctxmenu .item:hover { background: #f1f4f7; }
 .ctxmenu .item.danger { color: var(--danger); }
-.ctxmenu .item .k { margin-left: auto; color: var(--faint); font-size: 11px; }
+.ctxmenu .item .k { margin-inline-start: auto; color: var(--faint); font-size: 11px; }
 .ctxmenu .divider { height: 1px; background: var(--line); margin: 5px 6px; }
 
 /* ---------------- 设置弹窗 ---------------- */
@@ -408,7 +410,7 @@ body {
   width: 178px;
   overflow-y: auto;
   padding: 10px 8px 14px;
-  border-right: 1px solid var(--line);
+  border-inline-end: 1px solid var(--line);
   background: var(--panel-2);
 }
 .set-nav::-webkit-scrollbar { width: 8px; }
@@ -423,7 +425,7 @@ body {
   border-radius: 9px;
   background: transparent;
   font: inherit; font-size: 12.5px; color: var(--text);
-  text-align: left; cursor: pointer;
+  text-align: start; cursor: pointer;
 }
 .set-nav-item:hover { background: rgba(15, 157, 99, .07); }
 .set-nav-item.dim { opacity: .42; }
@@ -452,7 +454,7 @@ body {
   flex: 1 1 auto;
   max-width: 320px;
   min-width: 120px;
-  margin-left: 14px;
+  margin-inline-start: 14px;
   height: 30px;
   display: flex; align-items: center; gap: 6px;
   padding: 0 9px;
@@ -531,7 +533,7 @@ body {
   border-bottom: 1px solid var(--line);
 }
 .modal-head h2 { margin: 0; font-size: 14.5px; font-weight: 650; }
-.modal-head .icon-btn { margin-left: auto; }
+.modal-head .icon-btn { margin-inline-start: auto; }
 
 .modal-body {
   flex: 1;
@@ -613,7 +615,7 @@ body {
 }
 .switch::after {
   content: "";
-  position: absolute; top: 2px; left: 2px;
+  position: absolute; top: 2px; inset-inline-start: 2px;
   width: 18px; height: 18px;
   border-radius: 50%;
   background: #fff;
@@ -638,7 +640,7 @@ body {
 
 /* 状态条上的自检计数：主界面不再放大横幅，问题只在底部提示，点开进设置 */
 .status-chip {
-  height: 19px; padding: 0 8px; margin-left: 2px;
+  height: 19px; padding: 0 8px; margin-inline-start: 2px;
   font-size: 11px; line-height: 17px;
   border-radius: 999px;
   border: 1px solid #f0d9a8; background: #fff8e6; color: #a16207;
@@ -718,7 +720,7 @@ body {
   border-top: 1px solid var(--line);
   background: var(--panel-2);
 }
-.modal-foot .btn { margin-left: auto; }
+.modal-foot .btn { margin-inline-start: auto; }
 
 /* ---------------- 运行时部署向导 ---------------- */
 
@@ -749,7 +751,7 @@ body {
 .setup-head p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
 .setup-head b { color: var(--text); font-weight: 600; }
 .setup-hv {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: 11.5px;
   color: var(--muted);
   background: #f4f6f8;
@@ -799,7 +801,7 @@ body {
 .step .act { flex: 0 0 auto; display: flex; gap: 6px; }
 
 .setup-foot { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
-.setup-foot .inline-note { margin-left: auto; }
+.setup-foot .inline-note { margin-inline-start: auto; }
 
 .setup-guide {
   width: 100%;
@@ -813,7 +815,7 @@ body {
 .setup-guide[hidden] { display: none; }
 .setup-guide h2 { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
 .guide-sub { margin: 0; font-size: 12px; color: var(--muted); }
-.guide-list { margin: 12px 0; padding-left: 20px; font-size: 12.5px; line-height: 1.95; }
+.guide-list { margin: 12px 0; padding-inline-start: 20px; font-size: 12.5px; line-height: 1.95; }
 .guide-list li { margin-bottom: 4px; }
 .guide-list code, .guide-tip code {
   background: #f2f5f8;
@@ -888,7 +890,7 @@ kbd {
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
-  margin-left: 6px;
+  margin-inline-start: 6px;
 }
 .about-links {
   display: flex;
@@ -934,7 +936,7 @@ kbd {
 .advanced-group > summary::before {
   content: '▸';
   display: inline-block;
-  margin-right: 7px;
+  margin-inline-end: 7px;
   transition: transform .15s ease;
 }
 .advanced-group[open] > summary::before { transform: rotate(90deg); }
@@ -990,10 +992,50 @@ kbd {
 .mini-details > summary::before {
   content: '▸';
   display: inline-block;
-  margin-right: 6px;
+  margin-inline-end: 6px;
   transition: transform .15s ease;
 }
 .mini-details[open] > summary::before { transform: rotate(90deg); }
 
 /* 行内按钮不要折行（空间紧张时「立即扩容」会被拆成两行） */
 .row .btn { white-space: nowrap; flex: 0 0 auto; }
+
+/* ---------------- RTL (Arabic) 支持 ---------------- */
+[dir="rtl"] {
+  text-align: right;
+}
+[dir="rtl"] .switch:checked::after {
+  transform: translateX(-16px);
+}
+[dir="rtl"] .advanced-group > summary::before,
+[dir="rtl"] .mini-details > summary::before {
+  content: '◂';
+}
+[dir="rtl"] .advanced-group[open] > summary::before,
+[dir="rtl"] .mini-details[open] > summary::before {
+  transform: rotate(-90deg);
+}
+[dir="rtl"] .guide-list {
+  padding-inline-start: 22px;
+  padding-inline-end: 0;
+}
+[dir="rtl"] .search input {
+  padding-inline-start: 10px;
+  padding-inline-end: 32px;
+}
+[dir="rtl"] .search svg {
+  inset-inline-start: auto;
+  inset-inline-end: 11px;
+}
+[dir="rtl"] .set-search-wrap svg {
+  inset-inline-start: auto;
+  inset-inline-end: 11px;
+}
+[dir="rtl"] .set-search {
+  padding-inline-start: 10px;
+  padding-inline-end: 30px;
+}
+[dir="rtl"] .set-search-clear {
+  inset-inline-start: 7px;
+  inset-inline-end: auto;
+}

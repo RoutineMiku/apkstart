@@ -10,6 +10,7 @@ const ACTIONS = {
   display: 'android.settings.DISPLAY_SETTINGS',
   sound: 'android.settings.SOUND_SETTINGS',
   locale: 'android.settings.LOCALE_SETTINGS',
+  keyboard: 'android.settings.INPUT_METHOD_SETTINGS',
   date: 'android.settings.DATE_SETTINGS',
   apps: 'android.settings.APPLICATION_SETTINGS',
   storage: 'android.settings.INTERNAL_STORAGE_SETTINGS',

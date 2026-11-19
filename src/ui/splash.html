@@ -12,7 +12,7 @@
   <div class="logo-wrap">
     <img class="logo" id="logo" src="assets/logo.png" alt="ApkStart" draggable="false" />
     <div class="brand">ApkStart</div>
-    <div class="tagline">Windows 上的安卓应用运行器</div>
+    <div class="tagline" data-i18n="splash.tagline">Windows 上的安卓应用运行器</div>
   </div>
 
   <!-- 进度条 -->
@@ -21,16 +21,16 @@
   </div>
 
   <!-- 状态文字 -->
-  <div class="status" id="status">正在准备…</div>
+  <div class="status" id="status" data-i18n="splash.preparing">正在准备…</div>
 
   <!-- 首次安装提示（默认隐藏，由主进程控制显示） -->
   <div class="first-run" id="firstRun" hidden>
-    <div class="first-run-title" id="firstRunTitle">首次使用 · 自动配置中</div>
+    <div class="first-run-title" id="firstRunTitle" data-i18n="splash.firstRunTitle">首次使用 · 自动配置中</div>
     <ul class="first-run-list" id="firstRunList">
-      <li>下载 Android 运行时引擎（约 200MB，只需一次）</li>
-      <li>下载系统镜像（约 1.5GB，只需一次）</li>
-      <li>配置硬件加速与网络</li>
-      <li>完成后即可双击 APK 或桌面图标秒开应用</li>
+      <li data-i18n="splash.firstRunStep1">下载 Android 运行时引擎（约 200MB，只需一次）</li>
+      <li data-i18n="splash.firstRunStep2">下载系统镜像（约 1.5GB，只需一次）</li>
+      <li data-i18n="splash.firstRunStep3">配置硬件加速与网络</li>
+      <li data-i18n="splash.firstRunStep4">完成后即可双击 APK 或桌面图标秒开应用</li>
     </ul>
   </div>
 
@@ -38,6 +38,7 @@
   <div class="footer">Powered by RoutineMiku · v<span id="ver"></span></div>
 </div>
 
+<script src="../core/i18n.js"></script>
 <script src="splash.js"></script>
 </body>
 </html>

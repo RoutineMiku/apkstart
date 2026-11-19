@@ -96,6 +96,7 @@ const CHANNELS = [
   'provision:installSysimg', 'provision:installPlayImage', 'provision:installAehd',
   'provision:enableAccel', 'provision:enableVirtualization', 'provision:openWindowsFeatures',
   'provision:downloadIso', 'provision:createDisk', 'provision:importIso', 'provision:importDisk',
+  'i18n:setLocale', 'i18n:getLocale',
 ];
 
 let passed = 0;

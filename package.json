@@ -35,7 +35,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node test/run-tests.js && node test/android-test.js && node test/range-validation-test.js && node test/display-scale-test.js && node test/resources-test.js && node test/drivers-test.js && node test/preflight-test.js && node test/standalone-test.js && node test/boot-auth-test.js && node test/issue-hardening-test.js && node test/autodebug-test.js && node test/settings-categories-test.js && node test/engine-test.js && node test/manual-test.js && node test/auto-test.js",
+    "test": "node test/i18n-test.js && node test/run-tests.js && node test/android-test.js && node test/range-validation-test.js && node test/display-scale-test.js && node test/resources-test.js && node test/drivers-test.js && node test/preflight-test.js && node test/standalone-test.js && node test/boot-auth-test.js && node test/issue-hardening-test.js && node test/autodebug-test.js && node test/settings-categories-test.js && node test/engine-test.js && node test/manual-test.js && node test/auto-test.js",
     "test:ui": "electron test/settings-ui-test.js",
     "build:manual": "python docs/build-manual-html.py",
     "pack": "node build/pack.js",

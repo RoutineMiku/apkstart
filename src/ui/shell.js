@@ -31,9 +31,25 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+const i18n = window.apkstartI18n || (api && api.i18n);
+
+function applyLanguage(lang) {
+  if (!i18n) return;
+  i18n.translateDOM(document, lang);
+  document.documentElement.lang = lang;
+  document.documentElement.dir = (lang === 'ar' ? 'rtl' : 'ltr');
+}
+
+if (api && api.getSettings) {
+  api.getSettings().then((s) => {
+    if (s && s.language) applyLanguage(s.language);
+  }).catch(() => {});
+}
+
 function applyState(s) {
   if (!s) return;
-  $('appName').textContent = s.label || '应用';
+  const defaultLabel = i18n ? i18n.t('common.app') : 'App';
+  $('appName').textContent = s.label || defaultLabel;
   $('bootName').textContent = s.label || '';
   const icon = s.iconUrl || '';
   if (icon) {

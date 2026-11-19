@@ -35,6 +35,7 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
+  language: 'en',
   adbPath: '',
   device: '127.0.0.1:5555',
   /**
@@ -76,11 +77,10 @@ const DEFAULT_SETTINGS = {
     // 网络加速：给模拟器指定国内公共 DNS。安卓默认的 10.0.2.3 要走主机 DNS，
     // VPN / 公司网 / 某些运营商下解析会拖到几百毫秒，视频类应用首屏会明显发卡。
     fastDns: true,
-    // 系统语言：开机时由 emulator -prop 注入（guest 里 setprop 会被 SELinux 拒绝）。
-    // 默认简体中文。设成 en-US 或 off 就回到镜像原生英文。
-    locale: 'zh-CN',
-    // 中文输入法：随包带 AOSP 谷歌拼音输入法，开机后静默安装并启用。
-    // 系统镜像只带 LatinIME（英文键盘），不装就打不了中文。
+    // 系统语言：开机时由 emulator -change-locale 注入。
+    // auto = 跟随应用界面语言（en -> en-US, ar -> ar, zh -> zh-CN）。
+    locale: 'auto',
+    // 中文输入法：随包带 AOSP 谷歌拼音输入法，中文环境下开机后静默安装并启用。
     chineseIme: true,
     chineseImeDefault: true,
     // 快照：quickboot 内存快照让二次启动只要几秒，代价是磁盘上多一份约 2~3GB 的
@@ -264,6 +264,16 @@ const store = {
 
   getSettings() {
     const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    s.language = ['en', 'ar', 'zh'].includes(s.language) ? s.language : 'en';
+    // 0.6.2 多语言迁移：engine.locale 默认 'auto'（跟随界面语言：en -> en-US, ar -> ar, zh -> zh-CN）
+    if (!s.engine.locale || (s.language !== 'zh' && s.engine.locale === 'zh-CN' && !s.engine._localeExplicit)) {
+      s.engine.locale = 'auto';
+    }
+    // 0.6.2 多语言迁移：如果非中文界面且未显式开启中文输入法，默认输入法为系统原生键盘（避免打字变成中文拼音）
+    if (s.language !== 'zh' && s.engine.locale !== 'zh-CN' && !s.engine._chineseImeExplicit) {
+      s.engine.chineseIme = false;
+      s.engine.chineseImeDefault = false;
+    }
     /**
      * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
      * 或者手改出来的任何其它值，一律当 builtin 处理，并把残留的第三方字段删掉。
@@ -361,6 +371,15 @@ const store = {
   apkPath(pkg, version = 'cur') {
     const v = /^[A-Za-z0-9_-]+$/.test(String(version)) ? version : 'cur';
     return path.join(APK_DIR, `${safeFilePart(pkg)}-${v}.apk`);
+  },
+
+  resolveLocale(locale, lang) {
+    const v = String(locale || 'auto').trim();
+    if (v && v !== 'auto') return v;
+    const l = String(lang || 'en').trim().toLowerCase();
+    if (l === 'ar') return 'ar';
+    if (l === 'zh') return 'zh-CN';
+    return 'en-US';
   },
 
   ensureDirs,

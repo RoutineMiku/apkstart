@@ -1,9 +1,24 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const i18n = require('./core/i18n');
 
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('apkstart', {
+  i18n: {
+    t: (key, params, loc) => i18n.t(key, params, loc),
+    getLocale: () => i18n.getLocale(),
+    setLocale: (loc) => {
+      const l = i18n.setLocale(loc);
+      invoke('i18n:setLocale', l).catch(() => {});
+      return l;
+    },
+    getDirection: (loc) => i18n.getDirection(loc),
+    getSupportedLocales: () => i18n.getSupportedLocales(),
+    getDictionary: (loc) => i18n.getDictionary(loc),
+    translateDOM: (root, loc) => i18n.translateDOM(document, loc || (typeof root === 'string' ? root : undefined)),
+  },
+  t: (key, params, loc) => i18n.t(key, params, loc),
   info: () => invoke('app:info'),
   listApps: () => invoke('apps:list'),
   pickApk: () => invoke('apk:pick'),
@@ -163,7 +178,7 @@ contextBridge.exposeInMainWorld('apkstart', {
     const allowed = [
       'install:start', 'install:progress', 'install:done', 'install:error',
       'app:launched', 'runtime:log', 'toast', 'ui:navigate', 'provision:progress',
-      'update:progress', 'update:state', 'autodebug:state',
+      'update:progress', 'update:state', 'autodebug:state', 'i18n:change',
     ];
     if (!allowed.includes(channel)) return () => {};
     const handler = (_e, payload) => cb(payload);

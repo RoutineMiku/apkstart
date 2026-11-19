@@ -620,12 +620,18 @@ class EmulatorEngine {
   }
 
   /**
-   * 要注入的系统语言。默认简体中文；用户可在设置里改（engine.locale），
-   * 设成 'en-US' 或 'off' 就回到镜像原生英文。
+   * 要注入的系统语言。默认跟随界面语言（auto）；用户可在设置里改（engine.locale），
+   * 设成 'en-US'、'ar'、'zh-CN' 或 'off'（回到镜像原生英文）。
    */
   _guestLocale() {
-    const v = String(this.settings?.engine?.locale || 'zh-CN').trim();
-    if (!v || v === 'off' || /^false$/i.test(v)) return '';
+    let v = String(this.settings?.engine?.locale || 'auto').trim();
+    if (!v || v === 'auto') {
+      const appLang = String(this.settings?.language || 'en').trim().toLowerCase();
+      if (appLang === 'ar') v = 'ar';
+      else if (appLang === 'zh') v = 'zh-CN';
+      else v = 'en-US';
+    }
+    if (v === 'off' || /^false$/i.test(v)) return '';
     return v;
   }
 

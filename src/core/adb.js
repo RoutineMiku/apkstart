@@ -1126,19 +1126,51 @@ class AdbClient {
   }
 
   /**
-   * 保证系统语言是简体中文。
+   * 保证系统语言和时区配置。
    * persist.sys.locale 是 SELinux 保护的只读属性，运行时改不了（会报
-   * "Failed to set property"），真正生效靠 emulator 启动时的 -prop 注入。
-   * 这里做的是能做的部分：把应用级 locale 和时区设好，让界面立刻中文、时间正确。
+   * "Failed to set property"），真正生效靠 emulator 启动时的 -change-locale 注入。
+   * 这里做的是能做的部分：把应用级 locale 和时区设好，让界面立刻生效、时间正确。
    */
-  async ensureChineseLocale(locale = 'zh-CN') {
+  async ensureSystemLocale(locale = 'en-US', timezone = '') {
+    const tz = timezone || (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'Asia/Shanghai';
     const cmds = [
       'settings put system system_locales ' + locale,
-      'setprop persist.sys.timezone Asia/Shanghai',
-      // 24 小时制 + 中文常见的日期格式
+      'setprop persist.sys.timezone ' + tz,
       'settings put system time_12_24 24',
     ];
     await this.shell(cmds.join(' ; '), { timeout: 12000 }).catch(() => '');
+    return true;
+  }
+
+  async ensureChineseLocale(locale = 'zh-CN') {
+    return this.ensureSystemLocale(locale);
+  }
+
+  /**
+   * 确保系统的默认输入法符合当前语言偏好。
+   * 中文环境使用谷歌拼音输入法（PinyinIME）；
+   * 英文/阿拉伯语/非中文环境使用原生 AOSP 输入法（LatinIME），避免物理键盘打字变成中文拼音。
+   */
+  async ensureDefaultIme(locale = 'en-US') {
+    const isChinese = String(locale).toLowerCase().startsWith('zh');
+    const PINYIN_ID = 'com.android.inputmethod.pinyin/.PinyinIME';
+    const LATIN_ID = 'com.android.inputmethod.latin/.LatinIME';
+    if (isChinese) {
+      const cmds = [
+        `ime enable ${PINYIN_ID}`,
+        `settings put secure default_input_method ${PINYIN_ID}`,
+        `ime set ${PINYIN_ID}`,
+      ];
+      await this.shell(cmds.join(' ; '), { timeout: 12000 }).catch(() => '');
+    } else {
+      const cmds = [
+        `ime enable ${LATIN_ID}`,
+        `settings put secure default_input_method ${LATIN_ID}`,
+        `ime set ${LATIN_ID}`,
+        `ime disable ${PINYIN_ID}`,
+      ];
+      await this.shell(cmds.join(' ; '), { timeout: 12000 }).catch(() => '');
+    }
     return true;
   }
 

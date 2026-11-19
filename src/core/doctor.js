@@ -17,6 +17,7 @@ const net = require('net');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { memoryLimits } = require('./resources');
+const i18n = require('./i18n');
 
 const ASCII = /^[\x20-\x7e]*$/;
 const isAsciiPath = (p) => ASCII.test(String(p || ''));
@@ -507,23 +508,42 @@ const RULES = [
 ];
 
 /** 把日志翻译成 {code,title,hint}，供 UI 展示与自动重试决策 */
-function diagnose(lines) {
+function diagnose(lines, lang) {
   const text = (Array.isArray(lines) ? lines.join('\n') : String(lines || '')).slice(-24000);
   for (const r of RULES) {
-    if (r.re.test(text)) return { code: r.code, title: r.title, hint: r.hint };
+    if (r.re.test(text)) {
+      const title = i18n.has(`issue.${r.code}.title`, lang)
+        ? i18n.t(`issue.${r.code}.title`, null, lang)
+        : r.title;
+      const hint = i18n.has(`issue.${r.code}.hint`, lang)
+        ? i18n.t(`issue.${r.code}.hint`, null, lang)
+        : r.hint;
+      return { code: r.code, title, hint };
+    }
   }
   return {
     code: 'UNKNOWN',
-    title: '运行时未能完成开机',
-    hint: '已自动按多种参数组合重试。可点「导出诊断报告」把日志发给作者定位。',
+    title: i18n.t('issue.UNKNOWN.title', null, lang),
+    hint: i18n.t('issue.UNKNOWN.hint', null, lang),
   };
 }
 
 /** 人类可读的一行摘要，放在设置页让高级用户知道自动选了什么 */
-function describeProfile(p) {
-  return `自动：${(p.memoryMB / 1024).toFixed(1)}GB 内存 · ${p.cores} 核 · ${p.gpu} 渲染 · `
-    + `${p.accelOk ? '硬件加速' : '软件模拟'} · ${p.snapshot ? '按需快照' : '冷启动'}`
-    + `${p.lite ? ' · 轻量容器' : ''} · 端口 ${p.port}`;
+function describeProfile(p, lang) {
+  const loc = lang || i18n.getLocale();
+  const ram = `${(p.memoryMB / 1024).toFixed(1)}GB`;
+  const accel = p.accelOk ? i18n.t('doctor.accelHw', null, loc) : i18n.t('doctor.accelSw', null, loc);
+  const snapshot = p.snapshot ? i18n.t('doctor.snapOnDemand', null, loc) : i18n.t('doctor.coldBoot', null, loc);
+  const lite = p.lite ? i18n.t('doctor.liteContainer', null, loc) : '';
+  return i18n.t('doctor.profileDesc', {
+    ram,
+    cores: p.cores,
+    gpu: p.gpu,
+    accel,
+    snapshot,
+    lite,
+    port: p.port,
+  }, loc);
 }
 
 /** 导出诊断报告（纯文本，便于发邮件/贴 issue） */
