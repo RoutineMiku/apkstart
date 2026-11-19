@@ -405,7 +405,9 @@ function main() {
   }
   const out = path.join(OUT_DIR, artifactName());
   console.log(`\n用 ${makeappx} 打包…`);
-  fs.rmSync(out, { force: true });
+  // makeappx 的 /o 就是 overwrite；不要再 fs.rmSync 旧包。
+  // 受管环境下 rmSync 会走回收站 shim，1.5GB 的大包很容易 ETIMEDOUT，
+  // 明明产物能覆盖却把整个构建打断（0.6.2 打包时踩过）。
   run(makeappx, ['pack', '/d', work, '/p', out, '/o', '/v']);
 
   const mb = fs.statSync(out).size / 1048576;

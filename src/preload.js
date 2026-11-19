@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   createShortcut: (pkg) => invoke('app:shortcut', pkg),
   clearData: (pkg) => invoke('app:clearData', pkg),
   pin: (pkg, pinned) => invoke('app:pin', { pkg, pinned }),
+  setAppOrientation: (pkg, orientation) => invoke('app:setOrientation', { pkg, orientation }),
   revealApk: (pkg) => invoke('app:revealApk', pkg),
   revealApkDir: () => invoke('apk:reveal'),
   openDir: () => invoke('dialog:openDir'),
@@ -49,6 +50,14 @@ contextBridge.exposeInMainWorld('apkstart', {
   // 本机体检 / 自动配置
   preflightRun: () => invoke('preflight:run'),
   preflightApply: () => invoke('preflight:apply'),
+  // 自动检测（自动 debug）：定时采集 + 判定，产出按分类归组的问题清单
+  autodebugRun: () => invoke('autodebug:run'),
+  autodebugState: () => invoke('autodebug:state'),
+  autodebugConfig: (patch) => invoke('autodebug:config', patch || {}),
+  // 自动检测的修复动作
+  clearOrphans: () => invoke('app:clearOrphans'),
+  clearSnapshot: () => invoke('app:clearSnapshot'),
+  restartRuntime: () => invoke('runtime:restart'),
   // 驱动（兼容补丁）：列清单 / 导入 / 打开目录 / 导出本机模板 / 启用停用
   driversList: () => invoke('drivers:list'),
   driversImport: () => invoke('drivers:import'),
@@ -104,6 +113,8 @@ contextBridge.exposeInMainWorld('apkstart', {
   openSharedDir: () => invoke('share:open'),
 
   openExternal: (url) => invoke('shell:open', url),
+  // 0.6.2 内置手册：传 { topic } / { issue } / { error } 都会定位到对应章节
+  openManual: (payload) => invoke('manual:open', payload || {}),
   winMinimize: () => invoke('window:minimize'),
   winMaximize: () => invoke('window:maximize'),
   winClose: () => invoke('window:close'),
@@ -153,7 +164,7 @@ contextBridge.exposeInMainWorld('apkstart', {
     const allowed = [
       'install:start', 'install:progress', 'install:done', 'install:error',
       'app:launched', 'runtime:log', 'toast', 'ui:navigate', 'provision:progress',
-      'update:progress', 'update:state',
+      'update:progress', 'update:state', 'autodebug:state',
     ];
     if (!allowed.includes(channel)) return () => {};
     const handler = (_e, payload) => cb(payload);

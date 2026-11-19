@@ -22,8 +22,21 @@ let OUT = process.env.APKSTART_PACK_OUT
   : path.join(ROOT, 'dist', FULL ? `ApkStart-v${PKG.version}-win64-full` : 'ApkStart-win64-portable');
 const ELECTRON_DIST = path.join(ROOT, 'node_modules', 'electron', 'dist');
 
+// Windows 上 fs.cpSync 复制「大量小文件 + 大镜像」的目录树时会偶发
+// EINPROGRESS（Node 错误地报成 "not enough space on the disk"，实际磁盘还剩上百 G）。
+// 改用逐文件 copyFileSync 的朴素递归：慢一点点，但每个文件都是独立 syscall，
+// 不会被目录树级的竞态打断，也不会像 robocopy 那样在受管 shell 下挂起。
 function copy(src, dest) {
-  fs.cpSync(src, dest, { recursive: true });
+  const st = fs.statSync(src);
+  if (st.isDirectory()) {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src)) {
+      copy(path.join(src, entry), path.join(dest, entry));
+    }
+  } else {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
 }
 
 console.log(FULL ? '打包完整版（含运行时）→' : '打包便携版 →', OUT);
@@ -91,6 +104,29 @@ for (const item of ['package.json', 'src', 'assets', 'LICENSE']) {
   if (fs.existsSync(src)) copy(src, path.join(appDir, item));
 }
 
+// 2.1 生产依赖（原生模块）：只复制 src/ 是不够的 —— 运行时 npm 依赖也得带上。
+// 典型受害者：@napi-rs/lzma 负责解压 system.img.xz / vendor.img.xz，
+// 它在 package.json 的 dependencies 里，而旧版 pack.js 从不复制 node_modules。
+// 结果就是「装完点应用没反应」：镜像展开时抛 Cannot find module '@napi-rs/lzma'，
+// 运行时起不来，四种参数组合全部 boot-failed。0.5.9 的致命回归就是这么来的。
+// 作用域包（@scope/name）连整个 scope 一起复制，因为原生二进制
+// 通常作为 optionalDependency 挂在同 scope 下（如 @napi-rs/lzma-win32-x64-msvc）。
+const prodDeps = Object.keys((require(path.join(ROOT, 'package.json')).dependencies) || {});
+if (prodDeps.length) {
+  console.log(`复制生产依赖（${prodDeps.length}）：${prodDeps.join(', ')}`);
+  const destModules = path.join(appDir, 'node_modules');
+  for (const dep of prodDeps) {
+    if (dep.startsWith('@')) {
+      const scope = dep.split('/')[0];
+      const scopeSrc = path.join(ROOT, 'node_modules', scope);
+      if (fs.existsSync(scopeSrc)) copy(scopeSrc, path.join(destModules, scope));
+    } else {
+      const depSrc = path.join(ROOT, 'node_modules', dep);
+      if (fs.existsSync(depSrc)) copy(depSrc, path.join(destModules, dep));
+    }
+  }
+}
+
 // 3. 可选目录
 // engine/ 下只有文档类内容随包分发；大体积运行时组件（emulator、system-images、
 // platform-tools、avd）由应用首次启动时自动从官方源下载，不进安装包。
@@ -103,7 +139,7 @@ for (const opt of ['engine']) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     if (opt === 'engine' && ENGINE_SKIP.has(entry.name)) continue;
-    fs.cpSync(path.join(src, entry.name), path.join(dest, entry.name), { recursive: true });
+    copy(path.join(src, entry.name), path.join(dest, entry.name));
   }
 }
 
@@ -117,7 +153,51 @@ if (FULL) {
     process.exit(1);
   }
   console.log('内置运行时（约 1 GB，需要一会儿）…');
-  fs.cpSync(runtime, path.join(OUT, 'resources', 'runtime'), { recursive: true });
+  // 运行时目录里可能残留开发期的垃圾：userdata.img.broken（上次展开失败留下的）、
+  // *.part（解压中断）、*.new（正在重压的临时文件）。这些既占体积又没有任何用，
+  // 甚至会把一份坏镜像带进发行包 —— 直接跳过，不要复制。
+  // 打包前先验一遍 .img.xz 是否完整：截断的 xz 在解压到一半才会炸
+  // ("failed to fill whole buffer")，而那时用户已经装完软件了 —— 表现就是
+  // 「装了但什么应用都打不开」。0.5.9 就是被一份截断的 system.img.xz 坑的
+  // （495MB 只解出 1366MB / 应 2958MB）。xz 流结束时一定有 footer，
+  // 末尾 8 字节里能找到 "YZ"；找不到就是没写完。
+  const walkXz = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { walkXz(p); continue; }
+      if (!/\.img\.xz$/i.test(e.name)) continue;
+      const size = fs.statSync(p).size;
+      const fd = fs.openSync(p, 'r');
+      let tail;
+      try {
+        const n = Math.min(8, size);
+        tail = Buffer.alloc(n);
+        fs.readSync(fd, tail, 0, n, size - n);
+      } finally { fs.closeSync(fd); }
+      if (!tail.includes(Buffer.from('YZ'))) {
+        console.error(`\n[!] 镜像不完整（缺 xz footer，多半是下载被截断）：${p}`);
+        console.error(`    大小 ${(size / 1048576).toFixed(1)} MB。请重新获取该镜像后再打包。\n`);
+        process.exit(1);
+      }
+    }
+  };
+  walkXz(runtime);
+  // 注意 .pynew 是重压临时文件（python 版），和 .new 一样必须排除。
+  const JUNK = /(\.broken|\.part|\.new|\.pynew|\.tmp|\.bak)$/i;
+  const copyRuntime = (src, dest) => {
+    const st = fs.statSync(src);
+    if (st.isDirectory()) {
+      fs.mkdirSync(dest, { recursive: true });
+      for (const entry of fs.readdirSync(src)) {
+        if (JUNK.test(entry)) continue;
+        copyRuntime(path.join(src, entry), path.join(dest, entry));
+      }
+    } else {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+    }
+  };
+  copyRuntime(runtime, path.join(OUT, 'resources', 'runtime'));
 }
 
 // 3.6 独立运行守卫：产物里不许出现 MuMu / 雷电 / 蓝叠等第三方模拟器。

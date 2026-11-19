@@ -7,6 +7,8 @@ const { getCatalog } = require('../src/core/i18n');
 const sourceRoot = process.env.APKSTART_UI_SOURCE || path.join(__dirname, '../src');
 let locale = 'pt-BR';
 let bundled = false;
+const manualRequests = [];
+ipcMain.handle('test:manual', (_event, payload) => { manualRequests.push(payload); return { ok: true }; });
 ipcMain.handle('test:language', () => locale);
 ipcMain.handle('test:bundled', () => bundled);
 ipcMain.handle('test:setLanguage', (_event, value) => { locale = value; });
@@ -29,6 +31,7 @@ app.whenReady().then(async () => {
       }
       await waitReady();
       await win.webContents.executeJavaScript('openSettings()');
+      await win.webContents.executeJavaScript("switchSettingsCat('basic')");
       const result = await win.webContents.executeJavaScript(`({lang: document.documentElement.lang, language: document.getElementById('setLanguage').value, title: document.querySelector('.modal-head h2').textContent, horizontalOverflow: document.querySelector('.modal-body').scrollWidth > document.querySelector('.modal-body').clientWidth, untranslated: [...document.querySelectorAll('[data-i18n]')].filter(el => el.textContent === el.dataset.i18n).length })`);
       assert.equal(result.lang, next);
       assert.equal(result.language, next);
@@ -53,11 +56,30 @@ app.whenReady().then(async () => {
       assert.equal(labels.stop, getCatalog(next)['v058.m0052']);
       assert.equal(labels.engine, getCatalog(next)['v058.m0215']);
       assert.ok(labels.dataNote.includes(getCatalog(next)['v058.m0097']));
+      const categories = await win.webContents.executeJavaScript(`(() => {
+        document.querySelector('#setNav [data-cat="diag"]').click();
+        const diagVisible = !document.getElementById('autodebugGroup').hidden;
+        const heading = document.querySelector('#autodebugList .dbg-group-title').textContent;
+        const fixCode = document.querySelector('#autodebugList .dbg-fix').dataset.code;
+        document.querySelector('#autodebugList .dbg-help').click();
+        const search = document.getElementById('setSearch');
+        search.value = document.querySelector('#languageGroup .group-title').textContent;
+        search.dispatchEvent(new Event('input'));
+        const languageFound = !document.getElementById('languageGroup').hidden;
+        document.getElementById('btnClearSearch').click();
+        switchSettingsCat('basic');
+        return { diagVisible, heading, fixCode, languageFound };
+      })()`);
+      assert.equal(categories.diagVisible, true);
+      assert.ok(categories.heading.startsWith(getCatalog(next)['v062.m0037']));
+      assert.equal(categories.fixCode, 'device.unauthorized');
+      assert.equal(categories.languageFound, true);
+      assert.equal(manualRequests.at(-1).issue, 'device.unauthorized');
       await new Promise(r => setTimeout(r, 600));
       fs.writeFileSync(path.join(out, `${next}-settings.png`), (await win.webContents.capturePage()).toPNG());
       console.log(next, JSON.stringify(result));
       assert.equal(result.horizontalOverflow, false, `${next}: settings overflow`);
-      await win.webContents.executeJavaScript("document.getElementById('perfGroup').scrollIntoView({block:'start'}); true;");
+      await win.webContents.executeJavaScript("focusGroup(document.getElementById('perfGroup')); true;");
       await new Promise(r => setTimeout(r, 300));
       fs.writeFileSync(path.join(out, `${next}-performance.png`), (await win.webContents.capturePage()).toPNG());
     }

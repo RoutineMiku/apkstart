@@ -25,6 +25,12 @@ api.dataInfo = async () => ({ imageGB: 6, freeDiskMB: 20480, overlay: true, pend
 api.resources = async () => ({ host: { totalMB: 16384, cores: 8 }, limits: { maxMB: 12288, maxGB: 64 }, freeMB: 81920 });
 api.driversList = async () => ({ drivers: [], errors: [], host: {} });
 api.selfCheck = async () => ({ issues: [] });
+api.autodebugState = async () => ({ at: Date.now(), issues: [{
+  code: 'device.unauthorized', category: 'device', severity: 'error',
+  title: 'Test issue', hint: 'Test hint', fix: 'restartRuntime',
+}] });
+api.autodebugRun = api.autodebugState;
+api.openManual = (payload) => ipcRenderer.invoke('test:manual', payload);
 api.on = () => () => {};
 api.android = { status: async () => ({ ok: false }), set: async () => ({ ok: true }) };
 api.shell = { onState: () => () => {}, state: async () => ({ label: '', tip: '' }), minimize: () => {}, maximize: () => {}, close: () => {}, rotate: () => {} };

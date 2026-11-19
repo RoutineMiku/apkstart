@@ -14,6 +14,7 @@ const { Installer } = require('./core/installer');
 const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
+const orientation = require('./core/orientation');
 
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
@@ -49,6 +50,7 @@ const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
 const { Updater, findUninstaller } = require('./core/updater');
 const leftovers = require('./core/leftovers');
+const manual = require('./core/manual');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -100,6 +102,9 @@ function appLog(line) {
 }
 process.on('uncaughtException', (e) => appLog(`UNCAUGHT ${e && (e.stack || e.message)}`));
 process.on('unhandledRejection', (e) => appLog(`REJECT ${e && (e.stack || e.message || e)}`));
+// 退出时留一行退出码：静默退出（没有崩溃栈、没有 before-quit）时，靠它区分
+// 「正常退出」「被任务管理器结束」「被系统关机带走」。
+process.on('exit', (code) => appLog(`process exit code=${code}`));
 
 /**
  * 完整版（内置运行时）自动接管：
@@ -161,6 +166,19 @@ function bootstrapBundledRuntime() {
     // 就会一直走「缺组件」的部署向导。现在只要当前运行时目录里没有 emulator 就接管。
     const explicit = String(s.runtime.dir || '').trim();
     const current = explicit || path.join(store.DATA_DIR, 'runtime');
+    // 「另一个安装包的运行时」：路径是 <某目录>/resources/runtime，但不在本次 EXE 的目录树里。
+    // 这只可能来自「解压了新版便携包、settings.json 还记着旧包路径」——
+    // 实测后果很隐蔽：新包启动，实际跑的是上个版本的 emulator/镜像/快照，
+    // 用户升级后仍然卡顿、方向参数还是旧的，甚至旧包一删就彻底起不来。
+    // 用户自己挑的目录（D:\ApkStartRuntime 之类）不会被这条规则误伤。
+    const looksForeignBundle = /[\\/]resources[\\/]runtime$/i.test(current)
+      && !path.resolve(current).toLowerCase().startsWith(path.resolve(exeDir).toLowerCase());
+    if (looksForeignBundle && fs.existsSync(path.join(bundled, 'emulator', 'emulator.exe'))) {
+      store.saveSettings({ runtime: { dir: bundled } });
+      bundledRuntimeDir = bundled;
+      appLog(t('v062.m0000', [current, bundled]));
+      return;
+    }
     const currentExe = path.join(current, 'emulator', 'emulator.exe');
     // 便携版被移动/升级（解压到新目录）后，settings 里记的还是旧路径：
     // 必须只认「本次 EXE 所在目录下的 runtime」，否则会一直用旧包里的组件
@@ -333,17 +351,40 @@ function setAumid(id) {
  */
 function wantLandscapeFor(pkg) {
   const ds = displaySettings();
-  const mode = ds.orientationMode || 'auto';
-  if (mode === 'landscape') return true;
-  if (mode === 'portrait') return false;
   const app = pkg ? store.getApp(pkg) : null;
-  const override = app && app.orientationOverride;
-  if (override === 'landscape') return true;
-  if (override === 'portrait') return false;
-  const natural = app && app.orientation;
-  if (natural === 'landscape') return true;
-  if (natural === 'portrait') return false;
-  return !!ds.landscape;
+  return orientation.resolveLandscape({
+    mode: ds.orientationMode || 'auto',
+    orientation: app && app.orientation,
+    orientationOverride: app && app.orientationOverride,
+    panelLandscape: !!ds.landscape,
+  });
+}
+
+/**
+ * 旋转当前应用的统一入口：算一次目标方向 → 写 per-app 覆盖 → 重启面板。
+ *
+ * 以前标题栏按钮、托盘菜单、Ctrl+R 各算各的「下一个方向」，基准还不一致
+ * （一个看 display.landscape，一个看 appWin.state.landscape）。点一下旋转，
+ * 写进 apps.json 的覆盖值和真正切过去的面板方向可能正好相反，下次启动
+ * wantLandscapeFor 又把它翻回去 —— 这就是「红果怎么都横不过来」的根因。
+ * 现在一律以 wantLandscapeFor(pkg) 为唯一基准，取反后同时写覆盖 + 切面板。
+ */
+async function rotateCurrentApp() {
+  const pkg = appWin && appWin.pkg;
+  const current = pkg ? wantLandscapeFor(pkg) : !!displaySettings().landscape;
+  const next = orientation.flipLandscape(current);
+  if (pkg) {
+    store.upsertApp({ package: pkg, orientationOverride: orientation.overrideValue(next) });
+    appLog(`orientation override ${pkg} = ${orientation.overrideValue(next)}`);
+  }
+  // appWin.rotate 负责更新标题栏状态与贴合窗口；传入统一的 next 作为目标方向，
+  // 由它内部调用 restartForOrientation 完成面板切换（只重启一次）。
+  if (appWin && appWin.isOpen) {
+    await appWin.rotate((want) => restartForOrientation(want, { reloadApp: false }), next).catch(() => {});
+  } else {
+    await restartForOrientation(next, { reloadApp: false }).catch(() => {});
+  }
+  return { ok: true, landscape: next };
 }
 
 /**
@@ -419,16 +460,44 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
   store.saveSettings({ display: { landscape: !!landscape } });
   send('runtime:log', t(landscape ? 'display.restartingLandscape' : 'display.restartingPortrait'));
   try {
+    // 重启会把模拟器窗口销毁、再重新建一个。这段时间屏幕上不能空着，
+    // 独立窗口模式下先把带提示的壳窗口亮出来（新窗口接上后 openDetached 会收掉）。
+    try {
+      appWin.showWaiting(landscape
+        ? t('v062.m0001')
+        : t('v062.m0002'));
+    } catch (_) { /* 窗口可能刚关 */ }
     // 先把嵌入窗口摘下来，避免重启过程中在桌面留下黑窗
     try { await appWin.agent.detach(); } catch (_) { /* ignore */ }
     await runtime.stop({ graceful: false }).catch(() => {});
+    /**
+     * 等 adb 侧真正看不到这台设备，再重新拉起。
+     *
+     * 模拟器进程退出和 adb 侧状态更新之间有几百毫秒的空档：这段时间
+     * `adb -s emulator-5554 get-state` 仍然回 "device"。紧接着调 ensure()，
+     * 它会走 isOnline() 直接判定「运行时就绪（reused）」并秒返回，
+     * 但后面每一条 adb 命令都是 `device 'emulator-5554' not found` ——
+     * 换面板方向时整条启动链就这么崩了（实测 0.2 秒"就绪"，然后全部失败）。
+     */
+    try {
+      const c = runtime.client();
+      for (let i = 0; i < 14; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const online = await c.isOnline().catch(() => false);
+        if (!online) break;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    } catch (_) { /* 判定失败就直接继续，ensure 里还有兜底 */ }
     appLog(`rotate -> landscape=${landscape} restarting runtime`);
     const rt = await runtime.ensure({
       onLog: (m) => { send('runtime:log', m); appLog(`  rt ${m}`); },
     });
-    if (!rt || !rt.ok) return false;
-    await runtime.waitForNetwork({ onLog: () => {}, timeoutMs: 25000 }).catch(() => null);
-    // reloadApp=false：调用方（runLaunch）自己会把应用拉起来，这里别抢着做一遍
+    if (!rt || !rt.ok) { appWin.waitingForRestart = false; return false; }
+    // 这里**不再**等网络。刚重启的模拟器 WiFi 要 20 秒以上才就绪，而调用方
+    // （launcher 的 beforeStart → installer.launch）紧接着还会走一遍 waitForNetwork，
+    // 两段等待纯属叠加：实测切换方向时第一段白等满 25 秒超时，第二段又等 23 秒，
+    // 一次换向从 100 秒拖到 125 秒。让 launch 流程统一等一次就够。
     if (reloadApp && pkg) {
       const app = store.getApp(pkg);
       if (app) {
@@ -443,22 +512,58 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
     return rt;
   } catch (e) {
     appLog(`rotate restart failed: ${e && e.message}`);
+    try { appWin.waitingForRestart = false; } catch (_) { /* 窗口已销毁 */ }
     return false;
   }
 }
 
 /**
  * 把安卓画面接到用户眼前。两种模式：
- *   - 嵌入（默认）：SetParent 进我们自己的窗口，观感统一；
- *   - 独立窗口：让模拟器开原生窗口，绕开嵌入固有的一整串问题
- *     （黑边、坐标错位、铺不满、Qt 面板方向打架）。由设置 display.windowEmbed 控制。
+ *   - 原生窗口（默认）：让模拟器开自己的窗口，方向、缩放、输入都由它自己管，
+ *     不存在嵌入方式固有的黑边、坐标错位、铺不满、掉帧；
+ *   - 嵌入：SetParent 进我们自己的窗口，观感统一、标题栏带旋转按钮。
+ *   由设置 display.windowEmbed 控制（true 才是嵌入）。
  */
 async function attachAppWindow() {
-  if (!appWin || !appWin.isOpen) return false;
-  const embedMode = displaySettings().windowEmbed !== false;
+  if (!appWin) return false;
+  const embedMode = displaySettings().windowEmbed === true;
   if (!embedMode) {
-    // 独立窗口不需要标题栏里那块区域了，直接让模拟器窗口自己露出来
-    return appWin.openDetached().catch(() => false);
+    /**
+     * 原生窗口接管要重试。
+     *
+     * 模拟器窗口出现在系统里的时间点，和 `am start` 返回的时间点并不同步：
+     * 冷启动、快照恢复、刚换过面板方向之后，Qt 那扇窗口往往要晚几百毫秒到
+     * 一两秒才可见。以前只试一次，失败后什么都不做 —— 壳窗口那张「正在启动」
+     * 的美化等待页就留在屏幕上，用户看到的就是「启动的还是你们那个美化窗口」，
+     * 而且再也接不上画面（日志里的 attach failed (detached): unknown）。
+     */
+    for (let i = 0; i < 4; i += 1) {
+      if (!appWin.isOpen) {
+        appLog(`attach detached: 壳窗口已关闭（第 ${i + 1} 轮）`);
+        return false;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await appWin.openDetached().catch((e) => {
+        appWin.lastEmbedError = (e && e.message) || 'threw';
+        return false;
+      });
+      if (ok) return true;
+      appLog(`attach detached #${i + 1} 失败: ${appWin.lastEmbedError || 'unknown'}`);
+      // 逐轮拉长等待：窗口代理的 show/layout 也可能正好撞上窗口重建
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 400 + i * 600));
+    }
+    // 四轮都没露出来（远程桌面 / 显卡驱动异常 / 模拟器被 --no-window 起过）：
+    // 与其留一屏黑或者一张永远转圈的等待页，不如先用嵌入把画面接上，
+    // 并明确告诉用户这是兜底 —— 下次启动仍然优先原生窗口。
+    appLog('attach detached: 重试全部失败，临时退回嵌入模式');
+    const fallback = await appWin.embed().catch(() => false);
+    if (fallback) {
+      try {
+        send('toast', { type: 'info', message: t('v062.m0006') });
+      } catch (_) { /* 主窗口可能已关闭 */ }
+    }
+    return fallback;
   }
   const ok = await appWin.embed().catch(() => false);
   if (!ok) {
@@ -589,10 +694,17 @@ async function autoDeploy({ force = false } = {}) {
     if (bundledRuntimeDir && env.adb.ok && env.emulator.ok && env.sysimg.ok) {
       appLog(t('v058.m0004', [bundledRuntimeDir])
         + (env.needsExtract ? t('v058.m0005') : ''));
+      // 这是**成功**，不是失败。以前这里直接 return 没置 succeeded，finally 就按
+      // 失败写了 deployFailedAt —— 随包内置运行时的机器每 30 分钟被记一次
+      // 「部署失败」，日志里那句「上次失败于 …」其实来自一次正常的跳过，
+      // 用户看到设置页的「重试部署」也会一头雾水。
+      succeeded = true;
       return { ok: true, source: 'bundled', needsExtract: !!env.needsExtract };
     }
     if (bundledRuntimeDir && !env.emulator.ok) {
       appLog(t('v058.m0006', [bundledRuntimeDir]));
+      // 交回诊断流程同样不是「下载失败」，别进冷却。
+      succeeded = true;
       return { ok: false, error: 'bundled', bundled: true };
     }
     // 轻量版优先用「本项目 GitHub 的运行时整包」：一个文件搞定 emulator + 系统镜像，
@@ -774,6 +886,78 @@ function showWindow() {
   mainWindow.focus();
 }
 
+// ---------------- 内置使用手册 ----------------
+
+let manualWindow = null;
+const manualAutoAt = new Map();
+
+/**
+ * 打开内置手册。payload 只描述「哪个故障」，具体章节由 core/manual.js 决定：
+ * 渲染层传 issue code / 安装报错 / topic id 都行，拿不到就回目录页。
+ * reason='fix-failed' 时做去重：同一章节 60 秒内只自动弹一次，避免连点修复
+ * 或批量安装失败时把用户淹没在手册窗口里。
+ */
+function openManual(payload = {}) {
+  const target = manual.resolve(payload);
+  const now = Date.now();
+  const last = manualAutoAt.get(target.id) || 0;
+  if (target.reason === 'fix-failed' && now - last < 60000) {
+    if (manualWindow && !manualWindow.isDestroyed()) {
+      manualWindow.show();
+      manualWindow.focus();
+    }
+    return target;
+  }
+  manualAutoAt.set(target.id, now);
+
+  try {
+    if (!manualWindow || manualWindow.isDestroyed()) {
+      manualWindow = new BrowserWindow({
+        width: 1080,
+        height: 780,
+        minWidth: 720,
+        minHeight: 520,
+        show: false,
+        backgroundColor: '#ffffff',
+        autoHideMenuBar: true,
+        icon: nativeImage.createFromBuffer(ICON_PNG),
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false,
+          spellcheck: false,
+        },
+      });
+      manualWindow.on('closed', () => { manualWindow = null; });
+      // 手册里的外链（GitHub/Gitee）交给系统浏览器；内部锚点照常在窗口里跳。
+      manualWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+        return { action: 'deny' };
+      });
+      manualWindow.webContents.on('will-navigate', (e, url) => {
+        if (url.startsWith('file://')) return;
+        e.preventDefault();
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      });
+    }
+    manualWindow.setTitle(t('v062.m0007', [target.title]));
+    manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
+    manualWindow.once('ready-to-show', () => {
+      if (!manualWindow || manualWindow.isDestroyed()) return;
+      manualWindow.show();
+      manualWindow.focus();
+    });
+    // 已经显示过的窗口再 loadFile 不会重新触发 ready-to-show
+    if (manualWindow.isVisible()) manualWindow.focus();
+    appLog(`manual open ${target.id}#${target.anchor} reason=${target.reason || 'manual'}`);
+  } catch (e) {
+    appLog(`manual open failed: ${e && e.message}`);
+    // 手册打不开也不能影响修复流程：至少给个能点的在线地址
+    shell.openExternal('https://github.com/RoutineMiku/apkstart#readme').catch(() => {});
+  }
+  return target;
+}
+
 function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
   try {
@@ -784,6 +968,83 @@ function notify(title, body) {
 
 function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
+// ---------------- 自动检测（自动 debug）----------------
+
+/**
+ * 自动检测 = 定时把机器的真实状态采一遍，按「问题清单」推给界面。
+ *
+ * 三条原则（都是被踩过的坑换来的）：
+ *  1) 采集与判定分离：采集在 src/core/autodebug-probe.js（会调系统命令），
+ *     判定在 src/core/autodebug.js（纯函数，可单测）。
+ *  2) 探测失败 ≠ 有问题：拿不到状态就留空，判定层当「不知道」，
+ *     绝不为了「有东西可报」而编一条出来。误报一次，用户就不信了。
+ *  3) 只在「新问题出现」时打扰用户：老问题已经提示过，
+ *     每轮都弹窗就是噪音；恢复了也只静默记账。
+ */
+let autodebugState = { issues: [], summary: null, at: 0, running: false };
+let autodebugTimer = null;
+let autodebugBusy = false;
+
+function autodebugConfig() {
+  const d = (store.getSettings() || {}).debug || {};
+  const intervalMin = Number(d.intervalMin);
+  return {
+    auto: d.auto !== false,
+    intervalMin: [1, 5, 10, 30, 60].includes(intervalMin) ? intervalMin : 10,
+    notify: d.notify !== false,
+  };
+}
+
+async function runAutodebug({ force = false } = {}) {
+  if (autodebugBusy) return autodebugState;
+  const cfg = autodebugConfig();
+  if (!force && !cfg.auto) return autodebugState;
+  autodebugBusy = true;
+  send('autodebug:state', { ...autodebugState, running: true });
+  try {
+    const autodebug = require('./core/autodebug');
+    const probe = require('./core/autodebug-probe');
+    const obs = await probe.collect({ runtime, store, doctor: require('./core/doctor') });
+    const issues = autodebug.evaluate(obs);
+    const summary = autodebug.summarize(issues);
+    const { added } = autodebug.diff(autodebugState.issues, issues);
+    autodebugState = { issues, summary, at: Date.now(), running: false };
+    send('autodebug:state', autodebugState);
+    if (cfg.notify) {
+      // 只有「新的 error」才提醒：warn/info 留给设置页自己看，不打断用户。
+      const fresh = added.filter((i) => i.severity === 'error');
+      if (fresh.length) {
+        const text = fresh.map((i) => i.title).join('；');
+        send('toast', { type: 'error', message: t('v062.m0008', [text]) });
+        notify(t('v062.m0009'), t('v062.m0010', [text]));
+        appLog(`autodebug new issues: ${fresh.map((i) => i.code).join(',')}`);
+      }
+    }
+    return autodebugState;
+  } catch (e) {
+    // 检测本身失败不能影响主流程：记一条日志，下一轮再试。
+    appLog(`autodebug failed: ${e && e.message}`);
+    autodebugState = { ...autodebugState, running: false, error: String((e && e.message) || e) };
+    send('autodebug:state', autodebugState);
+    return autodebugState;
+  } finally {
+    autodebugBusy = false;
+  }
+}
+
+function scheduleAutodebug() {
+  if (autodebugTimer) {
+    clearInterval(autodebugTimer);
+    autodebugTimer = null;
+  }
+  const cfg = autodebugConfig();
+  if (!cfg.auto) return;
+  autodebugTimer = setInterval(() => {
+    runAutodebug().catch(() => {});
+  }, cfg.intervalMin * 60 * 1000);
+  if (autodebugTimer.unref) autodebugTimer.unref();
 }
 
 // ---------------- 托盘 ----------------
@@ -810,6 +1071,7 @@ function buildTray() {
       : '';
     const menu = Menu.buildFromTemplate([
       { label: t('m0384'), click: () => showWindow() },
+      { label: t('v062.m0011'), click: () => openManual({ topic: 'overview', reason: 'tray' }) },
       { type: 'separator' },
       ...(apps.length
         ? apps.map((a) => ({ label: a.label, click: () => runLaunch(a.package) }))
@@ -826,9 +1088,9 @@ function buildTray() {
         },
       },
       {
-        label: displaySettings().landscape ? t('v058.m0012') : t('v058.m0013'),
+        label: wantLandscapeFor(currentAppPkg) ? t('v058.m0012') : t('v058.m0013'),
         enabled: !!currentAppPkg,
-        click: () => { restartForOrientation(!displaySettings().landscape).catch(() => {}); },
+        click: () => { rotateCurrentApp().catch(() => {}); },
       },
       {
         label: displaySettings().mode === 'fullscreen' ? t('m0386') : t('m0387'),
@@ -1012,6 +1274,41 @@ async function launchOne(pkg) {
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
     // 1) 再把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
     await openAppWindow(pkg, t('m0374'));
+    /**
+     * 原生窗口模式：**尽早、反复**把模拟器自己的窗口接出来，别让用户先对着
+     * 我们那张「正在启动」的壳窗口干等。
+     *
+     * 以前这里什么都不做，壳窗口（标题栏 + Logo + 转圈）就成了用户看到的第一屏，
+     * 而原生窗口要等到 am start 之后才接 —— 冷启动 / 换面板方向时那是 30 秒以上。
+     * 用户的感受就是「启动的还是你们那个美化窗口」。
+     *
+     * 冷启动时 Qt 窗口要等运行时起来才被创建，一次尝试必然失败，所以这里做成
+     * 轮询：每 1.5 秒试一次，成功即停（最多 30 秒）。换面板方向重启运行时时，
+     * 旧窗口随运行时消失、新窗口起来后同样会被这里接住。
+     */
+    if (displaySettings().windowEmbed === false && appWin && appWin.isOpen) {
+      let tries = 0;
+      let rounds = 0;
+      const preAttach = async () => {
+        if (!appWin || !appWin.isOpen) return;
+        rounds += 1;
+        // 硬上限：无论让路还是失败，最多跑 45 轮（约 1 分钟）就收手，
+        // 避免换向失败后这个定时器一直挂着空转。
+        if (rounds > 45) return;
+        // 正在换面板方向、准备重启运行时：这时候去接画面只会把刚亮起的
+        // 等待窗口藏掉，屏幕上就没东西了。让路，等重启完成再接手。
+        if (appWin.waitingForRestart) {
+          setTimeout(preAttach, 1500);
+          return;
+        }
+        tries += 1;
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await appWin.openDetached().catch(() => false);
+        if (ok) { appLog(`pre-attach detached ok（第 ${tries} 次）`); return; }
+        if (tries < 20) setTimeout(preAttach, 1500);
+      };
+      preAttach();
+    }
     // 开机阶段把模拟器主窗 + qemu / netsimd 的控制台黑窗藏起来，避免任何闪现。
     // 压制是常驻的（embed 后它会自动跳过被嵌入的那一个窗口，见 appwin.embed）。
     // 这里必须 await：不等压制生效就往下走，黑窗会在启动瞬间露出来。
@@ -1032,14 +1329,26 @@ async function launchOne(pkg) {
         attachDoneEarly = true;
         mark(t('v058.m0016'));
         attachAppWindow()
-          .then((ok) => {
+          .then(async (ok) => {
             earlyAttachOk = ok;
             mark(`early attach=${ok}`);
-            // 画面已接到用户眼前 → 开机动画可以淡出了。
-            // 放在这里而不是 launch ok 之后，是因为 early attach 时模拟器窗口
-            // 已经 show 出来了；如果等 launch ok（还要再等 4 秒存活确认），
-            // splash 和模拟器窗口会同时可见好几秒，用户看到 splash 被「顶上去」。
-            if (ok && typeof splashDone === 'function') splashDone();
+            if (!ok) return;
+            // 画面接上 ≠ 首帧画出来：Android 12+ 在 Activity 首帧之前会先挂一屏
+            // 系统 Splash（应用图标 + 白底）。开机动画此时如果淡出，用户看到的就是
+            // 一张白底图，以为卡死。守到系统 Splash 撤掉（首帧上屏）再收动画，
+            // 超时也照常收（不能因为判定失败把用户永远关在动画里）。
+            let painted = true;
+            try {
+              const c = runtime.client();
+              if (c && typeof c.waitForAppFirstFrame === 'function') {
+                // 红果这类重应用从 am start 到真正画出首帧可能超过 15 秒，
+              // 12 秒就放弃会让开机动画提前收掉、露出系统 Splash 的白底图标。
+              // 20 秒给足余量；真画不出来也只是多等一会儿，不会卡死流程。
+              painted = await c.waitForAppFirstFrame(pkg, { timeoutMs: 20000 });
+              }
+            } catch (_) { /* 判定失败按已就绪处理 */ }
+            mark(`first frame=${painted}`);
+            if (typeof splashDone === 'function') splashDone();
           })
           .catch(() => { earlyAttachOk = false; });
         // 应用刚起来时 Activity 还在重建，会按自己声明的方向（portrait）再转一次，
@@ -1347,6 +1656,22 @@ function registerIpc() {
   ipcMain.handle('app:pin', async (_e, { pkg, pinned }) => {
     store.upsertApp({ package: pkg, pinned: !!pinned });
     return { ok: true };
+  });
+
+  /**
+   * 单个应用的横竖屏覆盖（应用卡片右键菜单用）。
+   * 只写 apps.json 的 orientationOverride，不在这里重启运行时 ——
+   * 下次打开该应用时 wantLandscapeFor 会读它并把面板切到对应方向。
+   * 传 null 表示清除覆盖，回到 APK 清单解析出的天然方向。
+   */
+  ipcMain.handle('app:setOrientation', async (_e, { pkg, orientation: value }) => {
+    if (!pkg) return { ok: false, error: t('v062.m0013') };
+    const next = value === 'landscape' || value === 'portrait' ? value : null;
+    store.upsertApp({ package: pkg, orientationOverride: next });
+    appLog(`orientation override ${pkg} = ${next || t('v062.m0014')}`);
+    // 主界面列表要立刻显示新的方向文字
+    send('apps:changed');
+    return { ok: true, orientation: next, landscape: wantLandscapeFor(pkg) };
   });
 
   ipcMain.handle('app:revealApk', async (_e, pkg) => {
@@ -1752,6 +2077,59 @@ function registerIpc() {
       }
     } catch (_) { /* 自检失败不阻断使用 */ }
     return { issues, accel, free };
+  });
+
+  // ---------------- 自动检测（自动 debug）----------------
+
+  /** 立即跑一次检测（设置页「立即检测」按钮 / 定时任务都走这里） */
+  ipcMain.handle('autodebug:run', () => runAutodebug({ force: true }));
+
+  /** 取上一次的结果（打开设置页时先渲染旧的，别让界面空着等） */
+  ipcMain.handle('autodebug:state', () => autodebugState);
+
+  /** 开关与间隔 */
+  ipcMain.handle('autodebug:config', (_e, patch = {}) => {
+    const cur = autodebugConfig();
+    const next = {
+      auto: patch.auto === undefined ? cur.auto : !!patch.auto,
+      intervalMin: patch.intervalMin === undefined ? cur.intervalMin : Number(patch.intervalMin) || cur.intervalMin,
+      notify: patch.notify === undefined ? cur.notify : !!patch.notify,
+    };
+    store.saveSettings({ debug: next });
+    scheduleAutodebug();
+    if (next.auto) runAutodebug().catch(() => {});
+    return next;
+  });
+
+  /** 清残留的孤儿模拟器进程（emulator.exe 只是启动器，qemu 是 detached 的） */
+  ipcMain.handle('app:clearOrphans', async () => {
+    try {
+      const r = await runtime.killOrphanEmulators({ onLog: (m) => appLog(`orphan: ${m}`) });
+      return { ok: true, note: r && r.note };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /** 作废快速启动快照（快照坏了会导致每次开机都白等一次冷启动） */
+  ipcMain.handle('app:clearSnapshot', async () => {
+    try {
+      const ok = runtime.emulator.invalidateSnapshot();
+      return { ok: !!ok };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /** 重启运行时：自愈 unauthorized / 引导卡死 / 孤儿锁的首选动作 */
+  ipcMain.handle('runtime:restart', async () => {
+    try {
+      await runtime.stop({ onLog: (m) => appLog(`restart-stop: ${m}`) }).catch(() => {});
+      const r = await runtime.ensure({ onLog: (m) => send('runtime:log', m) });
+      return { ok: true, ready: !!r };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   // 微软 VC++ 2015-2022 x64 运行库：安卓模拟器（Qt6）与 qemu 都依赖它。
@@ -2290,6 +2668,8 @@ function registerIpc() {
   });
 
   ipcMain.handle('shell:open', (_e, url) => shell.openExternal(url));
+  // 内置手册：渲染层只说「哪个故障/哪个主题」，主进程解析成受信任的本地章节
+  ipcMain.handle('manual:open', (_e, payload) => openManual(payload || {}));
 
   /**
    * 打开「启用或关闭 Windows 功能」对话框。
@@ -2338,20 +2718,12 @@ function registerIpc() {
     return { ok: false };
   });
   // 标题栏的旋转按钮 = 「这个应用我要横着/竖着用」。
-  // 以前它只是把全局 landscape 翻一下，于是点红果的旋转按钮会把**所有**应用
-  // 都带到横屏面板上去，红果自己反而被信箱化。现在写成该应用自己的覆盖值，
-  // 别的应用不受影响（设置里的「强制」模式仍然优先）。
-  ipcMain.handle('shell:rotate', () => {
-    const pkg = appWin && appWin.pkg;
-    // 以「面板实际方向」为基准取反，而不是 appWin.state.landscape
-    //（后者是「期望方向」，在启动切换面板的过程中可能还没落地）。
-    const next = !displaySettings().landscape;
-    if (pkg) {
-      store.upsertApp({ package: pkg, orientationOverride: next ? 'landscape' : 'portrait' });
-      appLog(`orientation override ${pkg} = ${next ? 'landscape' : 'portrait'}`);
-    }
-    return appWin.rotate(restartForOrientation);
-  });
+  // 统一走 rotateCurrentApp：以 wantLandscapeFor(pkg) 为唯一基准算目标方向，
+  // 一次算出 next 后同时写 per-app 覆盖 + 切物理面板。以前这里和 appWin.rotate
+  // 各算各的（一个看 display.landscape，一个看 state.landscape），两个值可能
+  // 相反，于是「点了旋转 → 覆盖写成横屏 → 面板却切回竖屏 → 下次又被翻回竖屏」，
+  // 红果这类应用就怎么都横不过来。
+  ipcMain.handle('shell:rotate', () => rotateCurrentApp());
 
   ipcMain.handle('shell:back', async () => { await runtime.client().keyBack(); });
   ipcMain.handle('shell:forward', async () => { await runtime.client().keyForward(); });
@@ -2488,6 +2860,16 @@ if (!gotLock) {
     messages: getCatalog(resolveLocale(store.getSettings().language, app.getLocale())),
   }));
     store.ensureDirs();
+    /**
+     * 记下「当前是谁在管这台运行时」。
+     *
+     * 用途见下方的 releaseRuntime()：用户点了应用没反应会再点一次，旧实例这时
+     * 正在退出（单实例锁已经释放），新实例接管模拟器并开始启动应用；旧实例的
+     * 收尾却照样 runtime.dispose()，于是新实例拿到 `device 'emulator-5554' not found`。
+     * 表现就是「点两次之后应用彻底打不开」。新实例一启动就覆盖这个文件，
+     * 旧实例收尾时看到 pid 不是自己就跳过停止运行时。
+     */
+    try { fs.writeFileSync(path.join(store.DATA_DIR, 'owner.pid'), String(process.pid)); } catch (_) { /* ignore */ }
     // Windows 任务栏身份（AppUserModelID）
     // 不设的话 Windows 只能按 exe 路径猜身份：任务栏固定项、跳转列表、通知来源
     // 都会落到 "Electron" 上 —— 用户看到的就是「图标/名字是默认的那个」。
@@ -2693,6 +3075,12 @@ if (!gotLock) {
     buildTray();
     applyAutoStart();
 
+    // 自动检测：先排上定时任务，启动 25 秒后再跑第一轮。
+    // 延后是因为刚开机时 adb / 磁盘 / 快照都还在就位过程中，
+    // 这时候采到的状态最容易误判（例如「没看到设备」其实只是还没引导完）。
+    scheduleAutodebug();
+    setTimeout(() => { runAutodebug().catch(() => {}); }, 25000).unref?.();
+
     // 老版本安装的应用没有 orientation 字段（那时还没这个功能）。
     // 不补的话「跟随应用」对它们只能退回「当前面板方向」，红果这类竖屏应用
     // 在横屏面板下依旧是两侧黑边。这里用随包的离线 APK 清单解析补一次，
@@ -2739,6 +3127,14 @@ if (!gotLock) {
     // F11 全屏 / 窗口切换；全局快捷键只在 ApkStart 活着时有效
     try {
       globalShortcut.register('F11', () => { toggleDisplayMode(); });
+    } catch (_) { /* ignore */ }
+    // 旋转快捷键：原生窗口模式下壳窗口是隐藏的，标题栏里的 Ctrl+R 收不到焦点，
+    // 所以再注册一个全局组合键。用 Ctrl+Alt+R 而不是 Ctrl+R —— 后者会和
+    // 浏览器/编辑器的「刷新」抢键，全局注册会直接废掉用户其它程序的刷新。
+    try {
+      globalShortcut.register('CommandOrControl+Alt+R', () => {
+        if (currentAppPkg) rotateCurrentApp().catch(() => {});
+      });
     } catch (_) { /* ignore */ }
 
     const args = parseArgs(process.argv);
@@ -2905,12 +3301,45 @@ if (!gotLock) {
   app.on('window-all-closed', () => {
     // 正常关闭窗口时只隐藏到托盘（close 事件已拦截），
     // 走到这里说明是真正要退出，必须放行，否则进程会残留并占住单实例锁。
+    // 记一行：排查「应用窗口明明开着，ApkStart 却自己没了」时，这行能直接
+    // 区分「所有窗口被收干净」和「进程被外部杀掉」。
+    appLog(`window-all-closed quitting=${quitting}`);
     if (quitting) app.exit(0);
   });
 
+  // 渲染进程 / GPU 进程崩溃时，Electron 默认只是让窗口变白，不一定会退出主进程；
+  // 但它是「画面突然没了」最常见的原因，一定要在日志里留痕。
+  app.on('child-process-gone', (_e, d) => {
+    try {
+      appLog(`child-process-gone type=${d && d.type} reason=${d && d.reason} exit=${d && d.exitCode}`);
+    } catch (_) { /* 日志写不进去不影响 */ }
+  });
+
   let quitReady = false;
+  /**
+   * 只在「运行时还归我管」时才停掉它。
+   *
+   * 双实例交替是真实场景：用户点应用没反应 → 再点一次。第二次启动时第一次
+   * 已经释放了单实例锁但还没退干净，新实例接管了模拟器并开始 am start；
+   * 旧实例随后执行 dispose()，把新实例正在用的模拟器一起杀掉 ——
+   * 日志里就是「运行时已退出（code=0）」紧跟「device 'emulator-5554' not found」。
+   * owner.pid 由每次启动覆盖，所以谁最后启动谁才是主人。
+   */
+  const releaseRuntime = () => {
+    let mine = true;
+    try {
+      const owner = Number(String(fs.readFileSync(path.join(store.DATA_DIR, 'owner.pid'), 'utf8')).trim());
+      mine = !owner || owner === process.pid;
+    } catch (_) { mine = true; }
+    if (mine) {
+      runtime?.dispose();
+    } else {
+      appLog(t('v062.m0015'));
+    }
+  };
   app.on('before-quit', (e) => {
     quitting = true;
+    appLog(`before-quit ready=${quitReady}`);
     // 退出前必须先让窗口代理把模拟器窗口「摘下 + 藏好」。这一步是异步的
     // （要等代理回包），所以第一次 before-quit 先拦下来，收尾完成再真正退出。
     // 少了这一步，宿主窗口一销毁，Windows 会把模拟器子窗口重挂到桌面并显示出来——
@@ -2924,7 +3353,7 @@ if (!gotLock) {
       const finish = () => {
         try { winAgent?.dispose(); } catch (_) { /* ignore */ }
         try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
-        runtime?.dispose();
+        releaseRuntime();
         // 隐藏的图标解码窗口也算一个窗口，不关掉会让 window-all-closed 永远不触发
         try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
         app.quit();
@@ -2934,7 +3363,7 @@ if (!gotLock) {
     }
     try { winAgent?.dispose(); } catch (_) { /* ignore */ }
     try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
-    runtime?.dispose();
+    releaseRuntime();
     try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
   });
 }

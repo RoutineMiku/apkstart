@@ -1,0 +1,25 @@
+Partner Center 填法：Apps and games → ApkStart → 当前提交 → Store listings（商店一览）
+→ 选语言 → 「What's new in this version」（此版本中的新增功能），上限 1500 字符。
+中文、英文各填一次（每个语言单独保存）。首次提交该字段留空，只用于更新。
+
+—— 简体中文（粘贴下面整段）——
+
+0.6.1 更新：
+· 修复启动后仍然只看到 ApkStart 自己的等待界面：现在一点开应用就由模拟器原生窗口接管画面，直接看到安卓开机画面；接管不成功会自动重试四次，不再让等待页占满屏幕。
+· 修复切换不同横竖屏应用时约 40 秒白屏、以及偶发“应用打不开”：换向前会显示切换进度，重启后自动重新接管窗口，不再出现设备断连导致启动失败。
+· 修复首帧判定错误：启动动画现在守到应用真正画出第一屏再淡出，红果这类启动较慢的应用不会再停在白底加图标。
+· 修复部分 AMD 显卡电脑总是退回软件渲染造成的卡顿，硬件加速会正确启用。
+· 修复连点两次图标后应用彻底打不开：正在退出的旧实例不会再关掉新实例正在使用的模拟器。
+· 全屏时按屏幕比例居中显示，竖屏应用不再贴在屏幕左上角。
+· 设置页按八类重新分组并支持搜索；自动检测可一键处理常见问题。
+
+—— English (United States) ——
+
+What's new in 0.6.1:
+· Fixed launches that still showed ApkStart's own waiting screen: the emulator's native window now takes over as soon as you open an app, so you see Android's real boot screen; the hand-over retries up to four times instead of leaving the waiting page on screen.
+· Fixed the ~40 second blank screen (and occasional "app won't start") when switching between landscape and portrait apps: a progress hint is shown while the runtime restarts, and the window is re-attached afterwards.
+· Fixed first-frame detection: the startup animation now stays until the app really paints its first frame, so slower apps no longer leave you on a white screen with just the icon.
+· Fixed stutter on some AMD graphics PCs that always fell back to software rendering.
+· Fixed apps becoming unlaunchable after double-clicking the icon twice: a quitting instance no longer shuts down the emulator a newer instance is already using.
+· Fullscreen now keeps the panel aspect ratio and centres the window, so portrait apps no longer stick to the top-left corner.
+· Settings are grouped into eight categories with search, and Auto diagnostics can fix common issues in one click.

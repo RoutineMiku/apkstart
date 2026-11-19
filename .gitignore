@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/runtime/
+build/_packout/
 .workbuddy/
 test/out/
 test/fixtures/
@@ -30,3 +31,6 @@ tools/platform-tools/*.dll
 
 # 商店截图脚本的中间产物（可随时重生成）
 docs/store-shots/raw-*.png
+
+# 调试用截图 / 临时产物（不入库）
+build/_test/

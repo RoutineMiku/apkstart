@@ -20,6 +20,23 @@ function isArmOnly(meta) {
 }
 
 /**
+ * 当前「正在运行的」安卓是否具备 ARM 转译能力。
+ * 关键：镜像文件在不在磁盘上（playImageInfo().ok）与当前这台模拟器有没有开翻译层是两回事。
+ * 复用旧版本 / 旧快照拉起的模拟器时，Play 镜像明明在，abilist 里却没有 arm —— 这时候装
+ * ARM-only 应用必然 INSTALL_FAILED_NO_MATCHING_ABIS。返回 null 表示探测不到，交给安装失败
+ * 后的重试兜底，绝不因为「探测不到」就挡住安装。
+ */
+async function runningHasArm(client) {
+  try {
+    const out = String(await client.shell('getprop ro.product.cpu.abilist', { timeout: 6000 }).catch(() => ''));
+    if (!out.trim()) return null;
+    return /arm/i.test(out);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * 拆分安装包（.apks / .xapk）：解出里面的分片 APK 到纯 ASCII 临时目录。
  * 用文件版 ZIP 读取器 + 流式落盘：拆分包动辄 2GB+，整包读内存会失败。
  * 返回 { meta, files, cleanup }；meta 来自带 AndroidManifest 的 base APK。
@@ -125,6 +142,10 @@ class Installer {
       // eslint-disable-next-line no-await-in-loop
       await sleep(1000);
     }
+    // 关键：必须作废旧快照。快照里存着「无翻译层」时的内存与磁盘状态，
+    // 不清掉，ensure() 会直接从快照恢复 —— 镜像换了翻译层却根本没生效，
+    // 于是重装还是 NO_MATCHING_ABIS，用户看到「切换了还是不行」。
+    try { this.runtime.emulator?.invalidateSnapshot(); } catch (_) { /* ignore */ }
     const rt = await this.runtime.ensure({ onLog: (m) => onProgress({ stage: 'runtime', message: m }) });
     if (!rt.ok) {
       const err = new Error(rt.error || '切换兼容镜像后运行时不可用');
@@ -193,19 +214,21 @@ class Installer {
     }
 
     try {
-      // 零配置：仅含 ARM 库的应用自动补齐带 ARM 翻译层的镜像，用户不用开任何开关
-      if (isArmOnly(meta) && !this.runtime.provisioner.playImageInfo().ok) {
-        await this.ensureCompatImage(onProgress);
-        const switched = await this.switchToCompat(onProgress);
-        return this.finishInstall(switched, meta, filePath, bundle, onProgress);
-      }
-
       onProgress({ stage: 'runtime', message: '正在准备安卓运行时…' });
-      const rt = await this.runtime.ensure({ onLog: (m) => onProgress({ stage: 'runtime', message: m }) });
+      let rt = await this.runtime.ensure({ onLog: (m) => onProgress({ stage: 'runtime', message: m }) });
       if (!rt.ok) {
         const err = new Error(rt.error || '运行时不可用');
         err.needsSetup = rt.needsSetup || 'provision';
         throw err;
+      }
+
+      // 零配置 ARM 兼容：先看「当前这台运行时」有没有翻译能力，而不是看镜像文件在不在磁盘上。
+      // 复用了旧版本/旧快照拉起、没开翻译层的模拟器时，playImageInfo().ok 也是 true，
+      // 光靠它会漏掉，于是装到一半才报 NO_MATCHING_ABIS。这里提前切一次，省掉那段白等。
+      if (isArmOnly(meta) && await runningHasArm(rt.client) === false) {
+        onProgress({ stage: 'runtime', message: '这个应用只有 ARM 库，正在切换到兼容镜像…' });
+        await this.ensureCompatImage(onProgress);
+        rt = await this.switchToCompat(onProgress);
       }
       return await this.finishInstall(rt, meta, filePath, bundle, onProgress);
     } finally {
@@ -224,13 +247,30 @@ class Installer {
       if (bundle) await client.installMultiple(bundle.files);
       else await client.install(filePath);
     } catch (e) {
-      // 到了这一步还报 ABI 不匹配：说明当前运行时是 AOSP 镜像，自动切兼容镜像再装一次
-      if (e.code === 'NO_MATCHING_ABIS' && !this.runtime.provisioner.playImageInfo().ok) {
+      // 到了这一步报 ABI 不匹配，就是「当前这台运行时没有 ARM 翻译层」的铁证 —— 不需要
+      // 再去猜 playImageInfo()。以前用 `!playImageInfo().ok` 当开关，镜像文件明明在磁盘上
+      // 却复用了无翻译的旧模拟器时，重试被跳过、直接抛错，可界面还照旧显示
+      // 「正在自动切换兼容镜像后重试」，于是出现「红色安装失败 + 文案说正在重试」的怪事。
+      // 现在无条件切一次：错误本身就是重试理由。
+      if (e.code === 'NO_MATCHING_ABIS') {
+        onProgress({ stage: 'runtime', message: '这个应用只有 ARM 库，正在切换到兼容镜像后重装…' });
         await this.ensureCompatImage(onProgress);
         const rt2 = await this.switchToCompat(onProgress);
         onProgress({ stage: 'install', message: '已切换兼容镜像，正在重新安装…' });
-        if (bundle) await rt2.client.installMultiple(bundle.files);
-        else await rt2.client.install(filePath);
+        try {
+          if (bundle) await rt2.client.installMultiple(bundle.files);
+          else await rt2.client.install(filePath);
+        } catch (e2) {
+          // 已经切到兼容镜像仍失败：这次必须说实话，别再说「正在重试」。
+          const raw2 = (e2 && e2.message) || String(e2 || '');
+          const err = new Error(
+            `已切换到 Android 14 兼容镜像并重启运行时，但 ${meta.label} 仍然安装失败（${raw2}）。`
+            + '请检查磁盘空间与网络后重试；若一直失败，到「设置 → 诊断与修复」导出诊断报告反馈。',
+          );
+          err.code = e2 && e2.code ? e2.code : 'NO_MATCHING_ABIS';
+          err.abiRetried = true;
+          throw err;
+        }
       } else {
         throw e;
       }
@@ -302,6 +342,8 @@ class Installer {
       // 用户手动设过 orientationOverride 时以用户的为准，这里只是「默认值」。
       orientation: meta.orientation || (existing ? existing.orientation || null : null),
       pinned: existing ? !!existing.pinned : false,
+      // 重新装过 = 权限表可能被重置，清掉「已授过」缓存，下次启动重新核一遍
+      permGranted: false,
     };
 
     store.upsertApp(app);

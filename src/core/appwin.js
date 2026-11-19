@@ -126,6 +126,7 @@ class AppWindow {
   open(o) {
     const { pkg, label, iconPath, portrait, fullscreen, detached } = o;
     this.detachedMode = !!detached;
+    this.waitingForRestart = false;
     this._showWhileWaiting = !!o.showWhileWaiting;
     this._closedCb = o.onClosed || null;
     if (this.isOpen && this.pkg === pkg) {
@@ -278,6 +279,33 @@ class AppWindow {
     this._push();
   }
 
+  /**
+   * 独立窗口模式下「临时把壳窗口亮出来」。
+   *
+   * 场景：切换到一个横竖屏不同的应用时要重启安卓运行时（约 40 秒），这期间
+   * 模拟器原生窗口会被销毁、新窗口还没建出来。如果壳窗口此刻是隐藏的，屏幕上
+   * 什么都没有 —— 用户会以为程序退出了。启动阶段靠 showWhileWaiting 露一次，
+   * 但那时候 pre-attach 一成功就会把它收起来；等到真正重启时反而没人再显示。
+   *
+   * 所以重启前后显式调用一次：先亮出带提示的壳，等新窗口接上后由
+   * openDetached() 第一行的 hide() 收掉。
+   */
+  showWaiting(tip) {
+    if (!this.isOpen) return false;
+    // 标记「正在等待重启」：启动阶段那条 pre-attach 轮询看到它会主动让路，
+    // 否则它下一轮 openDetached() 会先把壳窗口 hide 掉，用户就又对着空桌面干等。
+    this.waitingForRestart = true;
+    if (tip) this.state = { ...this.state, tip, ready: false };
+    this._push();
+    try {
+      this.win.show();
+      this.win.moveTop();
+    } catch (_) {
+      return false;
+    }
+    return true;
+  }
+
   _push() {
     if (!this.isOpen) return;
     try {
@@ -309,7 +337,12 @@ class AppWindow {
    * @returns {Promise<boolean>} 是否成功切到独立窗口
    */
   async openDetached() {
-    if (!this.isOpen) return false;
+    // 壳窗口已经关掉（用户点了关闭 / 启动过程中被收掉）时没有可承载的对象。
+    // 把原因记下来：否则上层日志只能打一个 "unknown"，完全看不出是「窗口没了」
+    // 还是「模拟器窗口找不到」。
+    if (!this.isOpen) { this.lastEmbedError = 'shell-closed'; return false; }
+    // 真正开始接管，等待标记到此为止（下一轮 pre-attach 可以正常重试）
+    this.waitingForRestart = false;
     // 壳窗口在独立模式下绝不能露脸（它没有内容，只会是一块黑）。
     // 但 showWhileWaiting 时它现在是可见的「等待提示」，这里负责收起它。
     try { this.win.hide(); } catch (_) { /* ignore */ }
@@ -356,10 +389,15 @@ class AppWindow {
     let x;
     let y;
     if (this._wantFullscreen) {
-      w = area.w;
-      h = area.h;
-      x = area.x;
-      y = area.y;
+      // 「铺满」也要守住面板比例。竖屏面板（720x1280）塞进 1920x1080 的屏幕时，
+      // 直接把窗口设成 area.w × area.h，Qt 会按比例把它缩回去，但位置仍留在
+      // area 左上角 —— 用户看到的是贴在屏幕左上角的一条竖窗，而不是"全屏"。
+      // 这里按比例取最大可用矩形并居中，横屏面板本来比例贴合，效果就是真正的铺满。
+      const fitW = Math.min(area.w, Math.round(area.h * ratio));
+      w = fitW;
+      h = Math.round(fitW / ratio);
+      x = Math.round(area.x + (area.w - w) / 2);
+      y = Math.round(area.y + (area.h - h) / 2);
       // 同步全屏标记，否则第一次点「最大化」按钮会误判为「进入全屏」而不是还原。
       this._detachedFullscreen = true;
     } else {
@@ -473,10 +511,14 @@ class AppWindow {
    * 1280x720 并重启模拟器。重启约 30~60 秒，所以这里只做一次、并给出明确提示。
    *
    * @param {(next:boolean)=>Promise<boolean>} [onRestart] 由上层注入的重启实现
+   * @param {boolean} [explicitNext] 目标方向。传入时直接用它，不再取反 ——
+   *        旋转入口统一算好方向后传进来，避免这里和上层各算各的导致
+   *        「写进 apps.json 的覆盖值」与「实际切过去的面板方向」相反。
    */
-  async rotate(onRestart) {
+  async rotate(onRestart, explicitNext) {
     if (!this.isOpen) return this.state.landscape;
-    const next = !this.state.landscape;
+    const next = explicitNext === undefined || explicitNext === null
+      ? !this.state.landscape : !!explicitNext;
     this.setState({ tip: next ? '正在切换到横屏（重启安卓运行时，约 30-60 秒）…' : '正在切回竖屏（重启安卓运行时，约 30-60 秒）…', ready: false });
     if (typeof onRestart === 'function') {
       const ok = await onRestart(next).catch(() => false);
@@ -533,8 +575,17 @@ class AppWindow {
           }
         } catch (_) { /* 拿不到就还原时用默认 */ }
         this._detachedFullscreen = true;
-        await this.agent.layout(this._physical({ x: area.x, y: area.y, w: area.w, h: area.h }, area.sf))
-          .catch(() => {});
+        // 同 openDetached：全屏也要守住面板比例并居中，否则竖屏应用会被
+        // Qt 按比例缩回去、停在左上角。
+        const ratio = this._panelRatio();
+        const fitW = Math.min(area.w, Math.round(area.h * ratio));
+        const fitH = Math.round(fitW / ratio);
+        await this.agent.layout(this._physical({
+          x: Math.round(area.x + (area.w - fitW) / 2),
+          y: Math.round(area.y + (area.h - fitH) / 2),
+          w: fitW,
+          h: fitH,
+        }, area.sf)).catch(() => {});
       }
       return;
     }
