@@ -32,6 +32,7 @@ const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'src/ui/index.html'), 'utf8');
 const appJs = fs.readFileSync(path.join(ROOT, 'src/ui/app.js'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'src/ui/style.css'), 'utf8');
+const zhMessages = require('../src/locales/zh-CN.json');
 
 /** 取设置面板主体（settingsBody）里的 HTML 片段 */
 const bodyMatch = html.match(/<div class="modal-body" id="settingsBody">([\s\S]*?)\n    <\/div>\n    <\/div>\n    <footer/);
@@ -136,7 +137,8 @@ test('跳转入口都改成了 focusGroup（分类切换后仍能定位到分组
 });
 
 test('自动检测面板的修复按钮复用 fixIssue', () => {
-  assert(appJs.includes('data-code="${esc(it.code)}"'), '检测项应带 code 以便修复');
+  assert(appJs.includes("tr('v062.m0046', [esc(it.code)])")
+    && zhMessages['v062.m0046'].includes('data-code="{0}"'), '检测项应带 code 以便修复');
   assert(appJs.includes('fixIssue(issue)'), '应复用统一的修复入口');
 });
 

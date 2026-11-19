@@ -6,6 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zhMessages = require('../src/locales/zh-CN.json');
 
 const TMP = path.join(os.tmpdir(), `apkstart-auto-test-${Date.now()}`);
 process.env.APPDATA = TMP;
@@ -2372,7 +2373,9 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       '要能预判「这次会重启」');
     assert(/if \(this\.detachedMode && !this\._showWhileWaiting\) return;/.test(appwin),
       'ready-to-show 只在 showWhileWaiting 时才显示壳窗口');
-    assert(/正在为《[\s\S]{0,40}切换到/.test(mainJs), '提示文案要说清为什么慢');
+    assert(mainJs.includes("t('v058.m0000'") && /重启安卓环境/.test(zhMessages['v058.m0000']),
+      '提示文案要说清为什么慢');
+
     // 真正开始换向重启时，pre-attach 可能已经把壳窗口收起来了 —— 必须再亮一次，
     // 否则重启那 40 秒桌面全空（用户以为程序退出了）。
     assert(/appWin\.showWaiting\(/.test(mainJs), '重启换向前要重新亮出等待窗口');
@@ -2491,8 +2494,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 3) 商店（MSIX）版：拿不到提权就退回「手动引导」，而不是弹一个注定失败的 UAC
     assert(/if \(store\.STORE_BUILD\) \{[\s\S]{0,900}manual: true/.test(handlerBody),
       '商店版失败时要返回 manual 交给 UI 引导');
-    assert(/商店版无法自行提权/.test(mainJs), '商店版文案要说明为什么不能自动开');
-    assert(/虚拟机监控程序平台/.test(mainJs), '要明确写出「Windows 虚拟机监控程序平台」');
+    assert(mainJs.includes("t('v058.m0007')") && /商店版无法自行提权/.test(zhMessages['v058.m0007']),
+      '商店版文案要说明为什么不能自动开');
+    assert(mainJs.includes("t('v058.m0008')") && /虚拟机监控程序平台/.test(zhMessages['v058.m0008']),
+      '要明确写出「Windows 虚拟机监控程序平台」');
     // 4) 开启成功后必须清掉加速缓存，否则界面还显示旧结论
     assert(/const whpx = await enableWhpxFeatures\(\);\s*\n\s*runtime\.provisioner\.invalidateEnvCache/.test(mainJs),
       '开启后要 invalidateEnvCache');
@@ -2505,7 +2510,8 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/openWindowsFeatures: \(\) => invoke\('provision:openWindowsFeatures'\)/.test(preloadJs),
       'preload 要暴露 openWindowsFeatures');
     // 8) 软件模拟下第一次启动要弹一次系统通知（设置里的自检项用户很可能没看到）
-    assert(/let accelWarned = false;/.test(mainJs) && /正在以软件模拟运行/.test(mainJs),
+    assert(/let accelWarned = false;/.test(mainJs) && mainJs.includes("t('v058.m0020')")
+      && /正在以软件模拟运行/.test(zhMessages['v058.m0020']),
       '软件模拟要提醒一次');
   });
 

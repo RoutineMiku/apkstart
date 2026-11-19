@@ -8,6 +8,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const zhMessages = require('../src/locales/zh-CN.json');
 
 let passed = 0;
 let failed = 0;
@@ -127,8 +128,10 @@ test('安装失败与修复失败都会自动打开对应教程', () => {
 
 test('诊断条目带教程按钮', () => {
   const js = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'app.js'), 'utf8');
-  assert(/class="dbg-help"/.test(js), '自动检测条目缺少教程按钮');
-  assert(/class="ec-help"/.test(js), '自检条目缺少教程按钮');
+  assert(js.includes("tr('v062.m0045'") && /class="dbg-help"/.test(zhMessages['v062.m0045']),
+    '自动检测条目缺少教程按钮');
+  assert(js.includes("tr('v062.m0063'") && /class="ec-help"/.test(zhMessages['v062.m0063']),
+    '自检条目缺少教程按钮');
 });
 
 console.log(`\n内置手册测试：${passed} 通过，${failed} 失败\n`);

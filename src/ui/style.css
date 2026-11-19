@@ -997,3 +997,15 @@ kbd {
 
 /* 行内按钮不要折行（空间紧张时「立即扩容」会被拆成两行） */
 .row .btn { white-space: nowrap; flex: 0 0 auto; }
+
+/* Longer translations need room for controls to wrap inside settings. */
+.modal { width: min(940px, calc(100vw - 32px)); }
+.modal .row, .modal .runtime-actions { flex-wrap: wrap; }
+.modal .field .row input { min-width: 0; flex: 1 1 180px; }
+.modal .row > .inline-note { flex: 1 1 100%; }
+.modal .field, .modal .switch-field > div { min-width: 0; }
+.modal .sub, .modal .inline-note, .modal .note { overflow-wrap: anywhere; }
+.modal select { max-width: 100%; }
+
+/* Keep translated category labels readable without removing their full text. */
+.set-nav-label { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }

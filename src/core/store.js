@@ -35,6 +35,7 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
+  language: 'auto',
   adbPath: '',
   device: '127.0.0.1:5555',
   /**

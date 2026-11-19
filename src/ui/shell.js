@@ -1,4 +1,5 @@
 'use strict';
+const tr = (key, values) => window.i18n.t(key, values);
 /* 应用窗口标题栏：只有 旋转 / 最小化 / 最大化 / 关闭，其余设置都在 ApkStart 主界面 */
 const api = window.apkstart;
 const $ = (id) => document.getElementById(id);
@@ -31,9 +32,10 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-function applyState(s) {
+async function applyState(s) {
+  await window.i18n.ready;
   if (!s) return;
-  $('appName').textContent = s.label || '应用';
+  $('appName').textContent = s.label || tr('m0373');
   $('bootName').textContent = s.label || '';
   const icon = s.iconUrl || '';
   if (icon) {

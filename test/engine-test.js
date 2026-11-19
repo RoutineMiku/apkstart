@@ -327,18 +327,36 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
         sock.write('ok\r\n(qemu) ');
       });
     });
-    await new Promise((r) => srv.listen(5556, '127.0.0.1', r));
-
-    const rt = new Runtime(TMP);
-    await rt.monitorCmd('system_powerdown');
-    assert(srv.lastCmd === 'system_powerdown', `实际收到: ${srv.lastCmd}`);
-    await new Promise((r) => srv.close(r));
+    await new Promise((resolve, reject) => {
+      srv.once('error', reject);
+      srv.listen(0, '127.0.0.1', resolve);
+    });
+    // 测试使用临时端口，避免与用户正在运行的模拟器占用的 5556 冲突。
+    const connect = net.connect;
+    net.connect = (options, ...args) => connect.call(net, {
+      ...options, port: srv.address().port,
+    }, ...args);
+    try {
+      const rt = new Runtime(TMP);
+      await rt.monitorCmd('system_powerdown');
+      assert(srv.lastCmd === 'system_powerdown', `实际收到: ${srv.lastCmd}`);
+    } finally {
+      net.connect = connect;
+      await new Promise((resolve) => srv.close(resolve));
+    }
   });
 
   await test('未安装系统时 ensure 返回 needsSetup', async () => {
     store.saveSettings({ runtime: { installed: false }, engine: { mode: 'builtin' } });
     const rt = new Runtime(TMP);
-    // 用假 adb 保证 isOnline 快速失败
+    // 隔离真实 adb / 模拟器，保证测试只覆盖未部署的环境。
+    rt.client = () => ({ isOnline: async () => false, devices: async () => [] });
+    rt.adoptExisting = async () => null;
+    rt.emulator.running = () => false;
+    rt.provisioner.materializeImages = async () => {};
+    rt.provisioner.checkEnv = async () => ({
+      adb: { ok: false }, emulator: { ok: false }, sysimg: { ok: false },
+    });
     const r = await rt.ensure({ onLog: () => {} });
     assert(r.ok === false, '不应就绪');
     assert(['provision', 'install'].includes(r.needsSetup), `needsSetup=${r.needsSetup}`);

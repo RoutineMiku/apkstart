@@ -26,6 +26,7 @@ electronLanguages:
   - zh-CN
   - zh-TW
   - en-US
+  - pt-BR
 
 # 完整运行时（emulator + platform-tools + 系统镜像），由 build/prepare-runtime.js 生成。
 # 打进包里之后首次启动不再需要任何下载。
@@ -78,7 +79,11 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  displayLanguageSelector: false
+  displayLanguageSelector: true
+  installerLanguages:
+    - zh_CN
+    - en_US
+    - pt_BR
   # always：即使桌面上已有同名 .lnk 也重建一次。
   # 默认的 true 只在「不存在」时才创建，某些机器上（安全软件拦截、桌面被
   # OneDrive 重定向、旧版残留了指向已删目录的坏快捷方式）会出现装完没图标，

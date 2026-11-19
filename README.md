@@ -1,5 +1,7 @@
 # ApkStart
 
+[Interface translations / Traduções da interface](docs/I18N.md) · 简体中文 / English / Português (Brasil)
+
 <p align="center"><img src="docs/images/logo.png" alt="ApkStart Logo" width="160" /></p>
 
 [![CI](https://github.com/RoutineMiku/apkstart/actions/workflows/ci.yml/badge.svg)](https://github.com/RoutineMiku/apkstart/actions/workflows/ci.yml)

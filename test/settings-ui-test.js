@@ -13,11 +13,13 @@
 const { app, ipcMain, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { getCatalog } = require('../src/core/i18n');
 
 const OUT = path.join(__dirname, 'out');
 const UI = path.join(__dirname, '..', 'src', 'ui');
 
 const SETTINGS = {
+  language: 'zh-CN',
   adbPath: '',
   runtime: { isoPath: '', sourcePreference: 'auto', autoMirror: true, giteeToken: '', mirrorPrefix: '', downloadConnections: 8 },
   engine: {
@@ -48,10 +50,11 @@ const DEBUG_ISSUES = [
 ];
 
 const OVERRIDES = {
+  'i18n:get': () => ({ locale: 'zh-CN', preference: 'zh-CN', messages: getCatalog('zh-CN') }),
   'settings:get': () => SETTINGS,
   'settings:set': () => SETTINGS,
   'app:info': () => ({ version: '0.6.0', isDev: true, dataDir: 'C:\\data', runtimeDir: 'C:\\data\\runtime' }),
-  'apps:list': () => ({ apps: [] }),
+  'apps:list': () => [],
   'assoc:status': () => ({ registered: false }),
   'doctor:profile': () => ({ profile: {}, text: '均衡 · 4 核 / 4 GB / 720p' }),
   'doctor:selfCheck': () => ({ issues: [], accel: { ok: true }, free: 102400 }),
