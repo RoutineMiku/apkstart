@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
@@ -8,33 +8,33 @@
 </head>
 <body>
 <div class="splash" id="splash">
-  <!-- Logo 区域 -->
+  <!-- Logo -->
   <div class="logo-wrap">
     <img class="logo" id="logo" src="assets/logo.png" alt="ApkStart" draggable="false" />
     <div class="brand">ApkStart</div>
-    <div class="tagline">Windows 上的安卓应用运行器</div>
+    <div class="tagline">Android app launcher for Windows</div>
   </div>
 
-  <!-- 进度条 -->
+  <!-- Progress bar -->
   <div class="progress-wrap">
     <div class="progress-bar" id="progressBar"></div>
   </div>
 
-  <!-- 状态文字 -->
-  <div class="status" id="status">正在准备…</div>
+  <!-- Status -->
+  <div class="status" id="status">Preparing…</div>
 
-  <!-- 首次安装提示（默认隐藏，由主进程控制显示） -->
+  <!-- First-run setup (hidden by default; shown by the main process) -->
   <div class="first-run" id="firstRun" hidden>
-    <div class="first-run-title" id="firstRunTitle">首次使用 · 自动配置中</div>
+    <div class="first-run-title" id="firstRunTitle">First run · Setting things up</div>
     <ul class="first-run-list" id="firstRunList">
-      <li>下载 Android 运行时引擎（约 200MB，只需一次）</li>
-      <li>下载系统镜像（约 1.5GB，只需一次）</li>
-      <li>配置硬件加速与网络</li>
-      <li>完成后即可双击 APK 或桌面图标秒开应用</li>
+      <li>Downloading the Android runtime engine (about 200 MB, one-time only)</li>
+      <li>Downloading the system image (about 1.5 GB, one-time only)</li>
+      <li>Configuring hardware acceleration and networking</li>
+      <li>When setup is complete, double-click an APK or desktop shortcut to launch apps instantly</li>
     </ul>
   </div>
 
-  <!-- 底部版权 -->
+  <!-- Footer -->
   <div class="footer">Powered by RoutineMiku · v<span id="ver"></span></div>
 </div>
 
