@@ -50,6 +50,14 @@ const { AndroidSettings } = require('./core/android');
 const { Updater, findUninstaller } = require('./core/updater');
 const leftovers = require('./core/leftovers');
 const manual = require('./core/manual');
+const i18n = require('./i18n/i18n');
+
+// 界面语言（托盘菜单 / 系统通知 / 原生对话框在显示前翻译；中文时原样返回）
+const L = i18n.bind(() => {
+  let sys = [];
+  try { sys = app.getPreferredSystemLanguages(); } catch (_) { sys = [app.getLocale()]; }
+  return i18n.resolveLang(store.getSettings().uiLang, sys);
+});
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
@@ -942,7 +950,7 @@ function openManual(payload = {}) {
         if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       });
     }
-    manualWindow.setTitle(`ApkStart 使用手册 · ${target.title}`);
+    manualWindow.setTitle(L.tr(`ApkStart 使用手册 · ${target.title}`));
     manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
@@ -964,7 +972,7 @@ function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
   try {
     const { Notification } = require('electron');
-    if (Notification.isSupported()) new Notification({ title, body, icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
+    if (Notification.isSupported()) new Notification({ title: L.tr(title), body: L.tr(body), icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
   } catch (_) { /* ignore */ }
 }
 
@@ -1071,7 +1079,7 @@ function buildTray() {
     const runningLabel = currentAppPkg
       ? ((store.getApp(currentAppPkg) || {}).label || currentAppPkg)
       : '';
-    const menu = Menu.buildFromTemplate([
+    const menu = Menu.buildFromTemplate(L.menu([
       { label: '打开 ApkStart', click: () => showWindow() },
       { label: '使用手册', click: () => openManual({ topic: 'overview', reason: 'tray' }) },
       { type: 'separator' },
@@ -1109,7 +1117,7 @@ function buildTray() {
           const info = await updater.check().catch(() => null);
           if (info) { updateInfo = info; send('update:state', info); }
           if (info && info.hasUpdate && info.asset) {
-            const r = await dialog.showMessageBox(mainWindow || undefined, {
+            const r = await dialog.showMessageBox(mainWindow || undefined, L.dialog({
               type: 'question',
               title: '发现新版本',
               message: `ApkStart ${info.tag} 已发布，当前版本 v${app.getVersion()}。现在更新吗？`,
@@ -1117,7 +1125,7 @@ function buildTray() {
               buttons: ['立即更新', '稍后'],
               defaultId: 0,
               cancelId: 1,
-            });
+            }));
             if (r.response === 0) runUpdate();
           } else if (info && !info.hasUpdate) {
             notify('已是最新版本', `ApkStart v${app.getVersion()}`);
@@ -1133,10 +1141,10 @@ function buildTray() {
           app.quit();
         },
       },
-    ]);
+    ], (it) => apps.some((a) => a.label === it.label)));
     tray.setContextMenu(menu);
+    tray.setToolTip(L.tr('ApkStart — 安卓应用运行器'));
   };
-  tray.setToolTip('ApkStart — 安卓应用运行器');
   // Windows 托盘的惯例是单击就打开主窗口（双击当然也可以）。
   // 之前只绑了 double-click，用户单击没反应，会以为托盘图标坏了。
   // 右键才出菜单，所以这里单击直接 showWindow 不会和菜单冲突。
@@ -1601,11 +1609,11 @@ function registerIpc() {
 
   // 选文件夹（用于把运行时/镜像/已装应用挪到非系统盘）
   ipcMain.handle('dialog:openDir', async (_e, defaultPath) => {
-    const r = await dialog.showOpenDialog(mainWindow, {
+    const r = await dialog.showOpenDialog(mainWindow, L.dialog({
       title: '选择数据存放目录',
       defaultPath: defaultPath || store.DATA_DIR,
       properties: ['openDirectory', 'createDirectory'],
-    });
+    }));
     if (r.canceled || !r.filePaths || !r.filePaths[0]) return null;
     return r.filePaths[0];
   });
@@ -1631,11 +1639,11 @@ function registerIpc() {
   });
 
   ipcMain.handle('apk:pick', async () => {
-    const r = await dialog.showOpenDialog(mainWindow, {
+    const r = await dialog.showOpenDialog(mainWindow, L.dialog({
       title: '选择要安装的 APK',
       filters: [{ name: 'Android 应用', extensions: ['apk', 'apks', 'xapk'] }],
       properties: ['openFile', 'multiSelections'],
-    });
+    }));
     if (r.canceled) return [];
     return r.filePaths;
   });
@@ -1942,11 +1950,11 @@ function registerIpc() {
 
   ipcMain.handle('drivers:import', async () => {
     const drv = require('./core/drivers');
-    const r = await dialog.showOpenDialog(mainWindow, {
+    const r = await dialog.showOpenDialog(mainWindow, L.dialog({
       title: '选择驱动文件（.json）',
       filters: [{ name: '驱动 JSON', extensions: ['json'] }],
       properties: ['openFile'],
-    });
+    }));
     if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
     const out = drv.importDriver(r.filePaths[0], drv.userDir(store));
     if (out.ok) {
@@ -1962,11 +1970,11 @@ function registerIpc() {
     const drv = require('./core/drivers');
     const overview = await driverOverview();
     const tpl = drv.templateFromHost(overview.host);
-    const r = await dialog.showSaveDialog(mainWindow, {
+    const r = await dialog.showSaveDialog(mainWindow, L.dialog({
       title: '导出本机驱动模板',
       defaultPath: path.join(drv.userDir(store), `${tpl.id}.json`),
       filters: [{ name: '驱动 JSON', extensions: ['json'] }],
-    });
+    }));
     if (r.canceled || !r.filePath) return { ok: false, canceled: true };
     fs.mkdirSync(path.dirname(r.filePath), { recursive: true });
     fs.writeFileSync(r.filePath, `${JSON.stringify(tpl, null, 2)}\n`, 'utf8');
@@ -2190,7 +2198,7 @@ function registerIpc() {
 
   // 通用确认框（渲染层统一走这里，避免各处自己拼 dialog 文案）
   ipcMain.handle('app:confirm', async (_e, opts = {}) => {
-    const { response } = await dialog.showMessageBox(mainWindow || undefined, {
+    const { response } = await dialog.showMessageBox(mainWindow || undefined, L.dialog({
       type: opts.type || 'question',
       title: opts.title || '确认',
       message: opts.message || '',
@@ -2199,7 +2207,7 @@ function registerIpc() {
       defaultId: 1,
       cancelId: 0,
       noLink: true,
-    });
+    }));
     return { response };
   });
 
@@ -2281,7 +2289,7 @@ function registerIpc() {
     const pass = { apply: false, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots };
     if (!opts.apply) return runtime.cleanup(pass);
     const preview = await runtime.cleanup(pass);
-    const { response } = await dialog.showMessageBox(mainWindow, {
+    const { response } = await dialog.showMessageBox(mainWindow, L.dialog({
       type: 'warning',
       buttons: ['取消', `清理 ${preview.candidates.length} 项`],
       defaultId: 0,
@@ -2292,7 +2300,7 @@ function registerIpc() {
         ? '会先停止运行时，再删除旧镜像、当前 AVD 的快速启动快照、锁文件和非活动 AVD 的缓存。已安装的应用本身保留（只清快照），'
         : '只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。')
         + '此操作不可撤销，建议先导出诊断报告。',
-    });
+    }));
     if (response !== 1) return { ...preview, cancelled: true };
     return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots });
   });
@@ -2555,11 +2563,11 @@ function registerIpc() {
   });
 
   ipcMain.handle('provision:importIso', async () => {
-    const r = await dialog.showOpenDialog(mainWindow, {
+    const r = await dialog.showOpenDialog(mainWindow, L.dialog({
       title: '选择 Android-x86 / Bliss OS 系统镜像',
       filters: [{ name: '系统镜像', extensions: ['iso', 'img'] }],
       properties: ['openFile'],
-    });
+    }));
     if (r.canceled) return { ok: false, canceled: true };
     try {
       return { ok: true, ...runtime.provisioner.importIso(r.filePaths[0]) };
@@ -2569,11 +2577,11 @@ function registerIpc() {
   });
 
   ipcMain.handle('provision:importDisk', async () => {
-    const r = await dialog.showOpenDialog(mainWindow, {
+    const r = await dialog.showOpenDialog(mainWindow, L.dialog({
       title: '选择已安装 Android 的虚拟磁盘',
       filters: [{ name: '虚拟磁盘', extensions: ['qcow2', 'img', 'vmdk', 'raw'] }],
       properties: ['openFile'],
-    });
+    }));
     if (r.canceled) return { ok: false, canceled: true };
     try {
       const info = runtime.provisioner.importDisk(r.filePaths[0]);
