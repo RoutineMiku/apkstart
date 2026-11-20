@@ -59,5 +59,9 @@
   },
   "dependencies": {
     "@napi-rs/lzma": "^1.5.3"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "electron-winstaller@5.4.0": true
   }
 }

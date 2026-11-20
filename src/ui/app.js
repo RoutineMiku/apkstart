@@ -2,6 +2,7 @@
 
 const api = window.apkstart;
 const $ = (id) => document.getElementById(id);
+const tr = window.ApkStartI18n && window.ApkStartI18n.tr ? window.ApkStartI18n.tr.bind(window.ApkStartI18n) : (zh) => zh;
 
 const state = {
   apps: [],
@@ -1089,7 +1090,7 @@ function fillSettings(s) {
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
-  if ($('setLocale')) $('setLocale').value = eng.locale || 'zh-CN';
+  if ($('setLocale')) $('setLocale').value = eng.locale || 'ru-RU';
   if ($('setChineseIme')) $('setChineseIme').checked = eng.chineseIme !== false;
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
@@ -1684,7 +1685,7 @@ function bindSettings() {
   }
   if ($('setLocale')) {
     $('setLocale').addEventListener('change', async (e) => {
-      state.settings = await api.setSettings({ engine: { locale: e.target.value } });
+      state.settings = await api.setSettings({ engine: { locale: e.target.value, localeChosen: true } });
       toast({ title: '系统语言已更新', body: '下次重启安卓运行时后生效', type: 'ok' });
     });
   }
@@ -1713,7 +1714,7 @@ function bindSettings() {
       if (!gb) { toast({ title: '先选一个容量', body: '「自动」表示由软件按磁盘余量决定，不需要扩容', type: 'info' }); return; }
       const { response } = await api.confirm({
         title: '立刻把安卓数据分区扩容？',
-        message: `将把 /data 调整为 ${gb} GB（就地扩容，已装应用和存档都会保留）。`,
+        message: tr(`将把 /data 调整为 ${gb} GB（就地扩容，已装应用和存档都会保留）。`, { gb }),
         detail: '扩容需要先关掉正在运行的安卓应用，完成后下次打开应用会重新引导，约多花十几秒。',
         okLabel: '开始扩容',
       });
@@ -1729,7 +1730,7 @@ function bindSettings() {
         // 这是明确的数据丢失操作，必须单独再确认一次。
         const again = await api.confirm({
           title: '需要重置安卓数据才能扩容',
-          message: `安卓正在使用快速启动差量盘，就地扩容改不到它。要拿到 ${gb} GB 空间，必须按新容量重建 /data。`,
+          message: tr(`安卓正在使用快速启动差量盘，就地扩容改不到它。要拿到 ${gb} GB 空间，必须按新容量重建 /data。`, { gb }),
           detail: '重建会清空已安装的应用与存档（模拟器本身和镜像不受影响）。确定继续吗？',
           okLabel: '清空并重建',
         });
@@ -2064,7 +2065,7 @@ function bindSettings() {
       const ok = await api.confirm({
         type: 'warning',
         title: '清理旧版本残留？',
-        message: `找到 ${items.length} 项残留，约 ${mb} MB：`,
+        message: tr(`找到 ${items.length} 项残留，约 ${mb} MB：`, { n: items.length, mb }),
         detail: `${lines.join('\n')}\n\n只删除「旧版本程序目录 / 已失效的卸载项 / 更新临时文件」，`
           + '当前正在运行的版本和你的应用数据都不会动。',
         buttons: ['取消', '开始清理'],

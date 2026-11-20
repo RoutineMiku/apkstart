@@ -623,11 +623,11 @@ class EmulatorEngine {
   }
 
   /**
-   * 要注入的系统语言。默认简体中文；用户可在设置里改（engine.locale），
-   * 设成 'en-US' 或 'off' 就回到镜像原生英文。
+   * 要注入的系统语言。默认俄语；用户可在设置里改（engine.locale），
+   * 设成 'en-US' / 'zh-CN' 或 'off' 就切回对应语言或镜像原生英文。
    */
   _guestLocale() {
-    const v = String(this.settings?.engine?.locale || 'zh-CN').trim();
+    const v = String(this.settings?.engine?.locale || 'ru-RU').trim();
     if (!v || v === 'off' || /^false$/i.test(v)) return '';
     return v;
   }
@@ -672,7 +672,7 @@ class EmulatorEngine {
     // 显式声明不限速：默认值虽然是 full，但某些 -gpu / -net 组合下会被带上
     // 模拟器的保守配置，视频类应用（红果、抖音）首屏就会明显慢半拍。
     args.push('-netdelay', 'none', '-netspeed', 'full');
-    // 系统语言：默认简体中文。
+    // 系统语言：默认俄语（见 _guestLocale）。
     // 实测 `-prop persist.sys.locale=zh-CN` 完全无效 —— 模拟器会拦截 persist.sys.*
     // 这类受保护属性，ro.product.locale 又被镜像 build.prop 覆盖；guest 里 getprop
     // 一个都看不到。官方专门给了 -change-locale：它会真正改系统语言并重启 framework，
