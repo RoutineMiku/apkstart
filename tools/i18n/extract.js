@@ -84,10 +84,29 @@ function unescapeJs(t) {
   return t.replace(/\\(['"\\nrt])/g, (all, c) => ({ n: '\n', r: '\r', t: '\t' }[c] || c));
 }
 
-const files = ['src/ui/index.html', 'src/ui/shell.html', 'src/ui/splash.html', 'src/ui/app.js', 'src/ui/shell.js', 'src/ui/splash.js']
-  .map((f) => path.join(ROOT, f));
-let items = [];
-for (const f of files) items = items.concat(f.endsWith('.html') ? extractHtml(f) : extractJs(f));
+const UI_FILES = ['src/ui/index.html', 'src/ui/shell.html', 'src/ui/splash.html', 'src/ui/app.js', 'src/ui/shell.js', 'src/ui/splash.js'];
+const MAIN_FILES = ['src/main.js'];
+
+/** 按文件列表提取（相对仓库根目录），返回去重后的字符串数组（按码位排序）。 */
+function collect(relFiles) {
+  let items = [];
+  for (const rel of relFiles) {
+    const f = path.join(ROOT, rel);
+    items = items.concat(f.endsWith('.html') ? extractHtml(f) : extractJs(f));
+  }
+  return [...new Set(items.map((it) => it.str))].sort();
+}
+
+if (require.main !== module) {
+  module.exports = { collect, UI_FILES, MAIN_FILES };
+  return;
+}
+
+const items = [];
+for (const f of UI_FILES.concat(MAIN_FILES)) {
+  const abs = path.join(ROOT, f);
+  items.push(...(abs.endsWith('.html') ? extractHtml(abs) : extractJs(abs)));
+}
 
 const uniq = new Map();
 for (const it of items) if (!uniq.has(it.str)) uniq.set(it.str, it);
@@ -101,9 +120,12 @@ if (process.argv.includes('--report')) {
   process.exit(0);
 }
 
-// 合并已有目录（保留人工译文），新键留空
+// 合并已有目录（保留人工译文），新键留空；目录里手工补的键（动态文案）也保留
 const old = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : {};
 const next = {};
-for (const k of [...uniq.keys()].sort()) next[k] = Object.prototype.hasOwnProperty.call(old, k) ? old[k] : '';
-fs.writeFileSync(OUT, JSON.stringify(next, null, 1) + '\n', 'utf8');
-console.log(`wrote ${Object.keys(next).length} keys (${Object.values(next).filter(Boolean).length} translated)`);
+for (const k of uniq.keys()) next[k] = Object.prototype.hasOwnProperty.call(old, k) ? old[k] : '';
+for (const k of Object.keys(old)) if (!(k in next)) next[k] = old[k];
+const sorted = {};
+for (const k of Object.keys(next).sort()) sorted[k] = next[k];
+fs.writeFileSync(OUT, JSON.stringify(sorted, null, 1) + '\n', 'utf8');
+console.log(`wrote ${Object.keys(sorted).length} keys (${Object.values(sorted).filter(Boolean).length} translated)`);
