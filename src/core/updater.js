@@ -9,12 +9,16 @@
  *     快照全都在用户目录里，替换程序文件不会动它们；
  *   - 完整版（便携但带 runtime）：同轻量版，只是目录里多了 resources\runtime。
  *
- * 替换不能在本进程里做（exe 正被占用），所以生成一段 PowerShell 脚本，
- * 用 EncodedCommand 交给独立进程：等本进程退出 → 复制文件 → 重新拉起。
- * 用 base64 传脚本而不是写 .ps1 文件，是为了绕开「路径含中文时脚本被按 GBK 解码」
- * 这类老问题（PowerShell 5.1 读无 BOM 脚本会按 ANSI 解释）。
+ * 替换不能在本进程里做（exe 正被占用），所以生成一段 PowerShell 脚本交给独立进程：
+ * 等本进程退出 → 复制文件 → 重新拉起。
+ * [-EncodedCommand 长度] 脚本已增长到 UTF-16LE base64 后接近 Windows 32767 字符
+ * 命令行上限，且真实安装/数据路径还会更长。因此生产调度改为：把带 UTF-8 BOM 的
+ * 完整脚本写入 update 目录下的唯一文件，命令行只传一段很短的 bootstrap；
+ * bootstrap 一次性读入字节、校验 SHA-256、从同一份字节解析并执行，避免
+ * 「命令行过长」和「写完后被替换再读」两个问题。
  */
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { spawn } = require('child_process');
 const { downloadAny, downloadAnyParallel, downloadMulti, sha256File } = require('./download');
@@ -67,6 +71,26 @@ function saneVersionDir(n) {
 /** [R4-fix] staging/备份目录的唯一后缀；碰撞由 mkdir/rename 自身失败兜底。 */
 function uniqueSuffix() {
   return `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * 生产调度 bootstrap：命令行只带脚本文件路径与 SHA-256，长度与脚本体量无关。
+ * 字节只读一次，先校验摘要再从同一份 Buffer 解码执行 —— 读完到执行之间没有
+ * 第二次按路径读取，外部替换文件无法绕过校验。UTF-8 BOM 在解码后剥掉。
+ */
+function buildApplyBootstrap(helperFile, digest) {
+  return [
+    `$p = ${psq(helperFile)}`,
+    `$h = '${digest}'`,
+    `$b = [System.IO.File]::ReadAllBytes($p)`,
+    `$sha = [System.Security.Cryptography.SHA256]::Create()`,
+    `try { $d = [System.BitConverter]::ToString($sha.ComputeHash($b)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }`,
+    `if ($d -ne $h) { throw 'update helper digest mismatch: refusing to execute' }`,
+    `try { [System.IO.File]::Delete($p) } catch { }`,
+    `$t = [System.Text.Encoding]::UTF8.GetString($b)`,
+    `if ($t.Length -gt 0 -and [int]$t[0] -eq 0xFEFF) { $t = $t.Substring(1) }`,
+    `& ([scriptblock]::Create($t))`,
+  ].join('\r\n');
 }
 
 /**
@@ -1340,7 +1364,7 @@ class Updater {
       // 重启只是「请求启动」，进程创建成功不等于应用健康；helper 用不同退出码
       // 区分「替换/安装成功但重启失败」(2) 和「替换/安装失败」(1)，回滚失败为 (3)。
       `if ($rollbackFailed) { $relaunchAllowed = $false; $relaunchSkipReason = 'rollback failed; install state is uncertain' }`,
-      `if ((-not $rollbackAllowed) -and ($relaunchSkipReason -eq '')) { $relaunchSkipReason = 'install state is not verified' }`,
+      `if ((-not $relaunchAllowed) -and ($relaunchSkipReason -eq '')) { $relaunchSkipReason = 'install state is not verified' }`,
       `if (-not $relaunchAllowed) {`,
       `  Note ("relaunch skipped: " + $relaunchSkipReason)`,
       `} elseif (Test-Path -LiteralPath ${psq(exe)}) {`,
@@ -1369,17 +1393,27 @@ class Updater {
     const script = lines.join('\r\n');
     fs.writeFileSync(path.join(this.updateDir, 'apply.log.ps1'), script, 'utf8');
     // 真正交给 PowerShell 的脚本去掉行首缩进并只用 LF：PowerShell 不以缩进
-    // 表达语义，这样每行节省几个字符。helper 已扩大到 ~12k 字符，UTF-16LE
-    // base64 后接近 CreateProcess 的 32767 字符命令行上限，必须留出余量。
-    // 排障用的 apply.log.ps1 仍保留可读缩进。
+    // 表达语义，这样每行节省几个字符。排障用的 apply.log.ps1 仍保留可读缩进。
     const execScript = lines.map((l) => l.replace(/^[ \t]+/, '')).join('\n');
     if (opts.spawn === false) return execScript;
-    // -EncodedCommand 走 UTF-16LE base64：脚本里出现中文路径也不会被 GBK 解码搞坏
-    const b64 = Buffer.from(execScript, 'utf16le').toString('base64');
-    // CreateProcess 的命令行上限是 32767 字符（含 exe 路径与参数）。超过就
-    // 诚实报错而不是让 spawn 静默失败——调用方不会误以为替换已开始。
-    if (b64.length > 32000) {
-      throw new Error(`更新助手脚本编码后 ${b64.length} 字符，超过 PowerShell 调度上限，本次替换未开始`);
+    // 脚本本体（~12k 字符）不再进命令行：U+FEFF 开头的 UTF-8 脚本写入 update
+    // 目录下的唯一文件，命令行只传一段定长 bootstrap（文件路径 + SHA-256）。
+    // bootstrap 一次性读字节、先校验摘要再从同一 Buffer 解码执行；读与执行
+    // 之间没有第二次按路径读取，运行前被替换的文件无法绕过校验。PowerShell
+    // 5.1 以 .ps1 文件直接运行时需要 BOM；这里显式写入并校验同一份字节。
+    const helperFile = path.join(this.updateDir, `apply-helper-${uniqueSuffix()}.ps1`);
+    const helperBytes = Buffer.from(`\uFEFF${execScript}`, 'utf8');
+    const helperDigest = crypto.createHash('sha256').update(helperBytes).digest('hex');
+    fs.writeFileSync(helperFile, helperBytes);
+    const bootstrap = buildApplyBootstrap(helperFile, helperDigest);
+    // -EncodedCommand 走 UTF-16LE base64：中文路径不会被 GBK 解码搞坏。
+    const b64 = Buffer.from(bootstrap, 'utf16le').toString('base64');
+    // 命令行上限 32767 字符（含 exe 路径与参数）。bootstrap 只随路径长度变化
+    // （<2k 字符），超过 16000 说明调度方式又被改回去了，诚实报错而不是让
+    // spawn 静默失败——调用方不会误以为替换已开始。
+    if (b64.length > 16000) {
+      try { fs.unlinkSync(helperFile); } catch (_) { }
+      throw new Error(`更新助手调度命令编码后 ${b64.length} 字符，超过 PowerShell 调度上限，本次替换未开始`);
     }
     const ps = opts.powershellPath || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     // 这里**不能**用 detached：某些安全软件 / 沙箱策略会直接拦掉「分离的控制台进程」，
@@ -1396,6 +1430,7 @@ class Updater {
     // 未处理异常击穿进程；调度已失败时该事件没有额外信息。
     if (!child.pid) {
       child.on('error', () => {});
+      try { fs.unlinkSync(helperFile); } catch (_) { }
       throw new Error('更新助手（PowerShell）调度失败，本次替换未开始');
     }
     child.unref();

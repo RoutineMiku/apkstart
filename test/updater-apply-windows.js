@@ -114,6 +114,12 @@ function sameTree(a, b) {
   return true;
 }
 
+/** 独立于被测脚本的树摘要：排序后的 "rel:sha256" 行 + 末尾换行。 */
+function treeDigest(files) {
+  const lines = Object.keys(files).sort().map((rel) => `${rel}:${files[rel]}`);
+  return sha(`${lines.join('\n')}\n`);
+}
+
 function backupHashes(install) {
   const out = {};
   for (const d of listDirs(install, '.apkstart-backup-')) {
@@ -123,14 +129,15 @@ function backupHashes(install) {
   return out;
 }
 
-function loadUpdater(sourceText) {
+function loadUpdater(sourceText, spawnImpl) {
   // apply(spawn:false) 不会碰下载/解压/版本比较；把这些依赖换成显式失败，
   // 这样测试既能加载候选源码，也能加载旧源码，而不依赖外部网络或 node_modules。
   const never = () => { throw new Error('unexpected out-of-scope dependency call'); };
   const deps = {
     fs,
     path,
-    child_process: { spawn: never },
+    crypto,
+    child_process: { spawn: spawnImpl || never },
     './download': {
       downloadAny: never,
       downloadAnyParallel: never,
@@ -322,10 +329,25 @@ function controlPrelude(cfg) {
     `  $probeEventJson = @{ event = $name; details = $details } | ConvertTo-Json -Compress -Depth 6`,
     `  [System.IO.File]::AppendAllText($script:ProbeTrace, $probeEventJson + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))`,
     `}`,
+    `function Get-ProbeTreeDigest([string]$root) {`,
+    `  if (-not (Test-Path -LiteralPath $root)) { return 'MISSING' }`,
+    `  $base = $root.TrimEnd('\\')`,
+    `  $lines = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction Stop | Sort-Object FullName | ForEach-Object {`,
+    `    $rel = $_.FullName.Substring($base.Length).TrimStart('\\').Replace('\\', '/')`,
+    `    $rel + ':' + (HashFile $_.FullName)`,
+    `  })`,
+    `  $nl = [string][char]10`,
+    `  $text = ($lines -join $nl) + $nl`,
+    `  $s = [System.Security.Cryptography.SHA256]::Create()`,
+    `  try { return [System.BitConverter]::ToString($s.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text))).Replace('-', '').ToLowerInvariant() } finally { $s.Dispose() }`,
+    `}`,
+    `$script:ProbeLaunchTreeRoot = ${cfg.launchTreeRoot ? psq(cfg.launchTreeRoot) : '$null'}`,
     `function Start-Process {`,
     `  [CmdletBinding()]`,
     `  param([string]$FilePath, [object[]]$ArgumentList, [string]$WorkingDirectory, [string]$WindowStyle, [switch]$PassThru, [switch]$Wait)`,
-    `  Write-ProbeEvent 'start-process-stub' @{ file = $FilePath; passThru = [bool]$PassThru; wait = [bool]$Wait; executed = $false }`,
+    `  $treeDigest = $null`,
+    `  if ($script:ProbeLaunchTreeRoot) { try { $treeDigest = Get-ProbeTreeDigest $script:ProbeLaunchTreeRoot } catch { $treeDigest = 'ERROR' } }`,
+    `  Write-ProbeEvent 'start-process-stub' @{ file = $FilePath; passThru = [bool]$PassThru; wait = [bool]$Wait; executed = $false; treeRoot = $script:ProbeLaunchTreeRoot; treeDigest = $treeDigest }`,
     `  if ($FilePath -ieq 'cmd.exe') {`,
     `    if (-not $script:ProbeCmdFallbackWorks) { Write-Error 'simulated cmd start failure'; return }`,
     `    Write-ProbeEvent 'cmd-start-stub' @{ executed = $false; simulated = $true }`,
@@ -489,6 +511,7 @@ function runCase(Updater, fx, opts) {
     appLaunchFails: !!opts.appLaunchFails,
     cmdFallbackWorks: opts.cmdFallbackWorks !== false,
     replaceFault: opts.replaceFault || null,
+    launchTreeRoot: opts.launchTreeRoot || null,
     appVerifyFault: !!opts.appVerifyFault,
     appRestoreMoveFault: !!opts.appRestoreMoveFault,
   }) + script;
@@ -599,6 +622,324 @@ function commonChecks(raw, check, { lockExpected = false } = {}) {
     `exit=${raw.powershell.exitCode} error=${raw.powershell.error}`);
   if (lockExpected) check('exclusive lock acquired before helper', raw.trace.lockAcquired);
 }
+
+// ---------------------------------------------------------------------------
+// 生产调度回归：apply() 真实走 spawn 的通道。
+// ROOT-R5-DISPATCH-PROBE 证明 app helper 编码后 >32000 字符，旧 -EncodedCommand
+// 直传在真实安装路径下 spawn 调用数为 0。这里同时断言：
+//   1) Node 侧捕获的 spawn 命令与脚本体量无关（只有定长 bootstrap）；
+//   2) 捕获到的 bootstrap 文本原样执行：读文件、校验 SHA-256、解码、执行；
+//   3) 真实完整 helper 在中文/空格/单引号/长路径夹具中复制成功；
+//   4) 运行前替换 helper 字节 → 摘要拒绝执行，文件状态不变。
+// 所有 Start-Process / Wait-Process / Start-Sleep 仍被桩遮蔽并记录。
+// ---------------------------------------------------------------------------
+
+function captureSpawn(calls) {
+  return (exe, args, spawnOpts) => {
+    calls.push({ exe, args, spawnOpts });
+    return { pid: 7654321, on() { return this; }, unref() {} };
+  };
+}
+
+function dispatchFixture(name, installName, dataName) {
+  const caseRoot = path.join(tempRoot, name);
+  const install = path.join(caseRoot, installName);
+  const data = path.join(caseRoot, dataName);
+  const version = '0.6.3';
+  const oldVersion = '0.6.2';
+  const versionDir = path.join(data, 'update', version);
+  const payload = path.join(versionDir, 'app-payload');
+  const appDst = path.join(install, 'resources', 'app');
+  const appSrc = path.join(payload, 'resources', 'app');
+  const exe = path.join(install, 'ApkStart.exe');
+
+  writeFile(path.join(appDst, 'package.json'), JSON.stringify({ name: 'apkstart', version: oldVersion }));
+  writeFile(path.join(appDst, 'main.js'), 'OLD-MAIN-JS');
+  writeFile(path.join(appDst, 'obsolete.js'), 'OLD-ONLY FILE');
+  writeFile(path.join(appSrc, 'package.json'), JSON.stringify({ name: 'apkstart', version }));
+  writeFile(path.join(appSrc, 'main.js'), 'NEW-MAIN-JS - committed only after verification');
+  writeFile(path.join(appSrc, 'lib', 'added.js'), 'NEW-ADDED-JS');
+  writeFile(path.join(payload, '.apkstart-ready'), JSON.stringify({ version, fixture: true }));
+  writeFile(exe, 'SHELL-EXE-SENTINEL');
+
+  const fx = {
+    mode: 'app', caseRoot, install, data, version, oldVersion, versionDir, payload,
+    appDst, appSrc, exe,
+  };
+  fx.oldFiles = treeHashes(appDst);
+  fx.newFiles = treeHashes(appSrc);
+  return fx;
+}
+
+function runDispatchCase(spec, load) {
+  const fx = dispatchFixture(spec.name, spec.installName, spec.dataName);
+  const evidence = path.join(fx.caseRoot, 'evidence');
+  fs.mkdirSync(evidence, { recursive: true });
+  const job = { mode: 'app', payload: fx.payload, version: fx.version };
+  const calls = [];
+  const Updater = load(captureSpawn(calls));
+
+  const script = new Updater({
+    currentVersion: fx.oldVersion, exePath: fx.exe, isPackaged: true, dataDir: fx.data,
+  }).apply(job, { spawn: false, waitPid: 424242 });
+  const before = { tree: treeHashes(fx.appDst), exe: shaFile(fx.exe) };
+  const launched = new Updater({
+    currentVersion: fx.oldVersion, exePath: fx.exe, isPackaged: true, dataDir: fx.data,
+  }).apply(job, { waitPid: 424242 });
+
+  const helperDir = path.join(fx.data, 'update');
+  const helperNames = fs.readdirSync(helperDir).filter((n) => /^apply-helper-.*\.ps1$/.test(n));
+  const helperFile = helperNames.length === 1 ? path.join(helperDir, helperNames[0]) : null;
+  const helperBytes = helperFile ? fs.readFileSync(helperFile) : null;
+
+  const call = calls[0] || null;
+  const argsJoined = call ? call.args.join(' ') : '';
+  const encIndex = call ? call.args.indexOf('-EncodedCommand') : -1;
+  const bootstrap = encIndex >= 0 ? Buffer.from(call.args[encIndex + 1], 'base64').toString('utf16le') : '';
+  const digestMatch = /\$h = '([0-9a-f]{64})'/.exec(bootstrap);
+  const digest = digestMatch ? digestMatch[1] : null;
+
+  // 原样执行捕获到的 bootstrap：control prelude 只定义桩，bootstrap 本身
+  // 取自生产的 spawn 参数，不是重写副本。
+  const traceFile = path.join(evidence, 'controls.jsonl');
+  const controlled = `\uFEFF${controlPrelude({
+    traceFile,
+    installerExit: 0,
+    appLaunchFails: !!spec.appLaunchFails,
+    cmdFallbackWorks: true,
+  })}${bootstrap}`;
+  const controlledFile = path.join(evidence, 'captured-bootstrap.ps1');
+  writeFile(controlledFile, controlled);
+  writeFile(path.join(evidence, 'production-apply.ps1'), script);
+  writeFile(path.join(evidence, 'captured-spawn.json'), JSON.stringify({
+    exe: call ? call.exe : null,
+    args: call ? call.args : [],
+    argsLength: argsJoined.length,
+    wholeScriptEncodedChars: Buffer.from(script, 'utf16le').toString('base64').length,
+    bootstrap,
+  }, null, 2));
+  writeFile(path.join(evidence, 'before.json'), JSON.stringify(before, null, 2));
+
+  const child = spawnSync(psExe, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', controlledFile,
+  ], {
+    encoding: 'utf8', windowsHide: true, cwd: fx.caseRoot, timeout: 60000, maxBuffer: 8 * 1024 * 1024,
+  });
+  writeFile(path.join(evidence, 'powershell.stdout.log'), child.stdout || '');
+  writeFile(path.join(evidence, 'powershell.stderr.log'), child.stderr || '');
+
+  const trace = readTrace(traceFile);
+  const after = { tree: treeHashes(fx.appDst), exe: shaFile(fx.exe) };
+  const logFile = path.join(fx.data, 'update', 'update.log');
+  const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+
+  const raw = {
+    case: spec.name,
+    expectation: spec.expectation,
+    source: SOURCE,
+    sourceSha256: sha(fs.readFileSync(SOURCE)),
+    caseRoot: fx.caseRoot,
+    evidence,
+    paths: { install: fx.install, exe: fx.exe, payload: fx.payload, versionDir: fx.versionDir },
+    fixture: { maxFixturePath: Math.max(fx.exe.length, path.join(fx.appSrc, 'lib', 'added.js').length) },
+    dispatch: {
+      launched,
+      spawnCalls: calls.length,
+      exe: call ? call.exe : null,
+      argsLength: argsJoined.length,
+      bootstrapChars: bootstrap.length,
+      wholeScriptEncodedChars: Buffer.from(script, 'utf16le').toString('base64').length,
+      helperFile,
+      helperBytesSha256: helperBytes ? sha(helperBytes) : null,
+      digest,
+      helperNames,
+    },
+    before,
+    after,
+    powershell: {
+      exitCode: child.status,
+      signal: child.signal || null,
+      error: child.error ? String(child.error.message) : null,
+      stdout: child.stdout || '',
+      stderr: child.stderr || '',
+    },
+    trace: {
+      all: trace,
+      controlsPresent: trace.some((e) => e.event === 'controls-installed'),
+      waitStubs: trace.filter((e) => e.event === 'wait-process-stub'),
+      launchStubs: trace.filter((e) => e.event === 'start-process-stub'),
+      realExeLaunches: trace.filter((e) => e.event === 'start-process-stub'
+        && e.details && e.details.executed === true).length,
+    },
+    log,
+    script,
+    controlled,
+  };
+  raw.checks = [];
+  const check = (name, ok, detail) => {
+    raw.checks.push({ name, ok: !!ok, detail: detail == null ? null : String(detail) });
+  };
+
+  check('apply() returned a full (non-throwing) helper script', typeof script === 'string' && script.length > 10000,
+    `chars=${script.length}`);
+  check('exactly one production spawn call', calls.length === 1, `calls=${calls.length}`);
+  check('spawn uses Windows PowerShell', call && call.exe === psExe, call ? call.exe : 'no call');
+  check('command line is bounded and independent of script size', call && argsJoined.length < 4096,
+    `args=${argsJoined.length} wholeScriptEncoded=${Buffer.from(script, 'utf16le').toString('base64').length}`);
+  check('command line stays below the Windows 32767 limit', call && argsJoined.length < 30000,
+    `args=${argsJoined.length}`);
+  check('bootstrap is short and does not embed the helper body',
+    bootstrap.length > 0 && bootstrap.length < 3000 && !bootstrap.includes('$applyOk'),
+    `bootstrapChars=${bootstrap.length}`);
+  check('exactly one unique helper file written', helperNames.length === 1,
+    helperNames.join(','));
+  check('helper bytes are BOM + the tested script',
+    helperBytes && helperBytes.toString('utf8') === `\uFEFF${script}`,
+    helperFile || 'missing');
+  check('bootstrap carries the helper sha256', digest && helperBytes && sha(helperBytes) === digest,
+    `${digest} vs ${helperBytes ? sha(helperBytes) : null}`);
+  check('fixture path is realistic and below MAX_PATH',
+    !spec.longPath || (raw.fixture.maxFixturePath >= 190 && raw.fixture.maxFixturePath < 260),
+    `maxFixturePath=${raw.fixture.maxFixturePath}`);
+  check('controls installed inside private PowerShell', raw.trace.controlsPresent);
+  check('wait is stubbed', raw.trace.waitStubs.length >= 1);
+  check('no real executable launch', raw.trace.realExeLaunches === 0);
+  check('helper exits 0 after verified app replacement', child.status === 0, `exit=${child.status}`);
+  check('installed app tree equals verified new tree',
+    sameTree(raw.after.tree, fx.newFiles),
+    `after=${Object.keys(raw.after.tree).join(',')} new=${Object.keys(fx.newFiles).join(',')}`);
+  check('obsolete old file removed', !Object.hasOwn(raw.after.tree, 'obsolete.js'));
+  check('shell exe untouched', raw.after.exe === before.exe);
+  check('bootstrap deleted the helper after verified read',
+    helperFile !== null && !fs.existsSync(helperFile), helperFile || 'missing');
+  check('diagnostic apply.log.ps1 retained', fs.existsSync(path.join(helperDir, 'apply.log.ps1')));
+  check('exactly one app launch request through stub',
+    raw.trace.launchStubs.filter((e) => e.details && e.details.file === fx.exe).length === 1);
+
+  raw.passed = raw.checks.every((c) => c.ok);
+  writeFile(path.join(evidence, 'result.json'), JSON.stringify(raw, null, 2));
+  return raw;
+}
+
+function runTamperCase(spec, load) {
+  const fx = dispatchFixture(spec.name, spec.installName, spec.dataName);
+  const evidence = path.join(fx.caseRoot, 'evidence');
+  fs.mkdirSync(evidence, { recursive: true });
+  const job = { mode: 'app', payload: fx.payload, version: fx.version };
+  const calls = [];
+  const Updater = load(captureSpawn(calls));
+  const before = { tree: treeHashes(fx.appDst), exe: shaFile(fx.exe) };
+
+  new Updater({
+    currentVersion: fx.oldVersion, exePath: fx.exe, isPackaged: true, dataDir: fx.data,
+  }).apply(job, { waitPid: 424242 });
+
+  const helperDir = path.join(fx.data, 'update');
+  const helperNames = fs.readdirSync(helperDir).filter((n) => /^apply-helper-.*\.ps1$/.test(n));
+  const helperFile = helperNames.length === 1 ? path.join(helperDir, helperNames[0]) : null;
+  const originalBytes = helperFile ? fs.readFileSync(helperFile) : null;
+  if (helperFile) fs.appendFileSync(helperFile, '\r\nWrite-Output "TAMPERED";\r\n');
+
+  const call = calls[0] || null;
+  const encIndex = call ? call.args.indexOf('-EncodedCommand') : -1;
+  const bootstrap = encIndex >= 0 ? Buffer.from(call.args[encIndex + 1], 'base64').toString('utf16le') : '';
+
+  const traceFile = path.join(evidence, 'controls.jsonl');
+  const controlled = `\uFEFF${controlPrelude({ traceFile, installerExit: 0 })}${bootstrap}`;
+  const controlledFile = path.join(evidence, 'captured-bootstrap.ps1');
+  writeFile(controlledFile, controlled);
+  writeFile(path.join(evidence, 'before.json'), JSON.stringify(before, null, 2));
+
+  const child = spawnSync(psExe, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', controlledFile,
+  ], {
+    encoding: 'utf8', windowsHide: true, cwd: fx.caseRoot, timeout: 60000, maxBuffer: 8 * 1024 * 1024,
+  });
+  writeFile(path.join(evidence, 'powershell.stdout.log'), child.stdout || '');
+  writeFile(path.join(evidence, 'powershell.stderr.log'), child.stderr || '');
+
+  const trace = readTrace(traceFile);
+  const after = { tree: treeHashes(fx.appDst), exe: shaFile(fx.exe) };
+  const raw = {
+    case: spec.name,
+    expectation: spec.expectation,
+    source: SOURCE,
+    sourceSha256: sha(fs.readFileSync(SOURCE)),
+    caseRoot: fx.caseRoot,
+    evidence,
+    paths: { install: fx.install, exe: fx.exe, payload: fx.payload, versionDir: fx.versionDir },
+    dispatch: {
+      spawnCalls: calls.length,
+      helperFile,
+      originalSha256: originalBytes ? sha(originalBytes) : null,
+      tamperedSha256: helperFile ? sha(fs.readFileSync(helperFile)) : null,
+      argsLength: call ? call.args.join(' ').length : 0,
+    },
+    before,
+    after,
+    powershell: {
+      exitCode: child.status,
+      signal: child.signal || null,
+      error: child.error ? String(child.error.message) : null,
+      stdout: child.stdout || '',
+      stderr: child.stderr || '',
+    },
+    trace: {
+      all: trace,
+      controlsPresent: trace.some((e) => e.event === 'controls-installed'),
+      waitStubs: trace.filter((e) => e.event === 'wait-process-stub'),
+      launchStubs: trace.filter((e) => e.event === 'start-process-stub'),
+    },
+  };
+  const check = (name, ok, detail) => {
+    raw.checks.push({ name, ok: !!ok, detail: detail == null ? null : String(detail) });
+  };
+  raw.checks = [];
+  check('helper was tampered after apply()', raw.dispatch.originalSha256 !== raw.dispatch.tamperedSha256);
+  check('matched bootstrap refuses tampered bytes',
+    `${child.stdout || ''}${child.stderr || ''}`.includes('digest mismatch'),
+    `exit=${child.status}`);
+  check('tampered dispatch exits non-zero', child.status !== 0, `exit=${child.status}`);
+  check('no helper body executed after tamper', raw.trace.waitStubs.length === 0
+    && raw.trace.launchStubs.length === 0);
+  check('installed tree unchanged after refused dispatch',
+    sameTree(raw.after.tree, before.tree) && raw.after.exe === before.exe);
+  check('tampered helper is not executed and remains for diagnosis',
+    helperFile !== null && fs.existsSync(helperFile));
+  raw.passed = raw.checks.every((c) => c.ok);
+  writeFile(path.join(evidence, 'result.json'), JSON.stringify(raw, null, 2));
+  return raw;
+}
+
+const dispatchSpecs = [
+  {
+    name: 'dispatch-long-quote-space',
+    expectation: 'production channel executes the full helper with a long path containing a single quote and spaces',
+    installName: `Owner's apps ${'x'.repeat(100)}`,
+    dataName: `data ${'d'.repeat(50)}`,
+    longPath: true,
+  },
+  {
+    name: 'dispatch-chinese-quote-space',
+    expectation: 'production channel executes the full helper with Chinese, spaces and a single quote in paths',
+    installName: `所有者's 应用 ${'z'.repeat(80)}`,
+    dataName: `数据 目录's ${'q'.repeat(40)}`,
+    longPath: true,
+  },
+  {
+    name: 'dispatch-plain-short',
+    expectation: 'production channel executes the full helper on a short plain path',
+    installName: 'install',
+    dataName: 'data',
+  },
+  {
+    name: 'dispatch-tampered-helper',
+    kind: 'tamper',
+    expectation: 'negative: bytes replaced after generation are refused by the digest check',
+    installName: `tamper's apps ${'t'.repeat(60)}`,
+    dataName: `tamper data ${'v'.repeat(20)}`,
+  },
+];
 
 const cases = [];
 
@@ -1074,6 +1415,7 @@ const cases = [];
     expectation: 'negative: failure after commit restores the complete old tree; exit 1',
     fixture: fx,
     appVerifyFault: true,
+    launchTreeRoot: fx.appDst,
     verify: (raw, check) => {
       commonChecks(raw, check);
       const fault = raw.trace.appVerifyFault;
@@ -1107,6 +1449,10 @@ const cases = [];
         launchIndex > faultIndex && launchIndex > 0, `faultIndex=${faultIndex} launchIndex=${launchIndex}`);
       check('exactly one old-version app launch request',
         raw.trace.launchStubs.filter((e) => e.details.file === raw.paths.exe).length === 1);
+      const launch = raw.trace.launchStubs.find((e) => e.details.file === raw.paths.exe);
+      check('old tree was already restored at launch-request time',
+        !!launch && launch.details.treeDigest === treeDigest(raw.expectedTrees.oldFiles),
+        launch ? `digest=${launch.details.treeDigest} expected=${treeDigest(raw.expectedTrees.oldFiles)}` : 'no launch');
     },
   });
 }
@@ -1214,8 +1560,15 @@ const cases = [];
 }
 
 try {
-  const Updater = loadUpdater(fs.readFileSync(SOURCE, 'utf8'));
+  const sourceText = fs.readFileSync(SOURCE, 'utf8');
+  const Updater = loadUpdater(sourceText);
   const results = cases.map((c) => evaluate(runCase(Updater, c.fixture, c), c.verify));
+  const loadWithSpawn = (spawnImpl) => loadUpdater(sourceText, spawnImpl);
+  for (const spec of dispatchSpecs) {
+    results.push(spec.kind === 'tamper'
+      ? runTamperCase(spec, loadWithSpawn)
+      : runDispatchCase(spec, loadWithSpawn));
+  }
   const failed = results.filter((r) => !r.passed);
   const report = {
     status: failed.length ? 'FAIL' : 'PASS',
