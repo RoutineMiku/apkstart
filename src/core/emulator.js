@@ -1325,8 +1325,11 @@ class EmulatorEngine {
       const port = i === 0 ? startPort : await doctor.freePortPair(startPort + (i * 2));
       const plan = { ...base, port, adbPort, lcd: screen };
       this.port = port;
-      // 每轮重置退出码：上一轮 0xC0000005 不能带进下一轮的诊断里
+      // 每轮重置退出码与诊断：上一轮 0xC0000005 / UNKNOWN 不能带进下一轮的诊断里
       this.lastExitCode = null;
+      // lastDiagnosis 同时是「本轮 45 秒提前诊断」的暂存：只清上一轮，
+      // 本轮在等待循环里写入的明确结论仍会被下面的 fatal 分支优先采用。
+      this.lastDiagnosis = null;
       // 日志也按轮切分：内存日志是跨轮累积的，第 1 轮的崩溃行若留在尾部，
       // 第 2 轮（比如换后端后端口冲突）会被误诊成同一个崩溃。
       const logStart = this._log.length;
