@@ -1385,7 +1385,9 @@ class EmulatorEngine {
       }
 
       const started = Date.now();
-      const timeout = plan.bootTimeoutMs || 240000;
+      // 预算按「最终生效的 accel」取：驱动 forceTcg 把 auto 改成 off 后，
+      // plan 上仍是硬件档的 240000，直接读字段会提前判软件模拟超时。
+      const timeout = doctor.bootTimeoutFor(plan);
       let ok = false;
       let fatal = false;
       let sawBooting = false;

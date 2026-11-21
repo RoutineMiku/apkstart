@@ -4,6 +4,9 @@
  *
  * D1：每轮 attempt 的 lastDiagnosis 必须只来自本轮。基线在第二轮 fatal 时复用
  *     上一轮 UNKNOWN，导致本轮日志里的 `emulator exit 3221225477` 被短路。
+ * D2：最终有效 accel=off 的计划必须消费软件模拟预算（≥600000），auto 保持 240000；
+ *     驱动 forceTcg 把 auto 改成 off 后同样如此；进程退出/明确 fatal 仍立即失败。
+ *
  * 这里走 EmulatorEngine.start() 的真实 attempt 决策路径：假时钟（虚拟 setTimeout/Date.now）、
  * 假进程、显式依赖桩（provisioner/AVD/spawn/adb/report），不产生真实副作用。
  *
@@ -284,6 +287,107 @@ async function runStart(h, script, opts = {}) {
       const a = h.engine.attempts;
       assert.equal(a[1].diagnosis, 'ACCESS_VIOLATION', `45s 后的本轮明确 fatal 诊断应保留，实际 ${a[1].diagnosis}`);
       assert.equal(a[1].timeout, false, '该轮应是 fatal 而不是 timeout');
+    } finally { h.restore(); }
+  });
+
+  // ============================================================== D2
+  console.log('\n[D2 · 最终有效 accel 的等待预算]');
+
+  await test('planVariants：auto 档保持 240000；两个 off 回退档 ≥600000，且 wipe/snapshot 原合同不变', async () => {
+    const p = baseProfile();
+    const vs = REAL.planVariants(p);
+    const autos = vs.filter((v) => v.accel === 'auto');
+    const offs = vs.filter((v) => v.accel === 'off');
+    assert.equal(autos.length, 2, `应有 2 个 auto 档，实际 ${autos.length}`);
+    assert.equal(offs.length, 2, `应有 2 个 off 档，实际 ${offs.length}`);
+    for (const v of autos) assert.equal(v.bootTimeoutMs, 240000, `auto 档预算应保持 240000，实际 ${v.bootTimeoutMs}`);
+    for (const v of offs) {
+      assert.ok(v.bootTimeoutMs >= 600000, `off 档预算应 ≥600000，实际 ${v.bootTimeoutMs}（${v.label}）`);
+      assert.equal(v.wipe, false, 'off 档不得引入 wipe');
+      assert.equal(v.snapshot, false, 'off 档应保持快照关闭');
+    }
+    const last = offs.find((v) => v.lastResort);
+    assert.ok(last, '应保留保守冷启动档');
+    assert.equal(last.memoryMB, 2048, '保守冷启动内存规则不变');
+  });
+
+  await test('planVariants：原本 off 更长预算 900000 保留；off 600000 不降回 240000', async () => {
+    const long = REAL.planVariants(baseProfile({ accel: 'off', accelOk: false, bootTimeoutMs: 900000 }));
+    for (const v of long) assert.equal(v.bootTimeoutMs, 900000, `应保留 900000，实际 ${v.bootTimeoutMs}`);
+    const base = REAL.planVariants(baseProfile({ accel: 'off', accelOk: false, bootTimeoutMs: 600000 }));
+    for (const v of base) assert.equal(v.bootTimeoutMs, 600000, `应为 600000，实际 ${v.bootTimeoutMs}`);
+  });
+
+  await test('chooseProfile：硬件加速 240000，无加速 600000', async () => {
+    const on = doctor.chooseProfile({
+      host: baseProfile().host, accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 200000,
+    });
+    const off = doctor.chooseProfile({
+      host: baseProfile().host, accel: { ok: false }, emulatorVersion: '37.3.8.0', diskMB: 200000,
+    });
+    assert.equal(on.bootTimeoutMs, 240000, `硬件加速应 240000，实际 ${on.bootTimeoutMs}`);
+    assert.equal(on.accel, 'auto');
+    assert.equal(off.bootTimeoutMs, 600000, `软件模拟应 600000，实际 ${off.bootTimeoutMs}`);
+    assert.equal(off.accel, 'off');
+  });
+
+  await test('真实等待处消费最终预算：驱动 forceTcg 把 auto 改 off 后，300 秒就绪不得在 240 秒截止', async () => {
+    const h = harness({
+      profile: baseProfile(),
+      drivers: {
+        applied: [{ id: 'tcg', name: 'tcg', version: '1' }], skipped: [], errors: [],
+        effect: { forceTcg: true, notes: [] },
+      },
+      probe(e, i, elapsed) {
+        return elapsed >= 300000 ? 'ok' : 'pending';
+      },
+    });
+    try {
+      const out = await runStart(h, { maxAttempts: 2 });
+      assert.equal(out.ok, true, `off 档 300 秒就绪应成功，实际 ${out.ok ? '' : out.error.message}`);
+      assert.ok(out.value.bootMs >= 300000 && out.value.bootMs < 302000, `bootMs 应约 300000，实际 ${out.value.bootMs}`);
+      assert.equal(h.engine.attempts.length, 0, '应第一轮就成功');
+    } finally { h.restore(); }
+  });
+
+  await test('真实等待处消费最终预算：off 计划（planVariants 回退档）300 秒就绪不超时', async () => {
+    const h = harness({
+      profile: baseProfile({ accel: 'off', accelOk: false, bootTimeoutMs: 600000 }),
+      probe(e, i, elapsed) { return elapsed >= 300000 ? 'ok' : 'pending'; },
+    });
+    try {
+      const out = await runStart(h, { maxAttempts: 2 });
+      assert.equal(out.ok, true, `off 计划 300 秒就绪应成功，实际 ${out.ok ? '' : out.error.message}`);
+      assert.ok(out.value.bootMs >= 300000 && out.value.bootMs < 302000, `bootMs 应约 300000，实际 ${out.value.bootMs}`);
+    } finally { h.restore(); }
+  });
+
+  await test('进程 10 秒退出/明确 fatal → 立即失败，不空等软件模拟预算', async () => {
+    const h = harness({
+      profile: baseProfile(),
+      drivers: {
+        applied: [{ id: 'tcg', name: 'tcg', version: '1' }], skipped: [], errors: [],
+        effect: { forceTcg: true, notes: [] },
+      },
+      spawn(e, i) { e.log(`emulator: starting ${i}`); },
+      probe(e, i, elapsed) {
+        if (elapsed >= 10000 && e.proc) {
+          e.log('emulator exit 3221225477（0xC0000005 访问冲突）');
+          e.lastExitCode = 3221225477;
+          e.proc = null;
+        }
+        return 'pending';
+      },
+    });
+    try {
+      const out = await runStart(h, { maxAttempts: 4 });
+      assert.equal(out.ok, false, '4 轮 10 秒退出都应失败');
+      assert.equal(h.engine.attempts.length, 4, `应尝试 4 轮，实际 ${h.engine.attempts.length}`);
+      assert.ok(h.clock.now < 60000, `不应空等到预算，实际假时钟 ${h.clock.now}ms`);
+      for (const a of h.engine.attempts) {
+        assert.equal(a.timeout, false, '每轮都应是 fatal 而非 timeout');
+        assert.equal(a.diagnosis, 'ACCESS_VIOLATION');
+      }
     } finally { h.restore(); }
   });
 
