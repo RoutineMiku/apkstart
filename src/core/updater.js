@@ -17,10 +17,11 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { downloadAnyParallel, downloadMulti } = require('./download');
+const { downloadAny, downloadAnyParallel, downloadMulti, sha256File } = require('./download');
 const { ZipFile, resolveZipEntry } = require('./zip');
 const { cmpVer } = require('./version');
 const { Sources } = require('./sources');
+const inc = require('./incremental');
 
 const OWNER = 'RoutineMiku';
 const REPO = 'apkstart';
@@ -60,7 +61,7 @@ function findUninstaller(installDir) {
 class Updater {
   /**
    * @param {{currentVersion:string, exePath:string, isPackaged:boolean, dataDir:string,
-   *          onProgress?:Function}} o
+   *          electronVersion?:string, onProgress?:Function}} o
    */
   constructor(o) {
     this.current = o.currentVersion || '0.0.0';
@@ -69,6 +70,9 @@ class Updater {
     this.isPackaged = !!o.isPackaged;
     this.dataDir = o.dataDir;
     this.onProgress = o.onProgress || (() => {});
+    // 增量更新的前提：本机 Electron 版本与发版时一致（外壳 ABI 没变）。
+    // Electron 运行时由调用方（main.js）传 process.versions.electron；测试里可注入。
+    this.electronVersion = o.electronVersion || '';
     this.settings = typeof o.settings === 'function' ? o.settings : () => (o.settings || {});
     // settings() 给 sources 用：决定「走 GitHub 还是 Gitee」「有没有镜像前缀」
     this.sources = new Sources(this.settings);
@@ -99,13 +103,18 @@ class Updater {
     // 发行版里同时挂着「便携包」和「运行时整包」（ApkStart-runtime-*.zip）。
     // 兜底的 .zip 匹配必须把运行时整包排除掉：某次发布如果只有运行时整包、
     // 没有便携包，旧逻辑会把它当更新包解压进程序目录（多出 1.5GB 文件、程序也被换坏）。
-    const isRuntimePack = (a) => /runtime/i.test(String((a && a.name) || ''));
+    const isRuntimePack = (a) => inc.isAuxAsset((a && a.name) || '');
 
     const wantSetup = this.flavor === 'setup';
     const asset = wantSetup
       ? (pick(/Setup\.exe$/i) || merged.assets.find((a) => /\.exe$/i.test(a.name) && !isRuntimePack(a)))
       : (pick(/portable.*\.zip$/i) || pick(/win64.*\.zip$/i)
         || merged.assets.find((a) => /\.zip$/i.test(a.name) && !isRuntimePack(a)));
+
+    // 增量资产：清单 + 代码包。两者都在、且本机 Electron 版本对得上时才可能走增量；
+    // 完整包始终作为兜底留在 asset 里——增量任何一步出问题都能无缝退回整包。
+    const manifestAsset = pick(inc.MANIFEST_RE);
+    const appAsset = pick(inc.APP_PACK_RE);
 
     this.latest = {
       version: merged.version,
@@ -137,6 +146,10 @@ class Updater {
       hasUpdate: cmpVer(merged.tag, this.current) > 0,
       current: this.current,
       canAutoApply: !!asset && (!!asset.url || !!(asset.parts && asset.parts.length)),
+      // 是否有可能走增量：prepare() 会下载清单解析后再做最终判定（版本/哈希）
+      incremental: this.flavor === 'portable' && !!manifestAsset && !!appAsset
+        ? { manifest: manifestAsset, app: appAsset }
+        : null,
     };
     this._last = this.latest;
     return this.latest;
@@ -151,6 +164,27 @@ class Updater {
     if (!it || !it.asset) throw new Error('这个版本没有可自动安装的安装包，请到 GitHub 发布页手动下载');
     const dir = path.join(this.updateDir, it.version);
     fs.mkdirSync(dir, { recursive: true });
+
+    // 优先尝试增量：只下清单 + 代码包（几 MB），本机 Electron 版本一致、逐文件
+    // 哈希都对得上才采用。任何一步不满足就当作没增量，无缝退回下面的完整包下载。
+    // 上次增量替换失败过 → 这次直接走完整包，别再重放坏载荷（resumable 也认这个标记）
+    const forcedFull = fs.existsSync(path.join(dir, '.apkstart-force-full'));
+    if (it.incremental && it.hasUpdate !== false && !forcedFull) {
+      try {
+        const job = await this._prepareApp(it, dir);
+        if (job) return job;
+      } catch (e) {
+        this.onProgress({
+          stage: 'download', percent: 1,
+          message: `增量更新不可用（${e.message}），改用完整包…`,
+        });
+      }
+    }
+    return this._prepareFull(it, dir);
+  }
+
+  /** 完整包路径：下载 portable zip / Setup.exe 并解压备好（原来的逻辑） */
+  async _prepareFull(it, dir) {
     const file = path.join(dir, it.asset.name);
     let total = it.asset.size || 0;
     const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
@@ -209,6 +243,64 @@ class Updater {
     }
     this.onProgress({ stage: 'ready', percent: 100, message: '安装包已下载完成' });
     return { mode: 'setup', payload: file, version: it.version };
+  }
+
+  /**
+   * 增量更新：下载清单 + 代码包，校验通过后解压成 app 载荷。
+   * 返回 null 表示「这次不走增量」（调用方改走完整包）；抛异常也等价，由 prepare 兜底。
+   * @returns {Promise<{mode:'app', payload:string, version:string}|null>}
+   */
+  async _prepareApp(it, dir) {
+    if (!it.incremental || !it.incremental.manifest || !it.incremental.app) return null;
+    const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
+
+    // 1) 清单与代码包都很小，用双源候选 + 测速排序（GitHub / Gitee / 镜像）下载。
+    const fetchAsset = async (asset, name, label) => {
+      const target = path.join(dir, name);
+      const ranked = await this.sources.rank(this.sources.candidates(asset), {}).catch(() => this.sources.candidates(asset));
+      this.onProgress({ stage: 'download', percent: 1, message: `正在获取${label}…` });
+      await downloadAny(ranked, target, {});
+      return target;
+    };
+
+    const manifestFile = await fetchAsset(it.incremental.manifest, `manifest-${it.version}.json`, '更新清单');
+    const manifest = inc.parseManifest(fs.readFileSync(manifestFile, 'utf8'));
+    if (String(manifest.version).replace(/^v/i, '') !== String(it.version).replace(/^v/i, '')) {
+      throw new Error('清单版本与发行版不一致');
+    }
+    // 清单声明的 app 资产必须真的是这次 release 里那个（防止挂错旧包）
+    const appAsset = it.assets && it.assets.find((a) => a && a.name === manifest.app.asset);
+    const choice = inc.chooseMode({
+      flavor: this.flavor,
+      electronVersion: this.electronVersion,
+      manifest,
+      assets: appAsset ? [appAsset] : [],
+      current: this.current,
+    });
+    if (choice.mode !== 'app') return null;
+
+    const appFile = await fetchAsset(choice.appAsset, manifest.app.asset, '增量代码包');
+    const gotHash = await sha256File(appFile);
+    if (String(gotHash).toLowerCase() !== String(manifest.app.sha256).toLowerCase()) {
+      throw new Error('增量代码包校验失败（sha256 不符）');
+    }
+
+    const payload = path.join(dir, 'app-payload');
+    // 上次下载解压成功但替换失败：直接复用（和完整包的 .apkstart-ready 同理）
+    if (this._payloadReady(payload, it.version)) {
+      this.onProgress({ stage: 'ready', percent: 100, message: '已有下载好的增量包，直接复用' });
+      return { mode: 'app', payload, version: it.version, manifest };
+    }
+    fs.rmSync(payload, { recursive: true, force: true });
+    fs.mkdirSync(payload, { recursive: true });
+    await this._extract(appFile, payload);
+    // 逐文件校验：下载被截断 / 镜像给了错文件都能在这里拦下
+    const bad = await inc.verifyExtracted({ payload, files: manifest.app.files });
+    if (bad.length) throw new Error(`增量代码包有 ${bad.length} 个文件校验不通过`);
+
+    this._markPayloadReady(payload, it.version, 'app');
+    this.onProgress({ stage: 'ready', percent: 100, message: '增量包已校验完成' });
+    return { mode: 'app', payload, version: it.version, manifest };
   }
 
   /**
@@ -290,9 +382,9 @@ class Updater {
   /** 载荷就绪标记文件：解压完整落盘后才写，供跨进程复用判断 */
   _readyFile(payload) { return path.join(payload, '.apkstart-ready'); }
 
-  _markPayloadReady(payload, version) {
+  _markPayloadReady(payload, version, mode = 'zip') {
     try {
-      fs.writeFileSync(this._readyFile(payload), JSON.stringify({ version, at: Date.now() }), 'utf8');
+      fs.writeFileSync(this._readyFile(payload), JSON.stringify({ version, at: Date.now(), mode }), 'utf8');
     } catch (_) { /* 标记写不了就下次重下，不影响正确性 */ }
   }
 
@@ -302,7 +394,11 @@ class Updater {
       const m = JSON.parse(fs.readFileSync(this._readyFile(payload), 'utf8'));
       // 版本不符 = 上次下的是别的版本，不能复用
       if (m.version !== version) return false;
-      // 关键：程序主 exe 必须在载荷里。没有它说明解压被中断/被杀软删过。
+      if (m.mode === 'app') {
+        // 增量载荷没有 exe；它的「主文件」是 resources/app/package.json
+        return fs.existsSync(path.join(payload, 'resources', 'app', 'package.json'));
+      }
+      // 完整载荷：程序主 exe 必须在。没有说明解压中断/被杀软删过。
       const exeName = path.basename(this.exePath || 'ApkStart.exe');
       return !!findInDir(payload, exeName);
     } catch (_) {
@@ -322,8 +418,15 @@ class Updater {
         .filter((n) => cmpVer(n, this.current) > 0)   // 只认比当前更新的版本，避免反复重启
         .sort((a, b) => cmpVer(b, a));
       for (const v of versions) {
+        // 完整包载荷
         const payload = path.join(this.updateDir, v, 'payload');
         if (this._payloadReady(payload, v)) return { mode: 'zip', payload, version: v };
+        // 增量载荷（上次增量替换失败标记了强制完整包 → 不重放）
+        const appPayload = path.join(this.updateDir, v, 'app-payload');
+        if (!fs.existsSync(path.join(this.updateDir, v, '.apkstart-force-full'))
+            && this._payloadReady(appPayload, v)) {
+          return { mode: 'app', payload: appPayload, version: v };
+        }
       }
     } catch (_) { /* ignore */ }
     return null;
@@ -385,6 +488,48 @@ class Updater {
         // 只有确认复制成功，才清掉载荷与就绪标记；否则留给 findResumableJob 续做。
         `  try { Remove-Item -LiteralPath (Join-Path $src '.apkstart-ready') -Force } catch {}`,
         `  Remove-Item -Path $src -Recurse -Force`,
+        `}`,
+      );
+    } else if (job.mode === 'app') {
+      // 增量替换：只覆盖 resources\app（我们的 JS / 资源 / node_modules）。
+      // Electron 外壳（exe / dll / locales）一律不动 —— 所以更新从 ~100MB 降到几 MB。
+      // 同样先改名备份 + 校验新 package.json 版本，失败回滚并保留载荷供续做。
+      const appRel = path.join('resources', 'app');
+      lines.push(
+        `$src = ${psq(job.payload)}`,
+        `$dst = ${psq(dir)}`,
+        `$appRel = ${psq(appRel)}`,
+        `$appDst = Join-Path $dst $appRel`,
+        `$appSrc = Join-Path $src $appRel`,
+        `$pkgDst = Join-Path $appDst 'package.json'`,
+        `$backup = "$appDst.old"`,
+        `$hasBackup = $false`,
+        `if (Test-Path $appDst) {`,
+        `  try { Move-Item -LiteralPath $appDst -Destination $backup -Force; $hasBackup = $true } catch { Note "app backup failed: $_" }`,
+        `}`,
+        `$ok = $false`,
+        `for ($i = 1; $i -le 12; $i++) {`,
+        `  New-Item -ItemType Directory -Force -Path $appDst | Out-Null`,
+        `  Copy-Item -Path (Join-Path $appSrc '*') -Destination $appDst -Recurse -Force`,
+        `  if (Test-Path $pkgDst) {`,
+        `    try {`,
+        `      $pv = (Get-Content -LiteralPath $pkgDst -Raw | ConvertFrom-Json).version`,
+        `      if ($pv -eq ${psq(job.version)}) { $ok = $true; Note "app copy pass $i ok"; break }`,
+        `    } catch { Note "app version check: $_" }`,
+        `  }`,
+        `  Note "app copy pass $i failed, retry"; Start-Sleep -Milliseconds 500`,
+        `}`,
+        `if (-not $ok) {`,
+        `  Note 'app copy FAILED - rollback and keep payload'`,
+        `  $applyOk = $false`,
+        // 增量替换真失败了（不是瞬时占用）：留个标记，下次启动强制走完整包，
+        // 避免resumable 无限重放同一个坏载荷 —— 这是 issue #98 死循环的增量版。
+        `  try { New-Item -ItemType File -Force -Path ${psq(path.join(this.updateDir, job.version, '.apkstart-force-full'))} | Out-Null } catch {}`,
+        `  if (Test-Path $appDst) { try { Remove-Item -LiteralPath $appDst -Recurse -Force } catch {} }`,
+        `  if ($hasBackup) { try { Move-Item -LiteralPath $backup -Destination $appDst -Force } catch {} }`,
+        `} else {`,
+        `  if ($hasBackup) { try { Remove-Item -LiteralPath $backup -Recurse -Force } catch {} }`,
+        `  try { Remove-Item -LiteralPath (Join-Path $src '.apkstart-ready') -Force } catch {}`,
         `}`,
       );
     } else {

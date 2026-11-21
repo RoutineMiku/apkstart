@@ -36,9 +36,18 @@ function applyState(s) {
   $('appName').textContent = s.label || '应用';
   $('bootName').textContent = s.label || '';
   const icon = s.iconUrl || '';
-  if (icon) {
-    $('appIcon').src = icon;
-    $('bootIcon').src = icon;
+  // 品牌兜底图：应用图标解不出来（ICO/WebP 解码失败、file URL 被 CSP 拦）时
+  // 至少显示一个完整 logo，绝不留一块空白让启动动画看起来「图标缺了一块」。
+  const FALLBACK = 'assets/logo-128.png';
+  const bootIcon = $('bootIcon');
+  const appIcon = $('appIcon');
+  if (bootIcon) {
+    bootIcon.onerror = () => { if (bootIcon.src.indexOf('logo-128') < 0) bootIcon.src = FALLBACK; };
+    bootIcon.src = icon || FALLBACK;
+  }
+  if (appIcon) {
+    appIcon.onerror = () => { if (appIcon.src.indexOf('logo-128') < 0) appIcon.src = FALLBACK; };
+    appIcon.src = icon || FALLBACK;
   }
   $('bootTip').textContent = s.tip || '';
   if (s.ready) {

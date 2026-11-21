@@ -358,9 +358,15 @@ class Runtime {
       let authHealed = false;  // 本次 start() 是否已因「未授权」作废旧快照冷启动过
       const diagUnauthorized = () => ({
         code: 'ADB_UNAUTHORIZED',
-        title: '安卓调试授权未完成（授权对话框）',
-        hint: '系统卡在「允许 USB 调试？」对话框，已自动作废旧快照并冷启动一次让运行时'
-          + '重新注入 adb 公钥。若反复出现，请删除 %USERPROFILE%\\.android\\adbkey* 后重试。',
+        title: '安卓调试授权未完成（需要点一次「允许」）',
+        // 旧文案让人去删 %USERPROFILE%\.android\adbkey —— 实测那是**反向操作**：
+        // 换了新密钥后，系统里已存的旧公钥仍然生效，两者对不上，反而永远授权不了
+        // （Android 只在 adb_keys 不存在时才写入新公钥）。正确做法是在模拟器窗口里
+        // 点一次「允许」，或者清空安卓数据让系统重建授权表。
+        hint: '模拟器停在「允许 USB 调试？」对话框。请在那个模拟器窗口里点「允许」——'
+          + '勾选「一律允许使用这台计算机进行调试」再点，之后就不会再问。'
+          + '若窗口点不动或一直不出现：设置 → 运行时 → 清空安卓数据后重试'
+          + '（会清掉已装应用，重新安装即可，不会影响 APK 文件）。',
       });
       const probe = async ({ serial }) => {
         if (!this.emulator.running()) return 'fatal';
@@ -712,6 +718,9 @@ class Runtime {
 
   /** 优雅停止：emulator 走控制台关机，QEMU 走 monitor */
   async stop({ graceful = true } = {}) {
+    // 运行时一停，之前缓存的 guest 网络结论立即作废。否则旋转/重启后新机器
+    // 还没联网，waitForNetwork 却因为 8 秒缓存直接返回 ok，应用又会黑屏。
+    this._lastNetwork = null;
     const adbPath = this.adbPath();
     if (this.emulator.running()) {
       await this.emulator.stop({ adbPath });
@@ -977,8 +986,27 @@ class Runtime {
   async _ensureInner({ onLog = () => {} } = {}) {
     const client = this.client();
     if (await client.isOnline()) {
-      await this.prepare(client);
-      return { ok: true, client, engine: 'builtin', reused: true };
+      /**
+       * 「在线」不等于「能干活」。
+       *
+       * 模拟器进程刚退出、或正在重启的那几百毫秒里，adb 对
+       * `-s emulator-5554 get-state` 仍然回 `device`。旧逻辑据此直接
+       * returned reused，换面板方向的启动链于是拿到一个已经死掉的客户端 ——
+       * 后面每条命令都是 `device 'emulator-5554' not found`（实测 ensure
+       * 0.2 秒就"就绪"，应用启动全军覆没）。
+       *
+       * 这里补一条真实命令：能执行 getprop 才算设备真的在（返回 0 说明还在
+       * 开机，那是正常情况，按原逻辑复用并等待）；命令失败则当作没就绪，
+       * 继续走下面的拉起流程。
+       */
+      const probe = await client.shell('getprop sys.boot_completed', { timeout: 5000 })
+        .then((v) => String(v == null ? '' : v).trim())
+        .catch(() => null);
+      if (probe !== null) {
+        await this.prepare(client);
+        return { ok: true, client, engine: 'builtin', reused: true };
+      }
+      onLog('adb 报告设备在线但命令不通（模拟器可能正在重启），重新拉起运行时…');
     }
 
     // 上一次 ApkStart 退出时模拟器会留着（下次点开秒进），但新进程里没有它的
@@ -1401,6 +1429,14 @@ class Runtime {
       this._lastNetwork = { ok: !!(r && r.ok), ip: (r && r.ip) || '', reason: (r && r.reason) || '', at: Date.now() };
       return r;
     };
+    // 速度优化：热启动 / 旋转重启后，启动路径上会连续调用本函数
+    // （restartForOrientation 等一次、installer.launch 又等一次）。
+    // 网络就绪是稳定的，8 秒内刚确认过就直接用结论，省掉整轮 adb 往返
+    // （每次 isOnline + checkNetwork 都是两次 shell，实测要几百毫秒到 1 秒）。
+    // 窗口取 8 秒：足够覆盖连续调用，又不会在真的断网后长时间骗用户。
+    // 注意 stop() 会清掉 _lastNetwork，所以重启后不会误用关机前的旧状态。
+    const cached = this._lastNetwork;
+    if (cached && cached.ok && Date.now() - cached.at < 8000) return cached;
     const t0 = Date.now();
     let last = null;
     let lastNotice = 0;

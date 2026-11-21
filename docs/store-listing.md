@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.8）
+# Microsoft Store 提交材料（ApkStart 0.6.3）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.8.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.6.3.0_x64.msix`（x64，约 1.5 GB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,45 @@
 
 **中文**
 ```
-0.5.8：
+0.6.3：
+· 启动动画焕新：极简苹果风——柔和光晕、图标缓慢呼吸、细腻淡入淡出；图标改用完整源不再缺角，且至少完整播放约 2 秒，不再一闪而过。打开应用时动画保持到画出第一屏才淡出，不提前露白底。
+· 打开应用更快：合并窗口接管时的重复等待、加快进程存活探测，点开到出画面更利落。
+· 设置新增「实验室」分组，含「Windows 原生多窗口多开（实验性）」开关：开启后多个应用可驻留后台、随时切回并保留登录态（默认关闭）。受限于单一模拟器窗口，同一时刻仍只显示一个应用画面。
+· 启动失败诊断更准确：0xC0000135 不再一律说「重装 VC++/杀毒删文件」，而是区分真缺运行库、商店版只读目录限制或杀软隔离，并带你到内置手册 6.8 节。
+· 便携版新增增量更新：从 GitHub / Gitee 升级只下几 MB 代码，不重下系统镜像、运行时、已装应用和快照；有哈希校验、失败回退完整包。商店版仍经 Microsoft Store 差分更新。
+· 保留 0.6.2 的内置手册、故障自动教程、声音检测与 ARM 安装修复。
+
+0.6.2（已包含）：
+· 内置使用手册：标题栏「?」、设置 → 关于、托盘菜单都能直接打开；可筛选目录、打印或存成 PDF。
+· 修复失败自动给教程：硬件加速、安装失败、ARM 转译层、adb 未授权、没有声音等自动修复失败时，直接打开对应章节；每条检测结果旁也有「教程」按钮。
+· 自动检测新增声音检查：能发现「安卓应用声音」被关掉和 Windows Audio 服务停止，前者可一键重新打开并重启运行时。
+· ARM 应用安装更稳：报错本身即触发切换兼容镜像，切换前作废旧快照，二次仍失败如实告知。
+
+0.6.1（已包含）：
+· 修复启动后仍是 ApkStart 等待窗口：原生窗口尽早接管画面；接管失败自动重试四次。
+· 修复换向约 40 秒白屏与偶发打不开；首帧判定改为守到应用真正画出第一屏。
+· 修复连点两次图标导致旧实例关掉新实例模拟器的问题；全屏按屏幕比例居中。
+
+0.6.0（已包含）：
+· 修复底部「按键错位」：安卓 13 的平板任务栏（屏幕底部那条半透明栏）在平板排版下会盖住应用、把返回/主页/最近键挤到左下角，现在默认关闭。
+· 启动动画延长到应用真正画出第一屏再淡出，不再出现「白底 + 应用图标」的空白等待。
+· 启动提速：已授予的权限不再每次重复授予，大型应用单这一项就能省 20 秒以上。
+· 默认改用模拟器原生窗口：拖拽、缩放、旋转不再掉帧，也不再出现黑边、坐标错位；想用带旋转按钮的标题栏可在设置里切回嵌入模式。
+· 修复 AMD 显卡电脑总是退回软件渲染导致的卡顿：硬件渲染关掉 Vulkan 后重试，真正吃到显卡加速。
+· 修复升级后仍在跑上一个安装包里的安卓运行时（旧包一删就启动失败）。
+· 设置页重新分类：按「常用与安装 / 显示与窗口 / 操作与输入 / 性能与资源 / 网络与下载 / 诊断与修复 / 集成与文件 / 更新与关于」八类归置，找设置项不再靠长列表翻。
+· 设置页新增搜索框，输入「横屏」「内存」「代理」等关键词即可直达对应设置项。
+· 新增「自动检测」：后台定时体检安卓运行时、adb 授权、磁盘余量、数据分区、快照与设置冲突，出问题按分类列出并可一键处理。
+· 自动检测只在发现新问题时提醒一次，修复后自动复检；可随时关闭或调整检测间隔。
+· 修复部分电脑「装完点应用没反应、所有应用都打不开」：安装包漏带解压组件、或系统镜像下载被截断，都会让安卓开不了机。现在打包会强制带上解压组件并校验镜像完整性；已经展开过可用镜像的电脑不会再重复解压。
+
+0.5.9（已包含）：
+· 修复红果免费短剧等应用无法横屏：标题栏旋转、托盘菜单、Ctrl+R 现在统一走同一套方向决策，横屏覆盖优先于应用自带的方向声明。
+· 镜像里的「自动旋转」开关默认打开，可在设置里关闭；画面方向仍由屏幕方向策略决定，不会被传感器带歪。
+· 默认回到带旋转按钮的嵌入窗口（更好看的自定义标题栏），可在设置里随时切回模拟器原生独立窗口，两种模式都保留。
+· 启动提速：热启动和旋转重启时复用新鲜的网络状态，减少重复的 adb 网络探测往返。
+
+0.5.8（已包含）：
 · 新增「本机体检 · 自动配置」：自动检查 CPU 虚拟化是否开启、Windows 虚拟机监控程序平台是否启用、显卡与显存、内存和系统版本。
 · 能自动改的直接生效：按本机硬件推荐内存、CPU 核心数、画质与渲染后端，并把这台机器的配置固化成一份驱动。
 · 需要管理员权限的操作（开启 Windows 功能、安装加速驱动）提供一键按钮；只能进 BIOS 改的会给出明确步骤。
@@ -71,7 +109,45 @@
 
 **English**
 ```
-0.5.8:
+0.6.3:
+· Refreshed launch animation in a minimal Apple-inspired style: soft glow, a gently breathing icon and smooth fades. The icon uses the full-resolution source (no clipped corners) and plays for at least ~2s instead of flashing by. When opening an app it stays until the first frame is drawn instead of showing the white splash early.
+· Faster app launches: merged duplicate waits during window hand-over and sped up process-alive detection.
+· New "Labs" settings section with an experimental "Windows native multi-window" switch: when on, multiple apps stay resident and can be switched back to instantly with login state kept (off by default). One emulator window still shows one app at a time.
+· More accurate startup-failure diagnosis: 0xC0000135 no longer always means "reinstall VC++ / antivirus deleted a file"; it distinguishes a missing runtime, Store read-only path limits and antivirus quarantine, and links to manual section 6.8.
+· Incremental updates for the portable build: upgrading from GitHub / Gitee downloads only a few MB of code, not the system image, runtime, installed apps or snapshots. Hash-verified with automatic fallback. Store builds keep updating via Microsoft Store.
+· Keeps 0.6.2 features: built-in manual, automatic help, sound diagnostics and ARM install fixes.
+
+0.6.2 (included):
+· Built-in user manual, open from the "?" button, Settings → About or the tray menu; searchable, printable and saveable as PDF.
+· Automatic help: when repair fails for hardware acceleration, installation, ARM translation, adb authorization or audio, ApkStart opens the matching section; every diagnostic item has a "Guide" button.
+· Auto diagnostics for sound: detects Android audio being turned off and the Windows Audio service being stopped; the first is fixable with one click and a runtime restart.
+· More reliable ARM installs: an ABI error alone triggers a switch to the compatible image, with the old snapshot invalidated first; a second failure is reported honestly.
+
+0.6.1 (included):
+· Fixed launches that still showed ApkStart's own waiting screen; the emulator's native window takes over early and retries four times.
+· Fixed the ~40 second blank screen during orientation switches, and the first-frame detection that left a white screen with only the app icon.
+· Fixed a quitting instance shutting down the emulator a newer instance was using; fullscreen now keeps the panel aspect ratio and centres the window.
+
+0.6.0 (included):
+· Fixed the "misaligned buttons" at the bottom: on tablet layout Android 13's large-screen taskbar sits over the app and squeezes back/home/recents into the bottom-left corner — it is now off by default.
+· The startup animation now stays until the app really draws its first frame, so you no longer stare at a white screen with just the app icon.
+· Faster launches: permissions that were already granted are no longer re-granted on every start — for large apps that alone saves 20+ seconds.
+· The emulator's native window is now the default: dragging, resizing and rotating no longer stutter, and the black borders / misplaced clicks are gone. Switch back to the embedded window with the rotate button in Settings whenever you like.
+· Fixed stutter on AMD graphics PCs that always fell back to software rendering: hardware rendering is retried with Vulkan disabled, so the GPU is actually used.
+· Fixed upgrades still running the Android runtime from a previous install package (which broke as soon as the old folder was deleted).
+· Settings are now organized into eight categories (Essentials & Install, Display & Window, Input, Performance & Resources, Network & Downloads, Diagnostics & Fixes, Files & Integration, Updates & About) — no more hunting through one long list.
+· New search box in Settings: type "landscape", "memory", "proxy" and jump straight to the matching setting.
+· New "Auto diagnostics": the app periodically checks the Android runtime, adb authorization, free disk space, the data partition, snapshots and conflicting settings, then lists any problem by category with a one-click fix.
+· Auto diagnostics only notifies you when a new problem appears, re-checks itself after every fix, and can be switched off or rescheduled at any time.
+· Fixed "clicking an app does nothing / no app will start" on some PCs: a package missing the decompression module, or a truncated system-image download, prevented Android from booting. Packaging now always bundles the module and verifies image integrity, and PCs that already have a usable expanded image no longer re-extract it.
+
+0.5.9 (included):
+· Fixed landscape mode for 红果 (Fanqie) short-video app and similar: the title-bar rotate button, tray menu and Ctrl+R now share one orientation decision; per-app landscape override takes priority over the app's own declared orientation.
+· The in-image "auto-rotate" switch is now on by default and can be turned off in Settings; screen orientation is still decided by the orientation policy, never by the sensor.
+· Restored the nicer embedded window with the custom title bar and rotate button as the default; you can switch back to the emulator's native standalone window anytime in Settings — both modes remain available.
+· Faster startup: hot launches and rotation restarts reuse fresh network state, cutting repeated adb network probes.
+
+0.5.8 (included):
 · New "PC check-up · auto-config": detects whether CPU virtualization is enabled, whether the Windows Hypervisor Platform is on, plus GPU/VRAM, memory and OS build.
 · Everything that can be automated is applied: memory, CPU cores, render resolution and render path are tuned for this PC, and the result is saved as a driver for future launches.
 · Actions that need administrator rights (enabling Windows features, installing the acceleration driver) get a one-click button; BIOS-only changes come with exact steps.
@@ -323,7 +399,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.8.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.6.3.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

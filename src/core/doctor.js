@@ -467,8 +467,14 @@ const RULES = [
   {
     code: 'DLL',
     re: /0xc0000135|STATUS_DLL_NOT_FOUND|missing DLL|Qt6.*not found|MSVCP140|VCRUNTIME|无法启动此程序|The code execution cannot proceed/i,
-    title: '运行时组件被杀毒软件删除或缺少 VC++ 运行库',
-    hint: '请把 ApkStart 目录加入杀毒软件白名单后重新解压安装包，并安装微软 VC++ 2015-2022 运行库。',
+    // 0xC0000135 只代表「某个 DLL 没加载成功」，常见原因不止一个：
+    // 商店（MSIX）版从 WindowsApps 只读目录拉起子进程时DLL 搜索会被容器改写、
+    // VC++ 运行库确实缺失、杀毒隔离了运行时文件，三种都可能。原来一律断言
+    // 「杀毒删了 / 缺 VC++」是照退出码静态猜的，会误导用户重装无用。
+    // 真实缺哪个 DLL 要看 WER 的 FaultingModuleName；这里如实列为「待定位」。
+    title: '运行时依赖 DLL 加载失败（具体原因待定位）',
+    hint: '常见原因：商店版从只读目录启动子进程的路径限制、VC++ 运行库缺失、杀毒隔离了运行时文件。'
+      + '请打开内置手册 6.8 按步骤定位；不要只凭这一条就重装运行库。',
   },
   {
     code: 'DISK_FULL',

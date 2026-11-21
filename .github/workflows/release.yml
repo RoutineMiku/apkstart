@@ -45,6 +45,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Item "ApkStart-$tag-win64-portable.zip" | Select-Object Name, Length
 
+      # 增量更新资产：清单 + 代码层 zip（只有 resources/app，几 MB）。
+      # 客户端本机 Electron 版本一致时只下这两个小文件，不再每次重下 ~100MB 整包；
+      # 版本不一致 / 校验不过会自动退回完整包，所以整包照常发布。
+      - name: 生成增量更新资产（清单 + 代码包）
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          node build/incremental.js dist/ApkStart-win64-portable $tag
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # 创建 Release 并上传轻量便携版（壳层极小，运行时首次启动按需下载）
       - name: 创建 Release
         env:
@@ -54,6 +65,9 @@ jobs:
           $tag = "${{ github.ref_name }}"
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           $zip = "ApkStart-$tag-win64-portable.zip"
+          $ver = $tag.TrimStart('v')
+          $manifest = "ApkStart-v$ver-manifest.json"
+          $appzip = "ApkStart-v$ver-app.zip"
           # 幂等：release 已存在（如重跑 / 重推 tag）就跳过 create，只上传资产
           $existing = gh release view $tag --json tagName -q .tagName 2>$null
           # 有手写的发版说明就用它（.github/release-notes-<tag>.md），比 --generate-notes
@@ -69,10 +83,10 @@ jobs:
           }
           $ok = $false
           for ($i = 1; $i -le 3 -and -not $ok; $i++) {
-            gh release upload $tag $zip --clobber
+            gh release upload $tag $zip $manifest $appzip --clobber
             if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 15 }
           }
-          if (-not $ok) { Write-Error "上传失败: $zip"; exit 1 }
+          if (-not $ok) { Write-Error "上传失败: $zip / $manifest / $appzip"; exit 1 }
           gh release view $tag --json assets --jq '.assets[].name'
 
       # 同步到 Gitee：国内直连 GitHub 只有几十 KB/s，Gitee 通常能跑几 MB/s。
@@ -100,10 +114,15 @@ jobs:
           if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
           # 发布说明与 GitHub 用同一份，别让 Gitee 那边只剩一句「便携版安装包」
           $notes = ".github/release-notes-$tag.md"
+          # 增量资产（清单 + 代码包）都很小，一起同步，国内用户更新也走增量
+          $ver = $tag.TrimStart('v')
+          $manifest = "ApkStart-v$ver-manifest.json"
+          $appzip = "ApkStart-v$ver-app.zip"
+          $incArgs = @("--extra", $manifest, "--extra", $appzip)
           if (Test-Path $notes) {
-            node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip" --notes $notes
+            node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip" --notes $notes @incArgs
           } else {
-            node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip"
+            node tools/publish-gitee.js $tag --zip "ApkStart-$tag-win64-portable.zip" @incArgs
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

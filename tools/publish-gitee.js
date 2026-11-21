@@ -16,6 +16,8 @@
  *     D:/dist  目录里放 ApkStart-v0.3.3-win64-portable.zip（可选，也可用 --zip 指定）
  *
  *   node tools/publish-gitee.js v0.3.3 --zip D:/x.zip --notes notes.md
+ *   node tools/publish-gitee.js v0.3.3 --zip D:/x.zip --extra D:/manifest.json --extra D:/app.zip
+ *     --extra 可重复，用来附带增量更新资产（清单 + 代码包），它们都很小，不占 100MB 限额。
  */
 const fs = require('fs');
 const path = require('path');
@@ -29,6 +31,15 @@ const PART_LIMIT = 99 * 1024 * 1024;   // 真要分片时的单片大小，留 1
 function arg(name, def = '') {
   const i = process.argv.indexOf(name);
   return i > 0 ? process.argv[i + 1] : def;
+}
+
+/** --extra 可重复，取所有附带的小资产路径 */
+function extras() {
+  const out = [];
+  for (let i = 2; i < process.argv.length; i += 1) {
+    if (process.argv[i] === '--extra' && process.argv[i + 1]) out.push(process.argv[i + 1]);
+  }
+  return out;
 }
 
 async function api(method, p, body) {
@@ -142,6 +153,7 @@ async function upload(releaseId, file, attempts = 3) {
     console.error(`找不到便携包：${zip || '(未指定)'}。用 --zip 指定，或把 zip 放进 ${dir}`);
     process.exit(1);
   }
+  const extraFiles = extras().filter((f) => fs.existsSync(f));
   const notesFile = arg('--notes', '');
   const body = notesFile && fs.existsSync(notesFile)
     ? fs.readFileSync(notesFile, 'utf8')
@@ -199,7 +211,8 @@ async function upload(releaseId, file, attempts = 3) {
     }
   }
 
-  for (const f of files) {
+  const allFiles = [...files, ...extraFiles];
+  for (const f of allFiles) {
     console.log(`   上传 ${path.basename(f)} (${(fs.statSync(f).size / 1048576).toFixed(1)} MB)`);
     // eslint-disable-next-line no-await-in-loop
     await upload(rel.id, f);
@@ -211,11 +224,11 @@ async function upload(releaseId, file, attempts = 3) {
   {
     const list = await api('GET', `/releases/${rel.id}/attach_files`);
     const have = new Set((Array.isArray(list) ? list : []).map((a) => a.name));
-    const missing = files.map((f) => path.basename(f)).filter((n) => !have.has(n));
+    const missing = allFiles.map((f) => path.basename(f)).filter((n) => !have.has(n));
     if (missing.length) {
       throw new Error(`上传后附件缺失：${missing.join(', ')}（现有：${[...have].join(', ') || '无'}）`);
     }
-    console.log('   OK：' + files.map((f) => path.basename(f)).join(', '));
+    console.log('   OK：' + allFiles.map((f) => path.basename(f)).join(', '));
   }
 
   for (const p of parts) fs.rmSync(p, { force: true });

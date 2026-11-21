@@ -38,7 +38,10 @@ function describeExitCode(code) {
     case 1: return '启动参数或环境错误';
     case 3221225477: return '0xC0000005 访问冲突，渲染后端崩溃';
     case 3221225725: return '0xC00000FD 栈溢出';
-    case 3221225781: return '0xC0000135 缺少 DLL（VC++ 运行库 / 运行时组件被杀毒删除）';
+    // 0xC0000135 只说明「某个依赖 DLL 没加载成功」，不能据此断定是 VC++ 没装
+    // 或杀毒删文件：商店版从 WindowsApps 只读目录拉起子进程时同样会报这个码。
+    // 具体是哪个 DLL，要看 WER 的 FaultingModuleName，别在 UI 上替用户下结论。
+    case 3221225781: return '0xC0000135 依赖 DLL 加载失败（原因待查，见内置手册 6.8）';
     case 3221225506: return '0xC0000022 拒绝访问（驱动或权限问题）';
     case 3221225595: return '0xC000007B 镜像位数不匹配或 DLL 损坏';
     default: return '';
@@ -651,6 +654,12 @@ class EmulatorEngine {
       // 主线程被卡住、永远不开机（日志表现为 Showing crashdialog to get consent）。
       '-crash-report-mode', 'disabled',
       '-gpu', gpu,
+      // AMD + emulator 37.x：host 后端的 Vulkan 初始化会失败，进程起来十几秒
+      // 后直接 exit 1，于是被记成「host 不可用」永久退回 swangle（软件渲染），
+      // 视频/滑动全都掉帧。关掉 Vulkan 让它走 GL，才能真的吃到硬件加速。
+      // 软件后端本来就不用 Vulkan，加上只会多一层不确定性，所以只对 host 生效。
+      ...(gpu === 'host' && process.platform === 'win32' && doctor.detectGpuVendor() === 'amd'
+        ? ['-feature', '-Vulkan'] : []),
       '-memory', String(memoryMB),
       '-cores', String(cores),
     ];
@@ -1277,7 +1286,14 @@ class EmulatorEngine {
     // 升级运行时后自动重新给它一次机会。
     const badGpuKey = this.settings.engine.badGpu || '';
     const [badVer, badGpu] = badGpuKey.includes('|') ? badGpuKey.split('|') : ['', ''];
-    if (badGpu && badVer === emuVersion) {
+    // 关掉 Vulkan 之后 host 有机会真的可用：每个 emulator 版本重试一次，
+    // 免得老记录把用户永久钉在软件渲染上（那是「一直卡」的根因之一）。
+    const vulkanRetried = String(this.settings.engine.badGpuVulkanTried || '');
+    const retryHostWithoutVulkan = badGpu === 'host' && badVer === emuVersion && vulkanRetried !== emuVersion;
+    if (retryHostWithoutVulkan) {
+      store.saveSettings({ engine: { badGpu: '', badGpuVulkanTried: emuVersion } });
+      onLog('上次 host 渲染崩溃疑似 Vulkan 导致，本次以 -feature -Vulkan 重试硬件加速');
+    } else if (badGpu && badVer === emuVersion) {
       const rank = (v) => (v.gpu === badGpu ? 1 : 0);
       variants.sort((a, b) => rank(a) - rank(b));
       if (variants[0] && variants[0].gpu === badGpu && variants.length > 1) {

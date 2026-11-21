@@ -68,7 +68,12 @@ html, body {
   background: #0b0c0e;
 }
 
-/* 启动遮罩：安卓桌面/开机动画永远不给用户看到 */
+/* ============================================================
+   启动遮罩 · 极简苹果风
+   大面积留白 + 柔和模糊光晕 + 图标缓慢呼吸 + 细腻淡入淡出。
+   所有动效只走 transform / opacity（GPU 合成），不触发重排；
+   blur 只作用在静态伪元素上，避免逐帧重算拖慢开机。
+   ============================================================ */
 .boot {
   position: absolute;
   inset: 0;
@@ -76,26 +81,119 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  background: radial-gradient(120% 90% at 50% 12%, #1d2027 0%, #0b0c0e 62%);
-  transition: opacity .35s ease;
+  gap: 22px;
+  overflow: hidden;
+  background: radial-gradient(120% 100% at 50% 42%, #1a1d22 0%, #0d0e11 56%, #08090b 100%);
+  transition: opacity .55s cubic-bezier(.4, 0, .2, 1),
+              transform .55s cubic-bezier(.4, 0, .2, 1),
+              filter .55s cubic-bezier(.4, 0, .2, 1);
 }
-.boot.out { opacity: 0; pointer-events: none; }
+/* 淡出：整体轻微放大 + 失焦，像苹果启动动画化进应用里 */
+.boot.out {
+  opacity: 0;
+  transform: scale(1.035);
+  filter: blur(6px);
+  pointer-events: none;
+}
 
-.boot-ico { width: 64px; height: 64px; border-radius: 15px; object-fit: contain; }
-.boot-name { font-size: 15px; color: var(--fg); }
+/* 底层氛围光：一大团极淡的冷光，缓慢呼吸 */
+.boot-aura {
+  position: absolute;
+  width: 68vmin; height: 68vmin;
+  left: 50%; top: 44%;
+  margin: -34vmin 0 0 -34vmin;
+  background: radial-gradient(circle, rgba(79, 140, 255, .10) 0%, rgba(122, 208, 255, .04) 38%, transparent 70%);
+  filter: blur(28px);
+  border-radius: 50%;
+  animation: bootAura 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 图标外圈光晕：随图标呼吸的一层柔光，让图标像浮在光里 */
+.boot-glow {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 132px; height: 132px;
+  margin: -112px 0 0 -66px;
+  background: radial-gradient(circle, rgba(122, 208, 255, .22) 0%, rgba(79, 140, 255, .10) 45%, transparent 72%);
+  filter: blur(18px);
+  border-radius: 50%;
+  animation: bootGlow 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 图标容器：不再裁切图标本身，object-fit:contain 完整显示 */
+.boot-ico-wrap {
+  position: relative;
+  width: 84px; height: 84px;
+  display: grid; place-items: center;
+  animation: bootRise .9s cubic-bezier(.2, .7, .3, 1) both;
+}
+.boot-ico {
+  width: 84px; height: 84px;
+  object-fit: contain;              /* 完整显示，不裁切、不留缺角 */
+  animation: bootBreathe 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, .45));
+}
+
+.boot-name {
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: .3px;
+  color: var(--fg);
+  opacity: 0;
+  animation: bootFadeUp .8s ease-out .18s both;
+}
 .boot-bar {
-  width: 148px; height: 3px; border-radius: 3px;
-  background: rgba(255, 255, 255, .1); overflow: hidden;
+  width: 132px; height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .09);
+  overflow: hidden;
+  opacity: 0;
+  animation: bootFadeUp .8s ease-out .32s both;
 }
+/* 一小段流光来回滑，克制不刺眼 */
 .boot-bar i {
-  display: block; height: 100%; width: 40%;
-  border-radius: 3px;
-  background: linear-gradient(90deg, #4f8cff, #7ad0ff);
-  animation: slide 1.15s ease-in-out infinite;
+  display: block; height: 100%; width: 38%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(122, 208, 255, .95), transparent);
+  animation: bootSlide 1.6s cubic-bezier(.45, 0, .55, 1) infinite;
 }
-@keyframes slide {
-  0% { transform: translateX(-110%); }
-  100% { transform: translateX(360%); }
+.boot-tip {
+  font-size: 12px;
+  letter-spacing: .2px;
+  color: var(--fg-dim);
+  opacity: 0;
+  animation: bootFadeUp .8s ease-out .46s both;
 }
-.boot-tip { font-size: 12px; color: var(--fg-dim); }
+
+@keyframes bootRise {
+  from { opacity: 0; transform: translateY(10px) scale(.94); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes bootFadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes bootBreathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.045); }
+}
+@keyframes bootGlow {
+  0%, 100% { opacity: .55; transform: scale(.94); }
+  50%      { opacity: 1;   transform: scale(1.06); }
+}
+@keyframes bootAura {
+  0%, 100% { opacity: .6; transform: scale(.97); }
+  50%      { opacity: 1;  transform: scale(1.04); }
+}
+@keyframes bootSlide {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(365%); }
+}
+
+/* 尊重系统「减少动态效果」偏好：关掉循环动效，只保留静态呈现 */
+@media (prefers-reduced-motion: reduce) {
+  .boot-aura, .boot-glow, .boot-ico, .boot-bar i { animation: none !important; }
+  .boot-ico-wrap, .boot-name, .boot-bar, .boot-tip { animation-duration: .01ms !important; opacity: 1; }
+}

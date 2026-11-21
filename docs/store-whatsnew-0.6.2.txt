@@ -1,0 +1,21 @@
+Partner Center 填法：Apps and games → ApkStart → 当前提交 → Store listings（商店一览）
+→ 选语言 → 「What's new in this version」（此版本中的新增功能），上限 1500 字符。
+中文、英文各填一次（每个语言单独保存）。
+
+—— 简体中文（粘贴下面整段）——
+
+0.6.2 更新：
+· 使用手册已内置：标题栏「?」、设置 → 关于、托盘菜单都能直接打开；可筛选目录、打印或存成 PDF，不用再去网上找文档。
+· 修复失败会自动给教程：未启用硬件加速、安装失败、ARM 转译层缺失、adb 未授权、没有声音等问题自动处理不成功时，会直接打开对应章节；每条检测结果旁也有「教程」按钮。同一个教程一次运行内只自动弹一次。
+· 自动检测新增声音检查：能发现「安卓应用声音」被关掉（模拟器以 -no-audio 启动）和 Windows Audio 服务停止两种情况，前者可一键重新打开并重启运行时，后者给出明确的手动步骤。
+· ARM 应用安装更稳：报错本身就是切换兼容镜像的理由；切换前会作废旧快照，避免恢复到没有翻译层的旧状态；二次仍失败会如实告知，不再显示「正在重试」。
+· 保留 0.6.1 的原生窗口接管、四次重试、换向等待提示、首帧判定、双实例保护与全屏居中修复。
+
+—— English (United States) ——
+
+What's new in 0.6.2:
+· The user manual is now built in. Open it from the "?" button in the title bar, Settings → About, or the tray menu. The table of contents is searchable and the manual can be printed or saved as a PDF.
+· Help arrives when it is needed. If automatic repair fails for hardware acceleration, app installation, ARM translation, adb authorization, or audio, ApkStart opens the matching manual section for you. Every diagnostic item also has a "Guide" button, and the same section is auto-opened at most once per session.
+· Auto diagnostics now covers sound. It detects when Android audio has been turned off (the emulator starts with -no-audio) or when the Windows Audio service has stopped. The first case can be fixed with one click and a runtime restart; the second comes with clear manual steps.
+· More reliable ARM app installs: an ABI error alone now triggers a switch to the compatible image, with the old snapshot invalidated first so the runtime cannot restore a state without the translation layer. A second failure is reported honestly instead of claiming a retry is still in progress.
+· Keeps all 0.6.1 fixes: native emulator window hand-over with four retries, orientation-switch progress, first-frame detection, protection against two instances fighting over the emulator, and centred fullscreen layout.

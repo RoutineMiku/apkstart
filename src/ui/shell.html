@@ -29,8 +29,14 @@
 </header>
 
 <main class="stage" id="stage">
+  <!-- 启动遮罩：极简苹果风 —— 柔和光晕 + 图标缓慢呼吸 + 细腻淡入。
+       保持到应用画出首帧才淡出（见 main.js 的 finishBootAnimation）。 -->
   <div class="boot" id="boot">
-    <img class="boot-ico" id="bootIcon" alt="" draggable="false" />
+    <div class="boot-aura" aria-hidden="true"></div>
+    <div class="boot-glow" aria-hidden="true"></div>
+    <div class="boot-ico-wrap">
+      <img class="boot-ico" id="bootIcon" alt="" draggable="false" />
+    </div>
     <div class="boot-name" id="bootName"></div>
     <div class="boot-bar"><i></i></div>
     <div class="boot-tip" id="bootTip">正在启动安卓运行时…</div>
