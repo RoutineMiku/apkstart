@@ -153,7 +153,9 @@ let TINY_ZIP;
   end.writeUInt16LE(1, 8);            // entries
   end.writeUInt16LE(1, 10);
   end.writeUInt32LE(central.length, 12);
-  end.writeUInt32LE(local.length, 16);
+  // [R4] 中央目录偏移 = 本地头 + 条目数据之后；原值写成 local.length 会让
+  // zip.js 解析出 0 条目、_extract 空转（夹具缺陷，T2 系列此前是空解压通过）
+  end.writeUInt32LE(local.length + payload.length, 16);
   TINY_ZIP = Buffer.concat([local, payload, central, end]);
 })();
 

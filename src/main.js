@@ -38,6 +38,8 @@ function loadTrayIcon() {
   return nativeImage.createFromBuffer(drawAppIcon(16));
 }
 const assoc = require('./core/assoc');
+const { bootResume } = require('./core/boot-resume');
+const { UpdateGate } = require('./core/update-orchestrator');
 const windowctl = require('./core/windowctl');
 const display = require('./core/display');
 const { WinAgent } = require('./core/agent');
@@ -242,7 +244,10 @@ let appWin = null;
 let notifier = null;
 let androidSet = null;
 let updater = null;
-let updateBusy = false;
+// [R4-fix] 更新编排门闩：替代裸布尔 updateBusy。启动续做（boot-resume）与手动
+// 更新（runUpdate）都从它拿权属；app:updateCancel 只能协作取消 manual 持有，
+// 放不倒 boot-resume 的锁（旧实现谁都能把旗子清掉，busy 状态不可信）。
+const updateGate = new UpdateGate();
 let updateInfo = null;
 
 /**
@@ -1194,7 +1199,6 @@ async function runInstall(filePath) {
  * 界面与托盘菜单共用这一条路径。
  */
 async function runUpdate() {
-  if (updateBusy) return { ok: false, error: '正在更新中' };
   // 商店（MSIX）版不能自更新：安装目录 C:\Program Files\WindowsApps 是只读的，
   // 覆盖 exe 不仅会失败，还可能让包完整性校验失效、应用直接起不来。
   // 更新走 Microsoft Store（ms-windows-store: 协议）。
@@ -1202,29 +1206,41 @@ async function runUpdate() {
     shell.openExternal('ms-windows-store://downloadsandupdates').catch(() => {});
     return { ok: false, error: '商店版更新由 Microsoft Store 负责，已打开商店的「下载和更新」', manual: true };
   }
-  updateBusy = true;
-  const sendProgress = (p) => send('update:progress', p);
-  try {
-    const info = updateInfo && updateInfo.hasUpdate ? updateInfo : await updater.check();
-    updateInfo = info;
-    if (!info.hasUpdate) return { ok: false, error: '已经是最新版本' };
-    if (!info.asset) {
-      shell.openExternal(info.htmlUrl || Updater.repoUrl()).catch(() => {});
-      return { ok: false, error: '该版本没有可直接安装的包，已打开 GitHub 发布页', manual: true };
+  // [R4-fix] 编排权属走 updateGate：启动续做（boot-resume）持锁期间，手动动作
+  // 在这里立刻拿到如实的 busy 回应，不再可能和续做并发 prepare/apply；
+  // 原裸布尔 updateBusy 已删除。runExclusive 无论成败 finally 释放。
+  return updateGate.runExclusive('manual', async () => {
+    const sendProgress = (p) => send('update:progress', p);
+    try {
+      const info = updateInfo && updateInfo.hasUpdate ? updateInfo : await updater.check();
+      updateInfo = info;
+      if (!info.hasUpdate) return { ok: false, error: '已经是最新版本' };
+      if (!info.asset) {
+        shell.openExternal(info.htmlUrl || Updater.repoUrl()).catch(() => {});
+        return { ok: false, error: '该版本没有可直接安装的包，已打开 GitHub 发布页', manual: true };
+      }
+      sendProgress({ stage: 'download', percent: 0, message: '准备下载…' });
+      const job = await updater.prepare(info);
+      // [R4-fix] 协作式取消在阶段边界生效：用户取消后不进入 apply。
+      if (updateGate.isCancelled('manual')) {
+        sendProgress({ stage: 'error', percent: 0, message: '已取消更新' });
+        return { ok: false, error: '已取消更新' };
+      }
+      sendProgress({ stage: 'apply', percent: 100, message: '正在替换程序并重启…' });
+      // apply 调度同步失败会在这里抛出（updater.apply 现在如实检测）→
+      // 下方 catch 如实报错；不会发送成功回应、不会计划退出。
+      updater.apply(job);
+      // 给界面一点时间显示「即将重启」，然后走正常退出流程（before-quit 会把模拟器窗口藏好）
+      setTimeout(() => { quitting = true; app.quit(); }, 900);
+      return { ok: true, version: info.version, mode: job.mode };
+    } catch (e) {
+      send('update:progress', { stage: 'error', percent: 0, message: e.message });
+      return { ok: false, error: e.message };
     }
-    sendProgress({ stage: 'download', percent: 0, message: '准备下载…' });
-    const job = await updater.prepare(info);
-    sendProgress({ stage: 'apply', percent: 100, message: '正在替换程序并重启…' });
-    updater.apply(job);
-    // 给界面一点时间显示「即将重启」，然后走正常退出流程（before-quit 会把模拟器窗口藏好）
-    setTimeout(() => { quitting = true; app.quit(); }, 900);
-    return { ok: true, version: info.version, mode: job.mode };
-  } catch (e) {
-    sendProgress({ stage: 'error', percent: 0, message: e.message });
-    return { ok: false, error: e.message };
-  } finally {
-    updateBusy = false;
-  }
+  }, (holder) => ({
+    ok: false,
+    error: holder === 'boot-resume' ? '正在完成上次未完成的更新，请稍候' : '正在更新中',
+  }));
 }
 
 /**
@@ -2855,7 +2871,14 @@ function registerIpc() {
 
   ipcMain.handle('app:updateApply', () => runUpdate());
 
-  ipcMain.handle('app:updateCancel', () => { updateBusy = false; return { ok: true }; });
+  ipcMain.handle('app:updateCancel', () => {
+    // [R4-fix] 协作式取消：只对 manual 持有生效（runUpdate 在 prepare/apply 的
+    // 阶段边界自查），放不倒 boot-resume 的锁 —— 旧实现无条件把 busy 清成
+    // false，谁的流程都能被这行放倒。
+    if (updateGate.cancel('manual')) return { ok: true, cancelled: true };
+    if (updateGate.isBusy()) return { ok: false, error: '正在完成上次未完成的更新，暂不能取消' };
+    return { ok: true };
+  });
 
   ipcMain.handle('app:restart', () => {
     setTimeout(() => { quitting = true; app.quit(); }, 200);
@@ -3234,29 +3257,28 @@ if (!gotLock) {
       // issue #98：先检查「上次已下载解压、但替换/重启没落地的更新」。
       // 命中就直接用本地载荷重放替换+重启，绝不再下一遍包——这是更新死循环的根治。
       // 放在查新版本之前，避免 resumable 与新一轮 check 抢进度条。
-      let resuming = false;
-      try {
-        const job = updater.findResumableJob();
-        if (job) {
-          resuming = true;
-          appLog(`resuming pending update ${job.version} from cached payload`);
-          send('update:progress', { stage: 'apply', percent: 100, message: '正在完成上次未完成的更新…' });
-          updater.apply(job);
-          setTimeout(() => { quitting = true; app.quit(); }, 900);
-        }
-      } catch (e) { appLog(`resume check failed: ${e.message}`); }
-      // 命中续做就不再并行发起新一轮查新版本；但不能用 return 跳出整个启动回调。
-      if (!resuming) setTimeout(() => {
-        updater.check().then((info) => {
-          updateInfo = info;
-          send('update:state', info);
-          if (info.hasUpdate) {
-            appLog(`update available ${info.tag} (current v${app.getVersion()}, asset=${info.asset ? info.asset.name : 'none'})`);
-            // 不再单独弹系统通知：启动时的提醒统一收到应用内的「欢迎卡」里，
-            // 避免开机自启时又冒一个右下角气泡（用户反馈的「小弹窗」之一）。
-          }
-        }).catch((e) => appLog(`update check failed: ${e.message}`));
-      }, 8000).unref?.();
+      // [R4] findResumableJob 变为异步且可能访问网络（官方 release 元数据校验
+      // 留存载荷身份），编排抽到 core/boot-resume.js：await 之后的 job 才交给
+      // apply；未命中/离线/出错只安排静默查新，绝不拖垮启动。
+      bootResume(updater, {
+        log: appLog,
+        send,
+        gate: updateGate,
+        quit: () => { quitting = true; app.quit(); },
+        scheduleCheck: () => {
+          setTimeout(() => {
+            updater.check().then((info) => {
+              updateInfo = info;
+              send('update:state', info);
+              if (info.hasUpdate) {
+                appLog(`update available ${info.tag} (current v${app.getVersion()}, asset=${info.asset ? info.asset.name : 'none'})`);
+                // 不再单独弹系统通知：启动时的提醒统一收到应用内的「欢迎卡」里，
+                // 避免开机自启时又冒一个右下角气泡（用户反馈的「小弹窗」之一）。
+              }
+            }).catch((e) => appLog(`update check failed: ${e.message}`));
+          }, 8000).unref?.();
+        },
+      }).catch((e) => appLog(`resume orchestration failed: ${e.message}`));
     }
 
     // 文件同步 / 通知轮询不再无条件常驻：只在容器里真的有应用窗口时才跑
