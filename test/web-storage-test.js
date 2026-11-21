@@ -540,6 +540,54 @@ test('a leaf whose realpath escapes the snapshot root is refused', () => {
   assert.deepStrictEqual(removes, [], 'a realpath outside the root must never be deleted');
 });
 
+test('a partial deletion error is not reported as a successful removal', () => {
+  assert.ok(tmpReady, 'fixture missing');
+  const c = fixtureTree('partial-delete-error');
+  const target = path.join(c.snap, 'default_boot');
+  const first = path.join(target, 'first.txt');
+  const remaining = path.join(target, 'remaining.txt');
+  writeFixture(first, 'FIRST');
+  writeFixture(remaining, '123456789');
+  const originalRm = fs.rmSync;
+  let faultReached = 0;
+  let result;
+  // Remove one real fixture file, then inject a precise OS-style failure.
+  // This checks a partial result; it does not claim to reproduce a real file lock.
+  fs.rmSync = function (p, options) {
+    if (path.resolve(String(p)) === path.resolve(target)) {
+      faultReached++;
+      originalRm(first, { force: true });
+      throw Object.assign(new Error('injected partial cleanup failure'), { code: 'EACCES' });
+    }
+    return originalRm(p, options);
+  };
+  try {
+    result = leftovers.clean([{ kind: 'snapshot', path: target, size: 999999999 }], c.opts);
+  } finally {
+    fs.rmSync = originalRm;
+  }
+  assert.strictEqual(faultReached, 1, 'the intended deletion fault must be reached');
+  assert.deepStrictEqual(result.removed, []);
+  assert.strictEqual(result.failed.length, 1);
+  assert.strictEqual(result.freedBytes, 0);
+  assert.ok(fs.existsSync(target));
+  assert.ok(!fs.existsSync(first), 'the fixture must actually exercise partial deletion');
+  assert.strictEqual(fs.readFileSync(remaining, 'utf8'), '123456789');
+});
+
+test('a duplicate snapshot item is not removed or counted twice', () => {
+  assert.ok(tmpReady, 'fixture missing');
+  const c = fixtureTree('duplicate-item');
+  const target = path.join(c.snap, 'default_boot');
+  writeFixture(path.join(target, 'fixture.txt'), '123456789');
+  const item = { kind: 'snapshot', path: target, size: 999999999 };
+  const result = leftovers.clean([item, { ...item }], c.opts);
+  assert.deepStrictEqual(result.removed, [target]);
+  assert.strictEqual(result.failed.length, 1);
+  assert.strictEqual(result.freedBytes, 9);
+  assert.ok(!fs.existsSync(target));
+});
+
 // ---------------------------------------------------------------- teardown
 
 try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) { /* 临时目录清理失败不影响结论 */ }
