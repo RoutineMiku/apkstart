@@ -164,6 +164,16 @@ function withMirror(url, prefix) {
 }
 
 /**
+ * [PR3] 解析 GitHub REST 资产 digest。只认 `sha256:<64hex>`，归一化小写；
+ * 其余（缺失/非法/非 GitHub）一律返回 null。Gitee 自报元数据永不作锚。
+ */
+function parseAssetDigest(raw) {
+  if (typeof raw !== 'string') return null;
+  const m = /^sha256:([0-9a-fA-F]{64})$/.exec(raw);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
  * Gitee 发行版附件单文件上限 100MB，安装包 105~110MB 装不下，所以发布时切成
  * xxx.zip.part1 / xxx.zip.part2。这里把分片还原成一个逻辑资产：
  *   { name: 'xxx.zip', size: 总和, parts: [{index, size, urls:[...]}] }
@@ -371,11 +381,16 @@ class Sources {
         // 这些不是安装包，`\.zip$` 的匹配规则会把它当成更新包下载下来 —— 必须排除。
         // 我们自己的发布资产统一以 ApkStart 开头，按这个前缀白名单更安全。
         if (!/^ApkStart/i.test(key)) continue;
+        // [PR3] 仅 GitHub 官方资产携带可信 digest；Gitee / 非法 / 缺失 → 双 null。
+        const digest = item.source === 'github' ? parseAssetDigest(a.digest) : null;
+        const digestUrl = digest ? (a.browser_download_url || '') : null;
         raw.push({
           name: key,
           size: Number(a.size) || 0,
           url: a.browser_download_url || a.url || '',
           source: item.source,
+          digest,
+          digestUrl,
         });
       }
     }
@@ -390,6 +405,7 @@ class Sources {
     // downloadMulti 只会混用「声明总大小一致」的地址，所以绝不能把两者的大小平均掉。
     const assets = [];
     const byName = new Map();
+    const digestConflict = new Set();
     for (const a of raw) {
       const hit = byName.get(a.name);
       if (!hit) {
@@ -402,6 +418,19 @@ class Sources {
       if (a.url && !hit.urls.includes(a.url)) hit.urls.push(a.url);
       if (a.url && a.size) hit.sizes[a.url] = a.size;
       if (!hit.size && a.size) hit.size = a.size;
+      // [PR3] 扫描全部同名 raw 项找官方 digest：首个胜出；出现第二个不同的
+      // 官方 digest → 双 null（I3 冲突降级，不拆桶，且冲突是粘性的）。Gitee 项
+      // digest 恒 null，永远不会写入，因此不会覆盖/污染 GitHub 锚。
+      if (a.digest && !digestConflict.has(a.name)) {
+        if (hit.digest && hit.digest !== a.digest) {
+          hit.digest = null;
+          hit.digestUrl = null;
+          digestConflict.add(a.name);
+        } else if (!hit.digest) {
+          hit.digest = a.digest;
+          hit.digestUrl = a.digestUrl || null;
+        }
+      }
     }
 
     const result = {

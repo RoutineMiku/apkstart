@@ -136,6 +136,9 @@ class Updater {
           source: asset.source,
           parts: asset.parts,
           partial: asset.partial,
+          // [PR3] 官方 GitHub 身份锚，从 merged asset 原样透传（null 保真）。
+          digest: asset.digest,
+          digestUrl: asset.digestUrl,
         }
         : null,
       assets: merged.assets,
@@ -189,6 +192,8 @@ class Updater {
     let total = it.asset.size || 0;
     const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
 
+    // [PR3] 锚定判定提到函数顶部：marker 身份化（zip 路径）也要用。
+    const anchored = !it.asset.partial && !!it.asset.digest && !!it.asset.digestUrl;
     // Gitee 附件单文件上限 100MB，所以发布时会把包切成 .part1/.part2。
     // 每个分片单独测速选源（可以一部分来自 Gitee、一部分来自 GitHub 镜像），
     // 下完按顺序拼回整包 —— 对用户来说仍然只是「下载 + 解压」。
@@ -199,7 +204,11 @@ class Updater {
       // 候选地址 = 源站 + 镜像前缀；先各下 256KB 实测速度，再拿最快的那个分块下载。
       // 这是「GitHub 直连几十 KB/s、镜像能跑几 MB/s」时唯一靠谱的选路方式：
       // 按域名猜没用，同一天不同时段差别很大。
-      const cands = this.sources.candidates(it.asset);
+      // [PR3] 锚定时只从 digest 绑定的 GH 直连 URL（+其镜像）取字节，排除 Gitee URL——
+      // 异字节候选终验必然拒绝，白白浪费带宽。无锚逐字保持 PR2 的多源候选。
+      const cands = anchored
+        ? this.sources.candidates(it.asset.digestUrl)
+        : this.sources.candidates(it.asset);
       const ranked = await this.sources.rank(cands, { onProgress: (p) => this.onProgress(p) }).catch(() => cands);
       // 进度用的总大小要取「真正在下那个源」的：GitHub 与 Gitee 的包不是同一份字节
       // （压缩器不同，能差好几 MB），拿错就会一直显示 92% 再突然跳到完成。
@@ -211,6 +220,8 @@ class Updater {
       // 只有一个源可用或对方不支持 Range 时，它自己退回单源分块。
       await downloadMulti(ranked, file, {
         connections: conns,
+        // [PR3] 锚定字节由 downloadMulti 终验；无锚保持 PR2 调用形状（不传该字段）。
+        ...(anchored ? { expectSha256: it.asset.digest } : {}),
         onProgress: (pr) => {
           const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
           const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
@@ -230,14 +241,16 @@ class Updater {
       // issue #98：上一次已经下载+解压完成，但替换/重启没成功时，
       // 直接复用这份载荷，绝不再下一遍 100MB —— 这正是「更新死循环」的来源。
       // 就绪标记由本函数写、替换脚本成功后清掉，所以只有完整解压过的载荷才会被复用。
-      if (this._payloadReady(out, it.version)) {
+      // [PR3] 锚定期望时，遗留 marker（无 digest/assetName）不得复用，须重下。
+      const expectIdentity = anchored ? { digest: it.asset.digest, assetName: it.asset.name } : undefined;
+      if (this._payloadReady(out, it.version, expectIdentity)) {
         this.onProgress({ stage: 'ready', percent: 100, message: '已有下载好的更新包，直接复用' });
         return { mode: 'zip', payload: out, version: it.version };
       }
       fs.rmSync(out, { recursive: true, force: true });
       fs.mkdirSync(out, { recursive: true });
       await this._extract(file, out);
-      this._markPayloadReady(out, it.version);
+      this._markPayloadReady(out, it.version, expectIdentity);
       this.onProgress({ stage: 'ready', percent: 100, message: '更新包已解压完成' });
       return { mode: 'zip', payload: out, version: it.version };
     }
@@ -298,7 +311,7 @@ class Updater {
     const bad = await inc.verifyExtracted({ payload, files: manifest.app.files });
     if (bad.length) throw new Error(`增量代码包有 ${bad.length} 个文件校验不通过`);
 
-    this._markPayloadReady(payload, it.version, 'app');
+    this._markPayloadReady(payload, it.version, undefined, 'app');
     this.onProgress({ stage: 'ready', percent: 100, message: '增量包已校验完成' });
     return { mode: 'app', payload, version: it.version, manifest };
   }
@@ -382,23 +395,35 @@ class Updater {
   /** 载荷就绪标记文件：解压完整落盘后才写，供跨进程复用判断 */
   _readyFile(payload) { return path.join(payload, '.apkstart-ready'); }
 
-  _markPayloadReady(payload, version, mode = 'zip') {
+  /** [PR3] identity = {digest, assetName} | undefined；增量模式写 mode:'app'。 */
+  _markPayloadReady(payload, version, identity, mode = 'zip') {
     try {
-      fs.writeFileSync(this._readyFile(payload), JSON.stringify({ version, at: Date.now(), mode }), 'utf8');
+      const marker = { version, at: Date.now() };
+      if (identity && identity.digest && identity.assetName) {
+        marker.digest = identity.digest;
+        marker.assetName = identity.assetName;
+      }
+      if (mode !== 'zip') marker.mode = mode;
+      fs.writeFileSync(this._readyFile(payload), JSON.stringify(marker), 'utf8');
     } catch (_) { /* 标记写不了就下次重下，不影响正确性 */ }
   }
 
-  _payloadReady(payload, version) {
+  /** [PR3] 期望锚定时，marker 必须含匹配的 digest+assetName，否则重下。无锚保持 PR2 语义。 */
+  _payloadReady(payload, version, expectIdentity) {
     try {
       if (!fs.existsSync(this._readyFile(payload))) return false;
       const m = JSON.parse(fs.readFileSync(this._readyFile(payload), 'utf8'));
       // 版本不符 = 上次下的是别的版本，不能复用
       if (m.version !== version) return false;
+      // 锚定期望：必须逐字匹配 digest 与 assetName，否则视为过期载荷重下。
+      if (expectIdentity && expectIdentity.digest) {
+        if (m.digest !== expectIdentity.digest || m.assetName !== expectIdentity.assetName) return false;
+      }
       if (m.mode === 'app') {
         // 增量载荷没有 exe；它的「主文件」是 resources/app/package.json
         return fs.existsSync(path.join(payload, 'resources', 'app', 'package.json'));
       }
-      // 完整载荷：程序主 exe 必须在。没有说明解压中断/被杀软删过。
+      // 关键：程序主 exe 必须在载荷里。没有它说明解压被中断/被杀软删过。
       const exeName = path.basename(this.exePath || 'ApkStart.exe');
       return !!findInDir(payload, exeName);
     } catch (_) {
