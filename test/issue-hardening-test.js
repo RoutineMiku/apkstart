@@ -210,7 +210,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-hardening-'));
     fs.writeFileSync(u._readyFile(payload), JSON.stringify({ version: '0.5.2' }));
     assert.equal(await u.findResumableJob(), null, '标记版本不符不能复用');
   });
-  test('apply 脚本用字节数校验替换成功，且保留失败载荷、有双路径重启', () => {
+  test('apply 脚本按内容哈希校验替换，失败保留载荷并以非 0 退出', () => {
     const dataDir = path.join(TMP, 'upd-apply');
     const exe = path.join(dataDir, 'ApkStart.exe');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -220,9 +220,13 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-hardening-'));
     fs.mkdirSync(payload, { recursive: true });
     fs.writeFileSync(path.join(payload, 'ApkStart.exe'), 'new-version-bytes');
     const script = u.apply({ mode: 'zip', payload, version: '0.5.4' }, { spawn: false });
-    assert.ok(/\(Get-Item \$target\)\.Length -eq \$expected/.test(script), '必须按字节数验证新 exe');
-    assert.ok(/keeping payload for next launch/.test(script), '复制失败必须保留载荷供续做');
+    assert.ok(/HashFile/.test(script) && /SHA256/.test(script), '必须按内容哈希校验，不能只看字节数');
+    assert.ok(!/\(Get-Item \$target\)\.Length -eq \$expected/.test(script), '不能再用长度相等当成复制成功');
+    assert.ok(/apply failed during staging/.test(script) && /keeping payload/.test(script),
+      '复制失败必须保留载荷供续做');
+    assert.ok(/commit failed; rolling back already replaced files/.test(script), '提交失败必须回滚');
     assert.ok(/Start-Process -FilePath/.test(script) && /cmd\.exe/.test(script), '重启必须有兜底路径');
+    assert.ok(/exit \$exitCode/.test(script) && !/exit 0/.test(script), 'helper 必须用真实结果退出');
   });
 
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);

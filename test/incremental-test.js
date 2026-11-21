@@ -208,8 +208,10 @@ test('app 模式脚本只替换 resources/app、失败回滚并双路径重启',
   fs.writeFileSync(path.join(payload, 'resources', 'app', 'package.json'), '{"version":"0.6.3"}');
   const script = u.apply({ mode: 'app', payload, version: '0.6.3' }, { spawn: false });
   assert(/Join-Path \$appDst 'package\.json'/.test(script) || /'package\.json'/.test(script), '没校验 package.json');
-  assert(/Move-Item -LiteralPath \$appDst -Destination \$backup/.test(script), '没备份 app 目录');
-  assert(/app copy FAILED - rollback and keep payload/.test(script), '失败没回滚/保留载荷');
+  assert(/Invoke-ApkstartAppBackup \$appDst \$backupRoot/.test(script), '没备份 app 目录');
+  assert(/app post-commit verification FAILED/.test(script)
+    && /app rollback verified: pre-change bytes restored/.test(script), '失败没回滚');
+  assert(/app apply failed; keeping payload and version dir/.test(script), '失败没保留载荷');
   assert(/Start-Process -FilePath/.test(script) && /cmd\.exe/.test(script), '重启没兜底');
   assert(!/Join-Path \$src '\*'\) -Destination \$dst -Recurse/.test(script), '不应整目录覆盖外壳');
 });
