@@ -8,7 +8,11 @@
  *     驱动 forceTcg 把 auto 改成 off 后同样如此；进程退出/明确 fatal 仍立即失败。
  *
  * 这里走 EmulatorEngine.start() 的真实 attempt 决策路径：假时钟（虚拟 setTimeout/Date.now）、
- * 假进程、显式依赖桩（provisioner/AVD/spawn/adb/report），不产生真实副作用。
+ * 假进程、显式依赖桩（provisioner/AVD/spawn/adb/report/checkNetwork）。
+ *
+ * 外部进程面在 require 任何被测模块之前封闭：child_process 的每个执行入口都被替换成
+ * 「记录 + 夹具或拦截」。GPU 发现给固定夹具；其余任何调用都会被记为 blocked 并让用例失败，
+ * 即使被测目标自己 catch 掉异常。不依赖「PATH 上没有 adb」之类的环境巧合。
  *
  * 运行：node test/attempt-diagnosis-budget-test.js
  */
@@ -16,6 +20,61 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const childProcess = require('child_process');
+
+// ---------------------------------------------------------------- 外部进程防线
+// 必须在 require doctor/emulator 之前装好：doctor 解构 execFileSync，emulator 解构
+// spawn/execFile；先 require 再装桩会把真实函数留在模块闭包里，隔离等于没做。
+const CP_METHODS = ['exec', 'execFile', 'execFileSync', 'execSync', 'fork', 'spawn', 'spawnSync'];
+const cpOriginals = new Map();
+const cpCalls = [];
+let cpFixture = null;
+let cpInstalled = false;
+
+function installProcessGuard() {
+  if (cpInstalled) return;
+  cpInstalled = true;
+  for (const name of CP_METHODS) {
+    cpOriginals.set(name, childProcess[name]);
+    childProcess[name] = function guardedChildProcess(...args) {
+      const cmd = String(args[0] || '');
+      const hit = cpFixture ? cpFixture(name, args) : null;
+      cpCalls.push({ name, cmd, at: Date.now(), status: hit ? 'fixture' : 'blocked' });
+      if (hit) {
+        if (hit.error) throw hit.error;
+        return hit.value;
+      }
+      const err = new Error(`外部进程调用被测试防线拦截：${name} ${cmd}`);
+      err.code = 'AGENT_EXTERNAL_PROCESS_BLOCKED';
+      throw err;
+    };
+  }
+}
+
+function restoreProcessGuard() {
+  if (!cpInstalled) return;
+  for (const [name, fn] of cpOriginals) childProcess[name] = fn;
+  cpOriginals.clear();
+  cpInstalled = false;
+}
+
+const guard = {
+  reset() { cpCalls.length = 0; },
+  blocked() { return cpCalls.filter((c) => c.status === 'blocked'); },
+  fixtureCalls() { return cpCalls.filter((c) => c.status === 'fixture'); },
+  calls: cpCalls,
+};
+
+installProcessGuard();
+process.on('exit', restoreProcessGuard);
+// 与本题无关的 GPU 发现：固定夹具，不启动 powershell/wmic。
+cpFixture = (name, args) => {
+  const cmd = String(args[0] || '').toLowerCase();
+  if (name === 'execFileSync' && /powershell|wmic/.test(cmd)) {
+    return { value: 'NVIDIA GeForce RTX 4060' };
+  }
+  return null;
+};
 
 const store = require('../src/core/store');
 const doctor = require('../src/core/doctor');
@@ -35,9 +94,26 @@ const REAL = {
 
 let passed = 0;
 let failed = 0;
-async function test(name, fn) {
-  try { await fn(); passed += 1; console.log(`  ✓ ${name}`); }
-  catch (e) { failed += 1; console.error(`  ✗ ${name}\n    ${e && (e.stack || e.message)}`); }
+// 用例结束统一核查外部进程记录：目标自己 catch 掉也逃不过。
+async function runGuarded(fn, allowBlocked = 0) {
+  guard.reset();
+  try { await fn(); }
+  catch (e) { return { ok: false, error: e }; }
+  const blocked = guard.blocked();
+  if (blocked.length > allowBlocked) {
+    return {
+      ok: false,
+      blocked,
+      error: new Error(`用例期间发生 ${blocked.length} 次未授权外部进程调用：`
+        + blocked.map((c) => `${c.name} ${c.cmd}`).join('；')),
+    };
+  }
+  return { ok: true, blocked };
+}
+async function test(name, fn, opts = {}) {
+  const r = await runGuarded(fn, opts.allowBlocked || 0);
+  if (r.ok) { passed += 1; console.log(`  ✓ ${name}`); }
+  else { failed += 1; console.error(`  ✗ ${name}\n    ${r.error && (r.error.stack || r.error.message)}`); }
 }
 
 // ---------------------------------------------------------------- fake clock
@@ -133,6 +209,8 @@ function harness(script) {
   e._logWrite = () => {};
   e._noteGpuFailure = () => {};
   e._persistFailure = () => {};
+  // 与本题无关的网络体检：固定夹具，避免真实 adb shell / HTTP 探测。
+  e.checkNetwork = async () => ({ ok: true, reason: '', fixture: true });
   e.killAttempt = async () => { e.proc = null; };
 
   let spawns = 0;
@@ -200,6 +278,36 @@ async function runStart(h, script, opts = {}) {
 }
 
 (async () => {
+  // ============================================================== 隔离
+  console.log('\n[隔离 · 外部进程防线]');
+
+  await test('防线先于模块加载安装；意外外部调用即使被目标 catch 也会让用例失败', async () => {
+    // 反向控制 1：目标吞掉异常，包装器仍必须判失败（不能靠「没抛出来」过关）
+    const swallowed = await runGuarded(async () => {
+      try { childProcess.execFileSync('unexpected-tool.exe', ['--x']); } catch (_) { /* target swallows */ }
+    }, 0);
+    assert.equal(swallowed.ok, false, '被 catch 的外部调用必须被防线判成失败');
+    assert.ok(/外部进程/.test(swallowed.error.message), '失败原因应指出来自外部进程防线');
+    assert.equal(swallowed.blocked.length, 1);
+    assert.equal(swallowed.blocked[0].name, 'execFileSync');
+
+    // 反向控制 2：同一调用在显式配额下被记录并放行，证明红线来自记录核验而非异常本身
+    const allowed = await runGuarded(async () => {
+      try { childProcess.execFileSync('unexpected-tool.exe', ['--x']); } catch (_) {}
+    }, 1);
+    assert.equal(allowed.ok, true, allowed.ok ? '' : allowed.error.message);
+    assert.equal(allowed.blocked.length, 1);
+
+    // GPU 发现只走夹具：chooseProfile 的真实路径不得启动 powershell/wmic
+    const gpu = await runGuarded(
+      () => doctor.chooseProfile({ host: baseProfile().host, accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 200000 }),
+      0,
+    );
+    assert.equal(gpu.ok, true, gpu.ok ? '' : gpu.error.message);
+    assert.equal(guard.fixtureCalls().length, 1, 'GPU 夹具应恰好命中一次');
+    assert.equal(guard.blocked().length, 0, 'GPU 发现不得触发未授权进程');
+  });
+
   // ============================================================== D1
   console.log('\n[D1 · 每轮 attempt 诊断隔离]');
 
@@ -350,7 +458,7 @@ async function runStart(h, script, opts = {}) {
     } finally { h.restore(); }
   });
 
-  await test('真实等待处消费最终预算：off 计划（planVariants 回退档）300 秒就绪不超时', async () => {
+  await test('真实等待处消费最终预算：初始 profile 即 off（无加速）时 300 秒就绪不超时（不经过 auto→off 回退）', async () => {
     const h = harness({
       profile: baseProfile({ accel: 'off', accelOk: false, bootTimeoutMs: 600000 }),
       probe(e, i, elapsed) { return elapsed >= 300000 ? 'ok' : 'pending'; },
@@ -391,6 +499,7 @@ async function runStart(h, script, opts = {}) {
     } finally { h.restore(); }
   });
 
+  restoreProcessGuard();
   console.log(`\n通过 ${passed}，失败 ${failed}`);
   process.exit(failed ? 1 : 0);
 })();
