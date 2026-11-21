@@ -2350,7 +2350,10 @@ function registerIpc() {
   ipcMain.handle('leftovers:clean', (_e, items) => {
     try {
       const installDir = path.dirname(app.getPath('exe'));
-      const r = leftovers.clean(Array.isArray(items) ? items : [], { installDir });
+      // 与 leftovers:scan 用同一个权威 avdHome：快照条目的删除范围就锁在它下面
+      let avdHome = '';
+      try { avdHome = runtime.provisioner.paths().avdHome; } catch (_) { avdHome = ''; }
+      const r = leftovers.clean(Array.isArray(items) ? items : [], { installDir, avdHome });
       appLog(`leftovers cleaned: ${r.removed.length} removed, ${r.failed.length} failed`);
       return { ok: true, ...r, freedMB: Math.round(r.freedBytes / 1048576) };
     } catch (e) {

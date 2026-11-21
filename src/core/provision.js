@@ -18,6 +18,20 @@ const { cmpVer } = require('./version');
 
 const IS_WIN = process.platform === 'win32';
 
+/**
+ * child 是否真的落在 parent 目录树里（含 parent 本身）。
+ *
+ * 不能用字符串前缀比较：`%APPDATA%\apkstart-old` 与 `%APPDATA%\apkstart` 前缀相同，
+ * 却是并列的兄弟目录；盘符不同、大小写不同也必须按路径语义判断
+ * （path.win32.relative 在 Windows 上大小写不敏感，posix 下保持敏感）。
+ */
+function isPathInside(parent, child) {
+  if (!parent || !child) return false;
+  let rel;
+  try { rel = path.relative(path.resolve(parent), path.resolve(child)); } catch (_) { return false; }
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+
 const SOURCES = {
   adb: [
     'https://dl.google.com/android/repository/platform-tools-latest-windows.zip',
@@ -252,8 +266,16 @@ class Provisioner {
     // 另外：允许在设置里单独指定「安卓数据目录」——它才是真正吃盘的地方
     // （6~24GB 数据分区 + 2~3GB 快照），只挪运行时、不挪它，C 盘一样会满。
     const explicitAvd = String(store.getSettings().runtime.avdDir || '').trim();
-    const writable = explicitAvd || path.join(store.DATA_DIR, 'avd');
-    const insideData = root.toLowerCase().startsWith(store.DATA_DIR.toLowerCase());
+    // 显式指定的「安卓数据目录」永远优先：只要用户填了非空值，不管运行时目录在哪
+    // （包括默认的 <DATA_DIR>/runtime），AVD 就放在他指定的地方。
+    // 没填时才用默认规则：运行时目录确实在数据目录之内 -> <runtime>/avd；
+    // 否则（外部运行时、只读包内运行时、单文件发行版的临时目录）-> <DATA_DIR>/avd。
+    // 「在数据目录之内」必须按路径语义判断，字符串前缀会把 apkstart-old 这种兄弟目录
+    // 当成子目录，从而把 AVD 丢进一个随时会被清掉的地方。
+    const defaultAvdHome = isPathInside(store.DATA_DIR, root)
+      ? path.join(root, 'avd')
+      : path.join(store.DATA_DIR, 'avd');
+    const avdHome = explicitAvd || defaultAvdHome;
     // 系统镜像放哪儿：**运行时目录优先**。
     // 之前的顺序是「用户数据目录优先」，后果是——用户把运行时目录改到 D 盘省 C 盘空间，
     // 1.4GB 的整包解到 D 盘以后，materializeImages 又把 3.3GB 的 system.img 展开回
@@ -300,7 +322,7 @@ class Provisioner {
       emulatorExe: path.join(root, 'emulator', 'emulator.exe'),
       sysImgRoot: sysRoot,
       sysImgDir: path.join(sysRoot, `android-${sysApi}`, sysTag, sysAbi),
-      avdHome: insideData ? path.join(root, 'avd') : writable,
+      avdHome,
       aehdDir: path.join(rootWritable ? root : path.join(store.DATA_DIR, 'runtime'), 'aehd'),
       imagesDir: path.join(rootWritable ? root : path.join(store.DATA_DIR, 'runtime'), 'images'),
       iso: path.join(root, 'images', 'android-x86.iso'),
