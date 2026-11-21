@@ -918,7 +918,9 @@ class Updater {
       // 公共文件工具：相对路径与 SHA-256。不用 Get-FileHash —— 某些机器的
       // PSModulePath 不完整（Utility 模块不可见），.NET 的 SHA256 在 Windows
       // PowerShell 5.1 上始终可用。
-      `function RelPath([string]$base, [string]$full) { return $full.Substring($base.TrimEnd('\\').Length).TrimStart('\\') }`,
+      // Windows PowerShell 5.1 的 GetFullPath 展开已有路径的 8.3 别名；
+      // 枚举返回长路径，不能按原始短路径长度截取，也不能接受同前缀的兄弟目录。
+      `function RelPath([string]$base, [string]$full) { $prefix = [System.IO.Path]::GetFullPath($base).TrimEnd('\\') + '\\'; $resolved = [System.IO.Path]::GetFullPath($full); if (-not $resolved.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'updater path is outside its root' }; return $resolved.Substring($prefix.Length) }`,
       `function HashFile([string]$p) { $s = [System.IO.File]::Open($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read); try { $h = [System.Security.Cryptography.SHA256]::Create(); try { return [System.BitConverter]::ToString($h.ComputeHash($s)).Replace('-', '').ToLowerInvariant() } finally { $h.Dispose() } } finally { $s.Dispose() } }`,
       `Note 'updater start'`,
       // 成功、回滚、重启必须分开记账：applyOk 只表示文件替换已按字节验证；
@@ -950,8 +952,8 @@ class Updater {
         `    [System.IO.File]::Replace($Stage, $Target, $Backup)`,
         `  }`,
         `}`,
-        `$src = ${psq(job.payload)}`,
-        `$dst = ${psq(dir)}`,
+        `$src = [System.IO.Path]::GetFullPath(${psq(job.payload)})`,
+        `$dst = [System.IO.Path]::GetFullPath(${psq(dir)})`,
         `$versionDir = ${psq(versionDir)}`,
         `$exeName = ${psq(exeName)}`,
         `$target = Join-Path $dst $exeName`,
@@ -1149,8 +1151,8 @@ class Updater {
       // app 是「完整替换」语义：旧 app 独有的文件随旧目录一起进备份，不累积。
       const appRel = path.join('resources', 'app');
       lines.push(
-        `$src = ${psq(job.payload)}`,
-        `$dst = ${psq(dir)}`,
+        `$src = [System.IO.Path]::GetFullPath(${psq(job.payload)})`,
+        `$dst = [System.IO.Path]::GetFullPath(${psq(dir)})`,
         `$versionDir = ${psq(versionDir)}`,
         `$appRel = ${psq(appRel)}`,
         `$appDst = Join-Path $dst $appRel`,

@@ -331,7 +331,8 @@ function controlPrelude(cfg) {
     `}`,
     `function Get-ProbeTreeDigest([string]$root) {`,
     `  if (-not (Test-Path -LiteralPath $root)) { return 'MISSING' }`,
-    `  $base = $root.TrimEnd('\\')`,
+    // 摘要独立于产品 RelPath；保留短 TEMP 输入，只展开此处的枚举根。
+    `  $base = (Get-Item -LiteralPath $root -Force -ErrorAction Stop).FullName.TrimEnd('\\')`,
     `  $lines = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction Stop | Sort-Object FullName | ForEach-Object {`,
     `    $rel = $_.FullName.Substring($base.Length).TrimStart('\\').Replace('\\', '/')`,
     `    $rel + ':' + (HashFile $_.FullName)`,
