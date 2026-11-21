@@ -59,6 +59,13 @@ const SOURCES = {
   giteeReleasePage: 'https://gitee.com/daily-miku/apkstart/releases',
 };
 
+/** [PR3] 解析 GitHub REST 资产 digest：只认 sha256:<64hex>，归一化小写；否则 null。 */
+function parseAssetDigest(raw) {
+  if (typeof raw !== 'string') return null;
+  const m = /^sha256:([0-9a-fA-F]{64})$/.exec(raw);
+  return m ? m[1].toLowerCase() : null;
+}
+
 /**
  * SDK 索引里的 <url> 是相对路径，基准目录各不相同：
  *   repository2-3.xml      → https://dl.google.com/android/repository/
@@ -547,6 +554,11 @@ class Provisioner {
     try { return JSON.parse(text); } catch (_) { return null; }
   }
 
+  /** [PR3] 下载完整性检查的测试 seam；生产行为与原直接调用逐字等价。 */
+  _assertPackComplete(zip) {
+    assertComplete(zip, 200 * 1024 * 1024, '运行时整包');
+  }
+
   /**
    * 解析「运行时整包」的下载地址。
    * 资产名约定：ApkStart-runtime-<tag>.zip（由 .github/workflows/release.yml 产出，
@@ -556,7 +568,7 @@ class Provisioner {
    */
   async resolveRuntimePack() {
     const custom = String(store.getSettings().runtime.runtimePackUrl || '').trim();
-    if (custom) return { url: absUrl(custom), name: path.basename(custom.split('?')[0]), size: 0, tag: 'custom' };
+    if (custom) return { url: absUrl(custom), name: path.basename(custom.split('?')[0]), size: 0, tag: 'custom', digest: null };
     if (this._cache.pack) return this._cache.pack;
 
     const pref = String(store.getSettings().runtime.sourcePreference || 'auto');
@@ -577,6 +589,8 @@ class Provisioner {
         if (!rel || rel.draft) continue;
         const hit = (rel.assets || []).find((x) => /^ApkStart-runtime-.*\.zip$/i.test(x.name || ''));
         if (!hit) continue;
+        // [PR3] 仅 GitHub 资产可提供官方 digest；Gitee 项永不继承。
+        const digest = item.name === 'GitHub' ? parseAssetDigest(hit.digest) : null;
         cands.push({
           url: hit.browser_download_url || hit.url,
           name: hit.name,
@@ -584,6 +598,7 @@ class Provisioner {
           tag: String(rel.tag_name || rel.name || '').replace(/^v/i, ''),
           page: rel.html_url || item.page,
           from: item.name,
+          digest,
         });
       }
     }
@@ -623,6 +638,8 @@ class Provisioner {
     // 一两百 KB/s，8 线程能跑满本地带宽。中途断掉会退回单流续传。
     await downloadMulti(urls, zip, {
       connections: conn,
+      // [PR3] 只有拿到官方 digest 才传给 downloadMulti 做终验；无锚保持 PR2 形状。
+      ...(pack.digest ? { expectSha256: pack.digest } : {}),
       onProgress: (pr) => {
         const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
         const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
@@ -636,7 +653,7 @@ class Provisioner {
         });
       },
     });
-    assertComplete(zip, 200 * 1024 * 1024, '运行时整包');
+    this._assertPackComplete(zip);
 
     onProgress({ stage: 'extract', message: '解压运行时（约 1 分钟）…', percent: 91 });
     await this.extractZip(zip, p.root, {

@@ -74,6 +74,17 @@ function sha256File(file) {
   });
 }
 
+// 并行与多源下载也必须执行和单流相同的最终 SHA-256 校验。
+// 失败时删除预分配的目标文件及可能残留的分块进度记录。
+async function verifySha256OrPurge(dest, expected, extras = []) {
+  if (!expected) return;
+  const actual = await sha256File(dest);
+  if (actual.toLowerCase() === String(expected).toLowerCase()) return;
+  fs.rmSync(dest, { force: true });
+  for (const f of extras) fs.rmSync(f, { force: true });
+  throw new Error(`校验失败：期望 ${String(expected).slice(0, 12)}… 实际 ${actual.slice(0, 12)}…`);
+}
+
 /**
  * 丢弃一次失败下载留下的所有残余。
  *
@@ -379,11 +390,12 @@ async function downloadParallel(url, dest, opt = {}) {
   fs.closeSync(fd);
 
   const size = fs.statSync(dest).size;
-  onProgress({ got: size, total: size, percent: 100, speed: 0, eta: 0 });
   if (size !== total) {
     discardPartial(dest);
     throw new Error(`下载不完整：${size}/${total} 字节`);
   }
+  await verifySha256OrPurge(dest, opt.expectSha256);
+  onProgress({ got: size, total: size, percent: 100, speed: 0, eta: 0 });
   return { file: dest, size, parallel: n };
 }
 
@@ -429,6 +441,16 @@ async function downloadMulti(urls, dest, opt = {}) {
   const list = [...new Set((urls || []).filter(Boolean))];
   if (!list.length) throw new Error('没有可用的下载地址');
   if (list.length === 1) return downloadParallel(list[0], dest, opt);
+
+  // [PR2] 无独立可信摘要：禁止跨源身份混块。同声明总长不证明同字节
+  // （GitHub zip 与 Gitee 重打包字节不同；同长异容镜像是 BUG-NOANCHOR）。
+  // 退化为「单一 ranked 源 + 整源回退」：downloadAnyParallel 逐源整包尝试
+  // （每源 = downloadParallel 单源分块，含严格 206/validRange），换源前
+  // discardPartial —— 成功必然来自某一个源的全部字节，且不读/写 .chunks.json。
+  if (!opt.expectSha256) {
+    const r = await downloadAnyParallel(list, dest, opt);
+    return { ...r, sources: 1, multi: false, resumed: false };
+  }
 
   // 1) 并行探测：总大小 + 是否支持 Range
   const probes = await Promise.all(list.map(async (u) => {
@@ -630,14 +652,15 @@ async function downloadMulti(urls, dest, opt = {}) {
     throw e;
   }
   fs.closeSync(fd);
-  fs.rmSync(meta, { force: true });
 
   const size = fs.statSync(dest).size;
-  tick(true);
   if (size !== total) {
     discardPartial(dest);
     throw new Error(`下载不完整：${size}/${total} 字节`);
   }
+  await verifySha256OrPurge(dest, opt.expectSha256, [meta]);
+  fs.rmSync(meta, { force: true });
+  tick(true);
   return { file: dest, size, parallel: n, sources: same.length, multi: true, resumed: resume };
 }
 
