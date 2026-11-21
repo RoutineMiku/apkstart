@@ -16,6 +16,55 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
+const crypto = require('crypto');
+
+/** 最小 STORED zip（单条目 ApkStart.exe，内容由调用方给定），供续做重建用。 */
+function tinyZip(exeContent) {
+  const table = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (buf) => {
+    let c = 0xFFFFFFFF;
+    for (const b of buf) c = table[(c ^ b) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  };
+  const payload = Buffer.from(exeContent);
+  const name = Buffer.from('ApkStart.exe', 'utf8');
+  const crc = crc32(payload);
+  const local = Buffer.alloc(30 + name.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0, 8);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(payload.length, 18);
+  local.writeUInt32LE(payload.length, 22);
+  local.writeUInt16LE(name.length, 26);
+  name.copy(local, 30);
+  const central = Buffer.alloc(46 + name.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(payload.length, 20);
+  central.writeUInt32LE(payload.length, 24);
+  central.writeUInt16LE(name.length, 28);
+  central.writeUInt32LE(0, 42);
+  name.copy(central, 46);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12);
+  // 中央目录偏移 = 本地头 + 条目数据之后（不能写 local.length，否则解析出 0 条目）
+  end.writeUInt32LE(local.length + payload.length, 16);
+  return Buffer.concat([local, payload, central, end]);
+}
 
 const { validPackageName, safeFilePart } = require('../src/core/pkgname');
 const { resolveZipEntry } = require('../src/core/zip');
@@ -137,17 +186,29 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-hardening-'));
     const payload = path.join(dataDir, 'update', '0.5.4', 'payload');
     fs.mkdirSync(payload, { recursive: true });
     fs.writeFileSync(path.join(payload, 'ApkStart.exe'), 'new');
-    assert.equal(u.findResumableJob(), null, '没有就绪标记不应复用');
+    // [R4] 续做需官方元数据锚定：stub sources.latest，并放置 digest 匹配的留存归档
+    // （归档必须是可解压的真 zip：续做通过后要从它重建载荷）
+    const archiveBytes = tinyZip('new');
+    const officialDigest = crypto.createHash('sha256').update(archiveBytes).digest('hex');
+    const officialName = 'ApkStart-v0.5.4-win64-portable.zip';
+    fs.writeFileSync(path.join(dataDir, 'update', '0.5.4', officialName), archiveBytes);
+    const official = {
+      version: '0.5.4', tag: 'v0.5.4',
+      assets: [{ name: officialName, size: archiveBytes.length, url: 'https://github.com/RoutineMiku/apkstart/releases/download/v0.5.4/' + officialName, urls: ['https://github.com/RoutineMiku/apkstart/releases/download/v0.5.4/' + officialName], sizes: {}, source: 'github', digest: officialDigest, digestUrl: 'https://github.com/RoutineMiku/apkstart/releases/download/v0.5.4/' + officialName, parts: undefined, partial: false }],
+      sources: [{ source: 'github', name: 'GitHub', tag: 'v0.5.4' }], unreachable: [], bySource: 'github',
+    };
+    u.sources.latest = async () => official;
+    assert.equal(await u.findResumableJob(), null, '没有就绪标记不应复用');
     u._markPayloadReady(payload, '0.5.4');
-    const job = u.findResumableJob();
+    const job = await u.findResumableJob();
     assert.ok(job && job.version === '0.5.4', '应找回 0.5.4 的续做任务');
 
     // 版本比当前旧 → 不复用
     const cur = new Updater({ currentVersion: '0.5.4', exePath: exe, isPackaged: true, dataDir });
-    assert.equal(cur.findResumableJob(), null, '不低于当前版本的载荷不能续做');
+    assert.equal(await cur.findResumableJob(), null, '不低于当前版本的载荷不能续做');
     // 标记版本不符 → 不复用
     fs.writeFileSync(u._readyFile(payload), JSON.stringify({ version: '0.5.2' }));
-    assert.equal(u.findResumableJob(), null, '标记版本不符不能复用');
+    assert.equal(await u.findResumableJob(), null, '标记版本不符不能复用');
   });
   test('apply 脚本用字节数校验替换成功，且保留失败载荷、有双路径重启', () => {
     const dataDir = path.join(TMP, 'upd-apply');

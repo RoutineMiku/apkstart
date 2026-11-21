@@ -42,6 +42,104 @@ function findInDir(dir, name) {
 }
 
 /**
+ * [R4] 保守的资产名边界检查。资产名可能来自官方元数据（可信但不免役）或本地
+ * marker（本地可写、不可信），无论来源，进入路径拼接前都必须通过：
+ * 不含路径分隔符/空字节、不含 `..`、长度有界、首个字符为字母数字或点。
+ */
+function saneAssetName(n) {
+  return typeof n === 'string' && n.length >= 1 && n.length <= 200
+    && !/[\\/\u0000]/.test(n)
+    && !n.includes('..')
+    && /^[\w.][\w.\- ]*$/.test(n)
+    && !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(n);
+}
+
+/** [R4] 版本目录名边界检查：resume 扫描 update/<v>/ 时防止畸形/穿越目录名。 */
+function saneVersionDir(n) {
+  return typeof n === 'string'
+    && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(n)
+    && !n.includes('..')
+    // Windows 会剥掉结尾的点/空格（"9.9.9." 实际落盘成 "9.9.9"），设备名保留字一并拒收
+    && !/[. ]$/.test(n)
+    && !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(n);
+}
+
+/** [R4-fix] staging/备份目录的唯一后缀；碰撞由 mkdir/rename 自身失败兜底。 */
+function uniqueSuffix() {
+  return `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * [T-WEB-002] Windows 上「刚写完就 rename 目录」偶发 EPERM/EBUSY：解压流在
+ * 'finish'（已 flush 到 OS）而不是 'close'（fd 已关闭）时就 resolve，紧随其后的
+ * rename 可能撞上尚未关闭的句柄，杀软/索引器扫描新文件也会短暂占用。旧代码
+ * 一次失败就抛错 —— prepare 退完整包、续做返回 null，用户看到「更新没续上」。
+ * 有界重试（约 200ms 内 5 次）只消化这类瞬时占用；持续占用仍如实抛错，
+ * 「失败保留旧载荷/归档」的语义不变。
+ */
+async function renameWithRetry(from, to, attempts = 5) {
+  for (let i = 1; ; i++) {
+    try { fs.renameSync(from, to); return; }
+    catch (e) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code) || i >= attempts) throw e;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 20 * i));
+    }
+  }
+}
+
+/**
+ * [R4-fix] 残留 staging/备份目录清扫：只匹配本更新器自己的 payload.* 临时名
+ * （payload.rebuild / payload.staging-* / payload.old-*），绝不碰归档与载荷。
+ * lstat 先行：链接形态只 unlink 链接本身，绝不递归进链接目标。
+ */
+function sweepStaleStaging(dir) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return; }
+  for (const n of names) {
+    if (!/^payload\.(?:rebuild|staging-|old-)/.test(n)) continue;
+    try {
+      const st = fs.lstatSync(path.join(dir, n));
+      if (st.isSymbolicLink()) { fs.unlinkSync(path.join(dir, n)); continue; }
+      fs.rmSync(path.join(dir, n), { recursive: true, force: true });
+    } catch (_) { /* 清不掉就留着，不阻断主流程 */ }
+  }
+}
+
+/**
+ * [R4-fix] 校验 update/<v> 是「真目录」：非符号链接/junction、非文件，且
+ * realpath 恰好等于 update 根下的该名字。junction 会把后续 rm/extract/写入
+ * 重定向到更新根之外（root 审查 R4-B01 实锤），这里直接判否，调用方 fail
+ * closed 且不做任何清理动作。
+ * @returns {string|null} 通过时返回该目录路径
+ */
+function realVersionDir(updateDir, v) {
+  if (!saneVersionDir(v)) return null;
+  const p = path.join(updateDir, v);
+  try {
+    const st = fs.lstatSync(p);
+    if (!st.isDirectory() || st.isSymbolicLink()) return null;
+    if (fs.realpathSync(p) !== path.join(fs.realpathSync(updateDir), v)) return null;
+  } catch (_) { return null; }
+  return p;
+}
+
+/**
+ * [R4-fix] 载荷落点被符号链接/junction 占用时，只摘除链接本身（绝不递归进
+ * 目标目录 —— 目标可能是更新根之外的用户数据），让随后的重建走真实路径。
+ * 目录占用原样返回 false，交回调用方 fail closed。
+ * @returns {boolean} true = 落点是空位/链接已摘除，可安全重建
+ */
+function clearPayloadOccupant(payload) {
+  let st = null;
+  try { st = fs.lstatSync(payload); } catch (_) { return true; /* ENOENT：空位 */ }
+  if (st.isSymbolicLink()) {
+    try { fs.unlinkSync(payload); return true; } catch (_) { return false; }
+  }
+  return true; // 真目录/文件占用由 _rebuildPayloadFromArchive 的 rename 备份流程接管
+}
+
+/**
  * 在程序目录里找 NSIS 卸载器，找不到返回 null。
  * electron-builder 的默认命名是 `Uninstall <productName>.exe`（updater.flavor 认这个），
  * 老版本/自定义打包也可能叫 `uninstaller.exe`（main.js 旧代码只认这个）。
@@ -136,6 +234,9 @@ class Updater {
           source: asset.source,
           parts: asset.parts,
           partial: asset.partial,
+          // [PR3] 官方 GitHub 身份锚，从 merged asset 原样透传（null 保真）。
+          digest: asset.digest,
+          digestUrl: asset.digestUrl,
         }
         : null,
       assets: merged.assets,
@@ -162,8 +263,21 @@ class Updater {
   async prepare(info) {
     const it = info || this.latest;
     if (!it || !it.asset) throw new Error('这个版本没有可自动安装的安装包，请到 GitHub 发布页手动下载');
+    // [R4-fix] 版本号与资产名在任何落盘动作（mkdir/下载/解压）之前先过边界检查：
+    // 穿越分量、分隔符、保留名一律拒绝。此前这两个字段不检查，`../../x` 会把
+    // 文件直接写出更新根（root 审查 R4-B02/R4-B03 实锤）。
+    if (!saneVersionDir(it.version)) throw new Error(`更新版本号非法：${JSON.stringify(String(it.version))}`);
+    if (!saneAssetName(it.asset.name)) throw new Error(`更新包文件名非法：${JSON.stringify(String(it.asset.name))}`);
     const dir = path.join(this.updateDir, it.version);
     fs.mkdirSync(dir, { recursive: true });
+    // [R4-fix] update/<v> 若是预先放置的 junction/symlink（或是个文件），上面
+    // 的 mkdir 不会报错、随后的写入会被重定向出更新根 —— 必须在下载前验证。
+    // 形状非法时只抛错，不做清理（不是我们创建的对象不动它）。
+    const dirSt = fs.lstatSync(dir);
+    if (!dirSt.isDirectory() || dirSt.isSymbolicLink()) throw new Error('更新目录形状非法（符号链接/文件），已中止本次更新');
+    if (fs.realpathSync(dir) !== path.join(fs.realpathSync(this.updateDir), it.version)) {
+      throw new Error('更新目录越界（重定向到更新根之外），已中止本次更新');
+    }
 
     // 优先尝试增量：只下清单 + 代码包（几 MB），本机 Electron 版本一致、逐文件
     // 哈希都对得上才采用。任何一步不满足就当作没增量，无缝退回下面的完整包下载。
@@ -186,9 +300,40 @@ class Updater {
   /** 完整包路径：下载 portable zip / Setup.exe 并解压备好（原来的逻辑） */
   async _prepareFull(it, dir) {
     const file = path.join(dir, it.asset.name);
+    // [R4-fix] 归档落点若被预先放成符号链接，写入会跟随链接逃出更新根；
+    // 链接只 unlink 链接本身。目录等非文件占用则直接中止。
+    let preSt = null;
+    try { preSt = fs.lstatSync(file); } catch (_) { /* ENOENT：正常，落点尚不存在 */ }
+    if (preSt && preSt.isSymbolicLink()) { try { fs.unlinkSync(file); } catch (_) { throw new Error('更新包落点是被链接占用的位置且无法清除，已中止本次更新'); } }
+    else if (preSt && !preSt.isFile()) throw new Error('更新包落点被目录等非文件对象占用，已中止本次更新');
     let total = it.asset.size || 0;
     const conns = Math.max(1, Math.min(16, Number((this.settings().runtime || {}).downloadConnections) || 8));
 
+    // [PR3] 锚定判定提到函数顶部：marker 身份化（zip 路径）也要用。
+    const anchored = !it.asset.partial && !!it.asset.digest && !!it.asset.digestUrl;
+    const out = path.join(dir, 'payload');
+    // [R4-fix] issue98 重试效率门：锚定期望下先校验留存归档（上次 prepare 的
+    // 下载产物）。SHA-256 == 官方 digest ⇒ 直接从归档重建载荷，不做测速/传输；
+    // 旧 extracted 字节被改过也没关系 —— 重建从不信任旧载荷字节。归档缺失或
+    // 字节不符才走正常验证下载。marker 字段不参与授权：身份只来自调用方独立
+    // 提供的 info.asset.digest。
+    if (anchored) {
+      const cached = this._stagedArchivePath(it.version, it.asset.name);
+      if (cached) {
+        let cachedOk = false;
+        try { cachedOk = (await sha256File(cached)) === it.asset.digest; } catch (_) { cachedOk = false; }
+        if (cachedOk) {
+          this.onProgress({ stage: 'download', percent: 100, message: '本地更新包校验通过（SHA-256 与官方一致），无需重新下载' });
+          await this._rebuildPayloadFromArchive(cached, out, it.version, { digest: it.asset.digest, assetName: it.asset.name });
+          this.onProgress({ stage: 'ready', percent: 100, message: '更新包已解压完成' });
+          return { mode: 'zip', payload: out, version: it.version };
+        }
+        // [R4-fix] 坏归档必须真正重下：下载器对「同大小已存在文件」按续传/完整
+        // 处理，坏字节留着只会每次都卡在终验失败。这里删除坏归档（lstat 已确认
+        // 是本版本目录内的真实文件），让后面的验证下载从零落盘。
+        try { fs.rmSync(cached, { force: true }); } catch (_) { /* 删不掉则下载/终验会如实报错 */ }
+      }
+    }
     // Gitee 附件单文件上限 100MB，所以发布时会把包切成 .part1/.part2。
     // 每个分片单独测速选源（可以一部分来自 Gitee、一部分来自 GitHub 镜像），
     // 下完按顺序拼回整包 —— 对用户来说仍然只是「下载 + 解压」。
@@ -199,7 +344,11 @@ class Updater {
       // 候选地址 = 源站 + 镜像前缀；先各下 256KB 实测速度，再拿最快的那个分块下载。
       // 这是「GitHub 直连几十 KB/s、镜像能跑几 MB/s」时唯一靠谱的选路方式：
       // 按域名猜没用，同一天不同时段差别很大。
-      const cands = this.sources.candidates(it.asset);
+      // [PR3] 锚定时只从 digest 绑定的 GH 直连 URL（+其镜像）取字节，排除 Gitee URL——
+      // 异字节候选终验必然拒绝，白白浪费带宽。无锚逐字保持 PR2 的多源候选。
+      const cands = anchored
+        ? this.sources.candidates(it.asset.digestUrl)
+        : this.sources.candidates(it.asset);
       const ranked = await this.sources.rank(cands, { onProgress: (p) => this.onProgress(p) }).catch(() => cands);
       // 进度用的总大小要取「真正在下那个源」的：GitHub 与 Gitee 的包不是同一份字节
       // （压缩器不同，能差好几 MB），拿错就会一直显示 92% 再突然跳到完成。
@@ -211,6 +360,8 @@ class Updater {
       // 只有一个源可用或对方不支持 Range 时，它自己退回单源分块。
       await downloadMulti(ranked, file, {
         connections: conns,
+        // [PR3] 锚定字节由 downloadMulti 终验；无锚保持 PR2 调用形状（不传该字段）。
+        ...(anchored ? { expectSha256: it.asset.digest } : {}),
         onProgress: (pr) => {
           const pct = pr.percent != null ? pr.percent : (total ? Math.round((pr.got / total) * 100) : 0);
           const mb = `${(pr.got / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}`;
@@ -226,18 +377,20 @@ class Updater {
     }
 
     if (/\.zip$/i.test(file)) {
-      const out = path.join(dir, 'payload');
-      // issue #98：上一次已经下载+解压完成，但替换/重启没成功时，
-      // 直接复用这份载荷，绝不再下一遍 100MB —— 这正是「更新死循环」的来源。
-      // 就绪标记由本函数写、替换脚本成功后清掉，所以只有完整解压过的载荷才会被复用。
-      if (this._payloadReady(out, it.version)) {
+      // 无锚（Gitee/自定义/无 digest）保持 PR2 的 marker 复用语义，身份如实
+      // 标注 UNVERIFIED，仅限用户主动发起的更新流程。锚定路径不走 marker 复用：
+      // marker 与旧载荷都是本地可写文件，不能自证字节身份；刚通过 expectSha256
+      // 终验（或缓存校验）的归档才是字节来源。
+      if (!anchored && this._payloadReady(out, it.version, undefined)) {
         this.onProgress({ stage: 'ready', percent: 100, message: '已有下载好的更新包，直接复用' });
         return { mode: 'zip', payload: out, version: it.version };
       }
-      fs.rmSync(out, { recursive: true, force: true });
-      fs.mkdirSync(out, { recursive: true });
-      await this._extract(file, out);
-      this._markPayloadReady(out, it.version);
+      // [R4-fix] 统一走「唯一 staging + 主 exe 校验 + 原子换名」重建：
+      //  - 解压/校验失败时旧载荷与 marker 原样保留（留存缓存可继续续做）；
+      //  - 不再就地 rm+mkdir+解压 —— 旧做法会把并发场景下已返回给启动续做
+      //    调用方的载荷半途截断（root 审查 R4-C01 实锤）。
+      await this._rebuildPayloadFromArchive(file, out, it.version,
+        anchored ? { digest: it.asset.digest, assetName: it.asset.name } : undefined);
       this.onProgress({ stage: 'ready', percent: 100, message: '更新包已解压完成' });
       return { mode: 'zip', payload: out, version: it.version };
     }
@@ -286,19 +439,20 @@ class Updater {
     }
 
     const payload = path.join(dir, 'app-payload');
-    // 上次下载解压成功但替换失败：直接复用（和完整包的 .apkstart-ready 同理）
-    if (this._payloadReady(payload, it.version)) {
-      this.onProgress({ stage: 'ready', percent: 100, message: '已有下载好的增量包，直接复用' });
-      return { mode: 'app', payload, version: it.version, manifest };
-    }
-    fs.rmSync(payload, { recursive: true, force: true });
-    fs.mkdirSync(payload, { recursive: true });
-    await this._extract(appFile, payload);
-    // 逐文件校验：下载被截断 / 镜像给了错文件都能在这里拦下
-    const bad = await inc.verifyExtracted({ payload, files: manifest.app.files });
-    if (bad.length) throw new Error(`增量代码包有 ${bad.length} 个文件校验不通过`);
-
-    this._markPayloadReady(payload, it.version, 'app');
+    // 不信任 marker/旧载荷字节：刚下完并已按清单 sha256 校验的是归档字节，
+    // 载荷一律从它重建（app 模式 + 换名前逐文件校验）。上次下载解压成功但
+    // 替换失败的场景因此同样是「复用归档、重建载荷」—— 旧代码在这里直接
+    // 返回 marker 声称就绪的载荷，被篡改/截断的字节会被原样复用（T-WEB-002 缺陷 3）。
+    if (!clearPayloadOccupant(payload)) throw new Error('增量载荷落点被占用且无法清除，已中止本次更新');
+    await this._rebuildPayloadFromArchive(appFile, payload, it.version, {
+      mode: 'app',
+      validate: async (root) => {
+        // 逐文件校验：下载被截断 / 镜像给了错文件都能在这里拦下，且发生在
+        // marker 写入与载荷换名之前。
+        const bad = await inc.verifyExtracted({ payload: root, files: manifest.app.files });
+        if (bad.length) throw new Error(`增量代码包有 ${bad.length} 个文件校验不通过`);
+      },
+    });
     this.onProgress({ stage: 'ready', percent: 100, message: '增量包已校验完成' });
     return { mode: 'app', payload, version: it.version, manifest };
   }
@@ -382,23 +536,53 @@ class Updater {
   /** 载荷就绪标记文件：解压完整落盘后才写，供跨进程复用判断 */
   _readyFile(payload) { return path.join(payload, '.apkstart-ready'); }
 
-  _markPayloadReady(payload, version, mode = 'zip') {
+  /** [PR3] identity = {digest, assetName} | undefined；增量模式写 mode:'app'。 */
+  _markPayloadReady(payload, version, identity, mode = 'zip') {
     try {
-      fs.writeFileSync(this._readyFile(payload), JSON.stringify({ version, at: Date.now(), mode }), 'utf8');
+      const marker = { version, at: Date.now() };
+      if (identity && identity.digest && identity.assetName) {
+        marker.digest = identity.digest;
+        marker.assetName = identity.assetName;
+      }
+      if (mode !== 'zip') marker.mode = mode;
+      fs.writeFileSync(this._readyFile(payload), JSON.stringify(marker), 'utf8');
     } catch (_) { /* 标记写不了就下次重下，不影响正确性 */ }
   }
 
-  _payloadReady(payload, version) {
+  /**
+   * [R4] 读取并校验就绪 marker。marker 是本地可写文件（同用户账号被攻破时
+   * 不可信），只作「上次解压完成」的本地声明；这里仅做形状/大小/字段合法性
+   * 检查，任何畸形/投毒内容都抛错，由调用方 fail closed。
+   */
+  _readMarker(payload) {
+    const f = this._readyFile(payload);
+    // [R4-fix] lstat：marker 若被换成指向外部的符号链接，读取（以及后续任何
+    // 以它为前提的写入）都可能越界 —— 只认真实文件。
+    const st = fs.lstatSync(f);
+    if (!st.isFile() || st.size > 4096) throw new Error('ready marker 缺失或超界');
+    const m = JSON.parse(fs.readFileSync(f, 'utf8'));
+    if (!m || typeof m !== 'object' || Array.isArray(m)) throw new Error('ready marker 形状非法');
+    if (typeof m.version !== 'string' || !m.version || m.version.length > 64) throw new Error('ready marker version 非法');
+    if (m.digest !== undefined && !/^[0-9a-f]{64}$/.test(m.digest)) throw new Error('ready marker digest 非法');
+    if (m.assetName !== undefined && !saneAssetName(m.assetName)) throw new Error('ready marker assetName 非法');
+    return m;
+  }
+
+  /** [PR3] 期望锚定时，marker 必须含匹配的 digest+assetName，否则重下。无锚保持 PR2 语义。 */
+  _payloadReady(payload, version, expectIdentity) {
     try {
-      if (!fs.existsSync(this._readyFile(payload))) return false;
-      const m = JSON.parse(fs.readFileSync(this._readyFile(payload), 'utf8'));
+      const m = this._readMarker(payload);
       // 版本不符 = 上次下的是别的版本，不能复用
       if (m.version !== version) return false;
+      // 锚定期望：必须逐字匹配 digest 与 assetName，否则视为过期载荷重下。
+      if (expectIdentity && expectIdentity.digest) {
+        if (m.digest !== expectIdentity.digest || m.assetName !== expectIdentity.assetName) return false;
+      }
       if (m.mode === 'app') {
         // 增量载荷没有 exe；它的「主文件」是 resources/app/package.json
         return fs.existsSync(path.join(payload, 'resources', 'app', 'package.json'));
       }
-      // 完整载荷：程序主 exe 必须在。没有说明解压中断/被杀软删过。
+      // 关键：程序主 exe 必须在载荷里。没有它说明解压被中断/被杀软删过。
       const exeName = path.basename(this.exePath || 'ApkStart.exe');
       return !!findInDir(payload, exeName);
     } catch (_) {
@@ -407,35 +591,293 @@ class Updater {
   }
 
   /**
-   * 启动时调用：找回「上次已下载解压、但替换/重启失败」的更新并续做。
-   * 直接走本地载荷，不再重新下载（issue #98 的死循环根治）。
-   * @returns {{mode:'zip', payload:string, version:string}|null}
+   * [R4] 启动续做的唯一元数据入口：一次权威拉取，供「便携整包锚」与
+   * 「增量代码包锚」共用（两次 findResumableJob 内部拉取会被计数/加延迟）。
+   * 离线 / 全源失败（stale）一律返回 null。
+   * @returns {Promise<object|null>} merged release 元数据
    */
-  findResumableJob() {
+  async _officialMetadata() {
+    const timeoutMs = Number(this._metadataTimeoutMs) || 15000; // _metadataTimeoutMs 仅供测试收紧
+    let timer = null;
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+      if (timer.unref) timer.unref();
+    });
+    let merged = null;
+    try {
+      // [R4-fix] 续做授权依据的是「此刻」官方权威元数据：显式 force 跳过
+      // sources 的 10 分钟内存缓存（可能已过期/对应已被替换的 release）。
+      // 有界超时与 stale（全源失败兜底缓存）拒绝语义保持不变。
+      merged = await Promise.race([this.sources.latest({ force: true }).catch(() => null), deadline]);
+    } catch (_) { merged = null; }
+    clearTimeout(timer);
+    // stale = 全源失败后拿旧缓存凑数：不是本次权威元数据，不能作锚
+    if (!merged || merged.stale) return null;
+    return merged;
+  }
+
+  /**
+   * [R4] 取「当前官方最新 release」里可用于便携续做的锚定资产。
+   * 这是启动续做的唯一信任根：digest 来自 GitHub REST（TLS 到 api.github.com），
+   * 与 marker 字段无关 —— marker 是本地可写文件，永不作为身份来源。
+   * 离线 / 全源失败（stale）/ Gitee-only / synthetic / 无 digest 一律返回 null，
+   * 即拿不到可信身份就不自动续做（fail closed）。
+   * @param {object} [merged] 已拉取的权威元数据（findResumableJob 共用一次拉取）；
+   *                          省略时自行拉取。
+   * @returns {Promise<{version:string,name:string,digest:string,size:number}|null>}
+   */
+  async _officialUpdateAsset(merged) {
+    const meta = merged || await this._officialMetadata();
+    if (!meta) return null;
+    // 便携续做只认 zip 资产；选择规则与 check() 的便携分支一致。
+    // 清单 / 代码包 / 运行时整包是辅助资产，绝不能当整包锚：某次发布若只有
+    // app.zip，旧兜底会把它当便携包，随后缺 exe 的重建必然失败（R2 反例）。
+    const assets = Array.isArray(meta.assets) ? meta.assets : [];
+    const asset = assets.find((a) => /portable.*\.zip$/i.test(String(a.name || '')))
+      || assets.find((a) => /win64.*\.zip$/i.test(String(a.name || '')))
+      || assets.find((a) => /\.zip$/i.test(String(a.name || '')) && !inc.isAuxAsset(String(a.name || '')));
+    if (!asset || !asset.digest || !asset.digestUrl) return null;
+    if (!saneAssetName(asset.name)) return null;
+    return {
+      version: meta.version,
+      name: asset.name,
+      digest: String(asset.digest).toLowerCase(),
+      size: asset.size || 0,
+    };
+  }
+
+  /**
+   * [R4] 取「当前官方最新 release」里可用于「增量续做」的锚定资产：
+   *   - digest 锚：ApkStart-*-app.zip（增量代码包，APP_PACK_RE）必须带官方
+     GitHub digest（PR3 元数据锚定），否则增量续做没有可信身份，fail closed；
+   *   - manifest 锚：ApkStart-*-manifest.json（其 app.sha256 + app.asset 也要
+   *     与官方一致才能定位代码包）。
+   * 都取不到（离线/无增量资产/无 digest）→ null。
+   * @returns {Promise<{version:string,name:string,digest:string,size:number,manifestAsset:object|null}|null>}
+   */
+  async _officialIncrementalAsset(merged) {
+    const assets = Array.isArray(merged && merged.assets) ? merged.assets : [];
+    const appAsset = assets.find((a) => inc.APP_PACK_RE.test(String(a.name || '')));
+    if (!appAsset || !appAsset.digest || !appAsset.digestUrl) return null;
+    if (!saneAssetName(appAsset.name)) return null;
+    // 清单本身也只认官方 GitHub 源携带 digest 的那份；拿不到就用官方 assets 里的无 digest 清单
+    // （清单不作为身份来源，只提供 app.asset 的映射；身份锚永远是 app.zip 的官方 digest）。
+    const manifestAsset = assets.find((a) => inc.MANIFEST_RE.test(String(a.name || ''))) || null;
+    if (manifestAsset && !saneAssetName(manifestAsset.name)) return null;
+    return {
+      version: merged.version,
+      name: appAsset.name,
+      digest: String(appAsset.digest).toLowerCase(),
+      size: appAsset.size || 0,
+      digestUrl: appAsset.digestUrl,
+      manifestAsset,
+    };
+  }
+
+  /**
+   * [R4] 校验并重建一个「增量（app-payload）」可自动执行的续做任务。信任链：
+   *   官方 app.zip digest（元数据） == 留存 app 归档字节（SHA256）
+   *     ⇒ 从归档重建载荷（app 模式：resources/app/package.json 为真文件）
+   *     ⇒ marker 写 mode:'app' + 官方 digest/assetName。
+   * marker（本地可写）永不授权字节身份；.apkstart-force-full 存在时不续做
+   * （由 findResumableJob 把关）。归档缺失/字节不符 → null（保留数据，不自动执行）。
+   */
+  async _verifiedAppResumeJob(appPayload, v, official) {
+    try {
+      const appArchive = this._stagedArchivePath(v, official.name);
+      if (!appArchive) return null;
+      let verified = false;
+      try {
+        verified = (await sha256File(appArchive)) === official.digest;
+      } catch (_) { verified = false; }
+      if (!verified) return null;
+      // 与整包续做同样的落点规则：载荷被 junction/symlink 占用时只摘链接本身，
+      // 绝不递归进目标；真目录由重建的 rename 备份流程接管。
+      if (!clearPayloadOccupant(appPayload)) return null;
+      // 不信任旧 app-payload 字节（可能被篡改/来自异源/上次解压中断）：
+      // 从已验证归档按 app 模式重建（唯一 staging + 原子换名）。
+      await this._rebuildPayloadFromArchive(appArchive, appPayload, v,
+        { digest: official.digest, assetName: official.name, mode: 'app' });
+      const m = this._readMarker(appPayload);
+      if (m.version !== v || m.mode !== 'app') return null;
+      if (!fs.existsSync(path.join(appPayload, 'resources', 'app', 'package.json'))) return null;
+      return { mode: 'app', payload: appPayload, version: v };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * [R4] 校验并重建一个可自动执行的续做任务。信任链：
+   *   官方 digest（元数据） == 留存归档字节（SHA256） ⇒ 从归档重建载荷 ⇒ 主 exe 存在。
+   * marker 只提供「上次解压完整完成」的本地声明；它与官方身份冲突或畸形时
+   * fail closed。归档缺失/字节不符/版本不符 → null（保留数据，不自动执行）。
+   */
+  async _verifiedResumeJob(payload, v, official) {
+    try {
+      // [R4-fix] marker 先照实读取（junction 形态的载荷其 marker 在链接目标里，
+      // 读取本身不落盘、无越界风险）；身份/字节全部校验通过、真正要重建时，
+      // clearPayloadOccupant 只摘链接本身（绝不递归进目标），再从已验证归档
+      // 重建出真实目录（root R4-B01/P34）。真目录占用交由重建的 rename 备份流程。
+      const m = this._readMarker(payload);
+      if (m.version !== v) return null;
+      // marker 携带身份声明（PR3+ 写入）时必须与官方元数据一致；遗留 marker
+      // （无身份字段，PR2 时代）不携带声明，仅由下面的归档校验把关。
+      if (m.digest && m.digest !== official.digest) return null;
+      if (m.assetName && m.assetName !== official.name) return null;
+      const archive = this._stagedArchivePath(v, official.name);
+      if (!archive) return null;
+      let verified = false;
+      try {
+        verified = (await sha256File(archive)) === official.digest;
+      } catch (_) { verified = false; }
+      if (!verified) return null;
+      // 全部校验通过，准备重建：落点若被 junction/symlink 占用，此刻只摘链接
+      // 本身（不递归进目标）；真目录由 _rebuildPayloadFromArchive 的 rename
+      // 备份流程接管。摘不掉（被占用）→ fail closed，保留数据。
+      if (!clearPayloadOccupant(payload)) return null;
+      // 不信任旧载荷字节（可能被篡改/来自异源）：从已验证归档重建。
+      await this._rebuildPayloadFromArchive(archive, payload, v, { digest: official.digest, assetName: official.name });
+      const exeName = path.basename(this.exePath || 'ApkStart.exe');
+      if (!findInDir(payload, exeName)) return null;
+      return { mode: 'zip', payload, version: v };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** [R4] 留存归档路径（prepare() 下载产物，apply 成功前一直保留）；缺失/越界 → null。 */
+  _stagedArchivePath(v, name) {
+    if (!saneAssetName(name) || !saneVersionDir(v)) return null;
+    const p = path.join(this.updateDir, v, name);
+    try {
+      // [R4-fix] lstat：符号链接/junction 形态的「归档」一律不认，跟随读取
+      // （乃至以此为前提的重建写入）都可能落在更新根之外。
+      const st = fs.lstatSync(p);
+      if (!st.isFile() || !st.size) return null;
+    } catch (_) { return null; }
+    return p;
+  }
+
+  /**
+   * [R4] 从已验证归档重建载荷（无第二次整包下载）。[R4-fix] 改为
+   * 「唯一 staging + 主文件校验 + 原子换名」：
+   *   - staging 名字带唯一后缀：并发重建/prepare 互不踩踏，也不会把别的
+   *     调用方已经拿到的载荷就地截断（root 审查 R4-C01）；
+   *   - 换名前先确认主文件是真实文件：整包模式要求主 exe，增量模式要求
+   *     resources/app/package.json（官方 app.zip 只含代码层，没有也不该有 exe）；
+   *   - identity.validate 在换名前跑（增量清单逐文件哈希），不通过则不写
+   *     marker、不换载荷；
+   *   - 解压/校验失败：清掉 staging，旧载荷、marker、归档原样保留（缓存不丢）；
+   *   - rm→rename 之间崩溃（毫秒级窗口）：载荷+marker 丢失但归档还在，
+   *     下次启动拿不到 marker → 不自动续做，由静默查新接管（诚实降级）。
+   * @param {object} [identity] {digest, assetName, mode:'zip'|'app', validate?:Function}
+   */
+  async _rebuildPayloadFromArchive(archive, payload, v, identity) {
+    const dir = path.dirname(payload);
+    const mode = identity && identity.mode === 'app' ? 'app' : 'zip';
+    // [R4-fix] 注意：这里绝不做残留清扫 —— 并发场景下另一个重建可能正持有
+    // 自己的 staging（旧 probe R4-C01 曾实锤清扫误删活跃 staging）。残留由
+    // findResumableJob 启动入口统一清扫。
+    const staging = path.join(dir, `payload.staging-${uniqueSuffix()}`);
+    fs.mkdirSync(staging, { recursive: true });
+    try {
+      await this._extract(archive, staging);   // zip-slip 守卫在 zip.js resolveZipEntry
+      if (mode === 'app') {
+        // 增量代码包的主文件是 resources/app/package.json（真文件、非空）。
+        const pkg = path.join(staging, 'resources', 'app', 'package.json');
+        let pkgOk = false;
+        try { const st = fs.lstatSync(pkg); pkgOk = st.isFile() && st.size > 0; } catch (_) { pkgOk = false; }
+        if (!pkgOk) throw new Error('增量代码包里没有可用的 resources/app/package.json，已中止替换');
+      } else {
+        // [R4-fix] 主 exe 必须存在于重建树里且是真实文件（目录假扮/零字节都拒绝），
+        // 否则不换名 —— 旧载荷保持可用。
+        const exeName = path.basename(this.exePath || 'ApkStart.exe');
+        const exeRel = findInDir(staging, exeName);
+        let exeOk = false;
+        if (exeRel) {
+          const est = fs.lstatSync(path.join(staging, exeRel));
+          exeOk = est.isFile() && est.size > 0;
+        }
+        if (!exeOk) throw new Error('更新包里没有可用的主程序文件，已中止替换');
+      }
+      // 清单逐文件校验必须在写 marker / 换名之前：不过就不留「已就绪」假象。
+      if (identity && typeof identity.validate === 'function') await identity.validate(staging);
+      this._markPayloadReady(staging, v, identity, mode);
+      const backup = path.join(dir, `payload.old-${uniqueSuffix()}`);
+      let moved = false;
+      if (fs.existsSync(payload)) { await renameWithRetry(payload, backup); moved = true; }
+      try {
+        await renameWithRetry(staging, payload);
+      } catch (e) {
+        if (moved) { try { await renameWithRetry(backup, payload); } catch (_) { /* 恢复失败只能靠归档重试 */ } }
+        throw e;
+      }
+      if (moved) { try { fs.rmSync(backup, { recursive: true, force: true }); } catch (_) { /* 残留交给清扫 */ } }
+    } catch (e) {
+      try { fs.rmSync(staging, { recursive: true, force: true }); } catch (_) { /* ignore */ }
+      throw e;
+    }
+  }
+
+  /**
+   * 启动时调用（异步）：找回「上次已下载解压、但替换/重启失败」的更新并续做。
+   * 仍然不再重新下载整包（issue #98 的死循环根治）—— 但 [R4] 起续做前必须先
+   * 拿官方 release 元数据校验留存归档的身份；拿不到可信身份（离线/无锚/版本
+   * 不符/字节不符）就返回 null，保留数据交给静默查新，绝不拖垮启动。
+   * 元数据只拉一次：同一次结果既给便携整包锚（_officialUpdateAsset），也给
+   * 增量代码包锚（_officialIncrementalAsset）—— 双资产发布与「只有 app.zip」
+   * 的发布都能各取所需，缺哪个就跳过对应的续做路径。
+   * @returns {Promise<{mode:'zip'|'app', payload:string, version:string}|null>}
+   */
+  async findResumableJob() {
     try {
       if (!fs.existsSync(this.updateDir)) return null;
       const versions = fs.readdirSync(this.updateDir)
-        .filter((n) => cmpVer(n, this.current) > 0)   // 只认比当前更新的版本，避免反复重启
+        .filter((n) => saneVersionDir(n) && cmpVer(n, this.current) > 0)   // 只认比当前更新的版本，避免反复重启
         .sort((a, b) => cmpVer(b, a));
+      if (!versions.length) return null;
+      const merged = await this._officialMetadata();
+      if (!merged) return null;
+      const official = await this._officialUpdateAsset(merged);
+      const officialApp = await this._officialIncrementalAsset(merged);
+      if (!official && !officialApp) return null;
       for (const v of versions) {
-        // 完整包载荷
-        const payload = path.join(this.updateDir, v, 'payload');
-        if (this._payloadReady(payload, v)) return { mode: 'zip', payload, version: v };
+        // 只续做「目录版本 == 官方最新版本」的载荷；过期/超前版本交给查新流程
+        if (v !== merged.version) continue;
+        // [R4-fix] 版本目录若是 junction/symlink（指向更新根之外），整个续做跳过：
+        // 不读里面的载荷/归档，更不删除外面的文件（root 审查 R4-B01 实锤）。
+        if (!realVersionDir(this.updateDir, v)) continue;
+        // [R4-fix] 启动入口统一清扫本版本目录下的残留 staging/备份（唯一清扫点：
+        // 此时本流程尚未创建自己的 staging，也不会碰并发方尚未存在的目录）。
+        sweepStaleStaging(path.join(this.updateDir, v));
+        const forceFull = fs.existsSync(path.join(this.updateDir, v, '.apkstart-force-full'));
         // 增量载荷（上次增量替换失败标记了强制完整包 → 不重放）
         const appPayload = path.join(this.updateDir, v, 'app-payload');
-        if (!fs.existsSync(path.join(this.updateDir, v, '.apkstart-force-full'))
-            && this._payloadReady(appPayload, v)) {
-          return { mode: 'app', payload: appPayload, version: v };
+        if (!forceFull && officialApp && this._payloadReady(appPayload, v)) {
+          // [R4] 增量续做也必须经官方身份校验：官方 app.zip digest（PR3 元数据
+          // 锚定）+ 留存 app 归档 SHA-256 一致才重建并续做；拿不到官方身份或
+          // 字节不符一律 null（保留数据，不自动执行）。
+          const appJob = await this._verifiedAppResumeJob(appPayload, v, officialApp);
+          if (appJob) return appJob;
+        }
+        // 完整包载荷
+        if (official) {
+          const payload = path.join(this.updateDir, v, 'payload');
+          const job = await this._verifiedResumeJob(payload, v, official);
+          if (job) return job;
         }
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) { /* 启动续做绝不拖垮启动 */ }
     return null;
   }
 
   /**
    * 生成并启动「替换 + 重启」脚本，然后调用方负责退出应用。
    * @param {{mode:'zip'|'setup', payload:string, version:string}} job
-   * @param {{waitPid?:number, spawn?:boolean}} [opts] 测试时可指定别的 pid / 不真启动
+   * @param {{waitPid?:number, spawn?:boolean, powershellPath?:string}} [opts]
+   *        测试时可指定别的 pid / 不真启动 / 替换助手可执行文件路径（用于
+   *        验证「调度失败如实抛错」）
    */
   apply(job, opts = {}) {
     const exe = this.exePath;
@@ -571,7 +1013,7 @@ class Updater {
     if (opts.spawn === false) return script;
     // -EncodedCommand 走 UTF-16LE base64：脚本里出现中文路径也不会被 GBK 解码搞坏
     const b64 = Buffer.from(script, 'utf16le').toString('base64');
-    const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const ps = opts.powershellPath || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     // 这里**不能**用 detached：某些安全软件 / 沙箱策略会直接拦掉「分离的控制台进程」，
     // 表现为脚本一声不响地根本没跑（更新界面卡在「正在替换程序并重启」）。
     // Windows 上父进程退出并不会杀掉普通子进程，所以用「普通子进程 + unref」同样能在
@@ -580,6 +1022,14 @@ class Updater {
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-WindowStyle', 'Hidden', '-EncodedCommand', b64,
     ], { stdio: 'ignore', windowsHide: true });
+    // [R4-fix] 助手调度失败必须如实抛出：spawn 找不到可执行文件时 pid 为空、
+    // 错误走异步 error 事件 —— 这里同步发现并抛错，调用方才能做到「不声称
+    // 成功、不计划重启、释放更新门闩」。error 监听只为吞掉异步事件，防止
+    // 未处理异常击穿进程；调度已失败时该事件没有额外信息。
+    if (!child.pid) {
+      child.on('error', () => {});
+      throw new Error('更新助手（PowerShell）调度失败，本次替换未开始');
+    }
     child.unref();
     return true;
   }
