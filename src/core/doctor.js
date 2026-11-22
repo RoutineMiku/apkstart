@@ -23,6 +23,25 @@ const isAsciiPath = (p) => ASCII.test(String(p || ''));
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
+// 冷启动等待预算：硬件加速 240s；纯软件模拟（TCG）冷启动可能 5-10 分钟。
+// 单点定义，planVariants 的回退档和 emulator 的实际等待循环都从这里取，
+// 避免「最终计划是 off、预算却还是硬件档 240s」的不一致。
+const BOOT_TIMEOUT_MS = { auto: 240000, off: 600000 };
+
+/**
+ * 最终有效计划对应的等待预算。
+ * - accel=off 至少给软件模拟预算；原本更长的有效预算（如 900000）原样保留。
+ * - 其它情况沿用计划里的预算，缺省 240000。
+ * 驱动 forceTcg 把 auto 改成 off 时同样走这里，不需要再改一遍 timeout。
+ */
+function bootTimeoutFor(plan) {
+  const p = plan || {};
+  const base = Number(p.bootTimeoutMs) || 0;
+  if (p.accel === 'off') return Math.max(base, BOOT_TIMEOUT_MS.off);
+  return base || BOOT_TIMEOUT_MS.auto;
+}
+
+
 /** 本机画像（毫秒级，只读） */
 function hostInfo() {
   const totalMB = Math.round(os.totalmem() / 1048576);
@@ -262,7 +281,7 @@ function chooseProfile({
     snapshot: true,
     lite: !!lite,
     // 无加速的纯软件模拟在 Windows 上确实能起来，但 Android 14 冷启动可能 5-10 分钟
-    bootTimeoutMs: accelOk ? 240000 : 600000,
+    bootTimeoutMs: accelOk ? BOOT_TIMEOUT_MS.auto : BOOT_TIMEOUT_MS.off,
     emulatorVersion,
     host,
   };
@@ -315,6 +334,9 @@ function planVariants(profile) {
     ...profile,
     gpu: safeGpu,
     accel: 'off',
+    // 最终计划已经是软件模拟：预算必须跟着最终 accel 走，
+    // 不能继承硬件档的 240s（否则 5-10 分钟的冷启动会被提前判超时）。
+    bootTimeoutMs: bootTimeoutFor({ ...profile, accel: 'off' }),
     label: '关闭加速的软件模拟（慢，但兼容性最好）',
     wipe: false,
     snapshot: false,
@@ -323,6 +345,7 @@ function planVariants(profile) {
     ...profile,
     gpu: safeGpu,
     accel: 'off',
+    bootTimeoutMs: bootTimeoutFor({ ...profile, accel: 'off' }),
     memoryMB: 2048,
     cores: 2,
     dataMB: Math.min(profile.dataMB, 2048),
@@ -594,6 +617,7 @@ function vcRedistOk() {
 module.exports = {
   hostInfo, freeDiskMB, isAsciiPath, shortPath, lcdFor, liteProfile,
   versionNumbers, gpuCandidates, detectGpuVendor, chooseProfile, planVariants,
+  bootTimeoutFor, BOOT_TIMEOUT_MS,
   overridesFromSettings, autoProfile,
   freePortPair, freeAdbPort, snapshotKey, imageIdentity,
   diagnose, describeProfile, writeReport, vcRedistOk,
