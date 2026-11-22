@@ -52,6 +52,7 @@ class Runtime {
     this.lastActivity = Date.now();
     this._watchdog = null;
     this._freeformReady = false;
+    this._localeReady = false;
     this._client = null;
     this._bootLog = [];
     this._activeApps = new Set();  // 容器会话：当前打开的应用窗口
@@ -654,30 +655,31 @@ class Runtime {
     if (!this._freeformReady) {
       try { this._freeformReady = await client.ensureFreeform(); } catch (_) { /* ignore */ }
     }
-    // 中文环境（系统语言 + 中文输入法）每次**开机**只做一次。
-    // 系统语言靠 emulator -prop 注入（SELinux 保护，运行时改不了），这里补的是
-    // 应用级 locale / 时区，以及静默装好并启用随包带的谷歌拼音输入法。
-    // 用户可在设置里关掉自动配置（engine.chineseIme=false）。
+    const locale = this.settings.engine.locale || 'ru-RU';
+    // 系统语言和输入法是两件事：即便用户关掉中文输入法，Android 系统界面也必须
+    // 用选定的语言（默认俄语）。-change-locale 只在全量引导时执行，快照恢复会被
+    // 跳过，所以这里还要检查 system_locales 并在不对时作废快照、下次冷启动修正。
+    if (!this._localeReady) {
+      try {
+        await client.ensureChineseLocale(locale);
+        await this._ensureSystemLocale(client, locale);
+        this._localeReady = true;
+      } catch (e) {
+        this.log(`系统语言初始化跳过：${e.message}`);
+      }
+    }
+    // 中文输入法单独处理；失败时允许下一次 prepare() 重试。
     if (!this._chineseReady && this.settings.engine.chineseIme !== false) {
       try {
-        const locale = this.settings.engine.locale || 'zh-CN';
-        await client.ensureChineseLocale(locale);
         const path = require('path');
         const apk = path.join(this.appRoot, 'assets', 'PinyinIME.apk');
         const r = await client.ensureChineseIme(apk, {
           setDefault: this.settings.engine.chineseImeDefault !== false,
         });
-        // 只有真的成功了才置位。失败时允许下一次 prepare() 重试 ——
-        // 否则一次偶发的 adb 抖动就会让这台机器永远没有中文输入法。
         if (r && r.ok) this._chineseReady = true;
         this.log(`中文输入法：${r.ok ? (r.installed ? '已安装并启用' : '已就绪') : (r.reason || '未就绪')}`);
-        // -change-locale 只在「全量引导」时执行并重启 framework；从 quickboot 快照
-        // 恢复时会被跳过。旧快照是英文的，所以检测到系统语言不对就作废快照、
-        // 让下次开机冷启动一次（带 -change-locale）。之后存的新快照就是中文的，
-        // 不用再重启。marker 保证一生只纠正一次。
-        await this._ensureSystemLocale(client, locale);
       } catch (e) {
-        this.log(`中文环境初始化跳过：${e.message}`);
+        this.log(`中文输入法初始化跳过：${e.message}`);
       }
     }
     this.startWatchdog();
@@ -687,9 +689,9 @@ class Runtime {
    * 系统 UI 语言校正（一次性）。
    *
    * 实测结论（很容易踩错）：-change-locale 生效后**不会**写 persist.sys.locale，
-   * ro.product.locale 也仍是镜像的 en-US；它真正改的是
-   * `settings system system_locales`（语言设置页显示「中文（中国）」，系统 UI 全中文）。
-   * 所以判断「中文是否已经生效」要看 system_locales，不是 getprop。
+   * ro.product.locale 也仍是镜像的 en-US；它真正改的是 `settings system system_locales`
+   * （语言设置页显示目标语言，系统 UI 随之切换）。判断语言是否生效要看 system_locales，
+   * 不是 getprop。
    *
    * -change-locale 只在「全量引导」时执行并重启 framework；从 quickboot 快照恢复时
    * 会被跳过。旧快照是英文的，所以检测到不对就作废快照、让下次开机冷启动一次。
@@ -698,12 +700,12 @@ class Runtime {
   async _ensureSystemLocale(client, locale) {
     const fs = require('fs');
     const path = require('path');
-    const want = String(locale || 'zh-CN');
+    const want = String(locale || 'ru-RU');
     if (want === 'off' || want === 'en-US') return;
     // 已经生效（system_locales 是目标语言，或语言列表里第一项是它）
     const cur = await client.shell('settings get system system_locales', { timeout: 8000 }).catch(() => '');
     const s = String(cur).trim();
-    if (s === want || s.indexOf(want) === 0 || /^zh[-_]/.test(s)) return;
+    if (s === want || s.indexOf(want) === 0) return;
     const marker = path.join(store.DATA_DIR, 'locale-' + want.replace(/[^a-zA-Z0-9_-]/g, '_') + '.done');
     if (fs.existsSync(marker)) return;
     try {

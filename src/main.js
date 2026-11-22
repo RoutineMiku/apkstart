@@ -15,6 +15,14 @@ const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
 const orientation = require('./core/orientation');
 
+// 界面语言：跟随系统。主进程里 navigator.language 的等价物是
+// app.getPreferredSystemLanguages()，core/i18n 已按它判定。
+const i18n = require('./core/i18n');
+const uiI18n = require('./ui/i18n');
+i18n.setDictionary(uiI18n.DICT);
+i18n.setLanguage(i18n.resolveLanguage('auto', app));
+const tr = (zh, vars) => i18n.tr(zh, vars);
+
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
 const LOGO_FILE = path.join(LOGO_DIR, 'logo.png');
@@ -587,7 +595,7 @@ async function attachAppWindow() {
     const fallback = await appWin.embed().catch(() => false);
     if (fallback) {
       try {
-        send('toast', { type: 'info', message: '模拟器原生窗口没能显示，本次临时用内置窗口接管画面' });
+        send('toast', { type: 'info', message: tr('模拟器原生窗口没能显示，本次临时用内置窗口接管画面') });
       } catch (_) { /* 主窗口可能已关闭 */ }
     }
     return fallback;
@@ -847,9 +855,9 @@ async function enableWhpxFeatures() {
 }
 
 /** 商店版专用的手动引导文案：MSIX 包固定 mediumIL，提权通常拿不到 */
-const MSIX_ACCEL_HINT = '商店版无法自行提权。请手动开启一次：'
-  + '按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」'
-  + '（HypervisorPlatform，WHPX 真正需要的那个），确定后重启电脑。';
+const MSIX_ACCEL_HINT = tr('商店版无法自行提权。请手动开启一次：')
+  + tr('按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」')
+  + tr('（HypervisorPlatform，WHPX 真正需要的那个），确定后重启电脑。');
 
 // ---------------- 主窗口 ----------------
 
@@ -970,7 +978,7 @@ function openManual(payload = {}) {
         if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       });
     }
-    manualWindow.setTitle(`ApkStart 使用手册 · ${target.title}`);
+    manualWindow.setTitle(`ApkStart ${tr('使用手册')} · ${target.title}`);
     manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
@@ -992,7 +1000,9 @@ function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
   try {
     const { Notification } = require('electron');
-    if (Notification.isSupported()) new Notification({ title, body, icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
+    if (Notification.isSupported()) {
+      new Notification({ title: tr(title), body: tr(body), icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
+    }
   } catch (_) { /* ignore */ }
 }
 
@@ -1047,8 +1057,8 @@ async function runAutodebug({ force = false } = {}) {
       const fresh = added.filter((i) => i.severity === 'error');
       if (fresh.length) {
         const text = fresh.map((i) => i.title).join('；');
-        send('toast', { type: 'error', message: `自动检测发现新问题：${text}（设置 → 诊断与修复）` });
-        notify('自动检测发现新问题', `${text}。打开 ApkStart 的「设置 → 诊断与修复」可以一键处理。`);
+        send('toast', { type: 'error', message: tr('自动检测发现新问题：{text}（设置 → 诊断与修复）', { text }) });
+        notify('自动检测发现新问题', text + tr('。打开 ApkStart 的「设置 → 诊断与修复」可以一键处理。'));
         appLog(`autodebug new issues: ${fresh.map((i) => i.code).join(',')}`);
       }
     }
@@ -1100,15 +1110,15 @@ function buildTray() {
       ? ((store.getApp(currentAppPkg) || {}).label || currentAppPkg)
       : '';
     const menu = Menu.buildFromTemplate([
-      { label: '打开 ApkStart', click: () => showWindow() },
-      { label: '使用手册', click: () => openManual({ topic: 'overview', reason: 'tray' }) },
+      { label: tr('打开 ApkStart'), click: () => showWindow() },
+      { label: tr('使用手册'), click: () => openManual({ topic: 'overview', reason: 'tray' }) },
       { type: 'separator' },
       ...(apps.length
         ? apps.map((a) => ({ label: a.label, click: () => runLaunch(a.package) }))
-        : [{ label: '还没有安装应用', enabled: false }]),
+        : [{ label: tr('还没有安装应用'), enabled: false }]),
       { type: 'separator' },
       {
-        label: hasRunning ? `关闭当前应用（${runningLabel}）` : '关闭当前应用',
+        label: hasRunning ? tr('关闭当前应用') + ' (' + runningLabel + ')' : tr('关闭当前应用'),
         enabled: !!hasRunning,
         click: () => {
           const pkg = currentAppPkg;
@@ -1118,19 +1128,19 @@ function buildTray() {
         },
       },
       {
-        label: wantLandscapeFor(currentAppPkg) ? '切回竖屏（需重启运行时）' : '切换横屏（需重启运行时）',
+        label: wantLandscapeFor(currentAppPkg) ? tr('切回竖屏（需重启运行时）') : tr('切换横屏（需重启运行时）'),
         enabled: !!currentAppPkg,
         click: () => { rotateCurrentApp().catch(() => {}); },
       },
       {
-        label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
+        label: displaySettings().mode === 'fullscreen' ? tr('切回竖屏窗口') : tr('全屏（自适应屏幕）'),
         click: () => { toggleDisplayMode(); },
       },
-      { label: '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
-      { label: '同步共享目录', click: () => sharer.sync() },
-      { label: '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
+      { label: tr('重建桌面/开始菜单快捷方式'), click: () => { installer.ensureShortcuts().catch(() => {}); } },
+      { label: tr('同步共享目录'), click: () => sharer.sync() },
+      { label: tr('设置'), click: () => { showWindow(); send('ui:navigate', 'settings'); } },
       {
-        label: updateInfo && updateInfo.hasUpdate ? `发现新版本 ${updateInfo.tag}` : '检查更新',
+        label: updateInfo && updateInfo.hasUpdate ? tr('发现新版本') + ' ' + updateInfo.tag : tr('检查更新'),
         click: async () => {
           showWindow();
           send('ui:navigate', 'settings');
@@ -1139,10 +1149,10 @@ function buildTray() {
           if (info && info.hasUpdate && info.asset) {
             const r = await dialog.showMessageBox(mainWindow || undefined, {
               type: 'question',
-              title: '发现新版本',
-              message: `ApkStart ${info.tag} 已发布，当前版本 v${app.getVersion()}。现在更新吗？`,
+              title: tr('发现新版本'),
+              message: `ApkStart ${info.tag} ${tr('已发布，当前版本 v{ver}。现在更新吗？', { ver: app.getVersion() })}`,
               detail: (info.notes || '').slice(0, 600),
-              buttons: ['立即更新', '稍后'],
+              buttons: [tr('立即更新'), tr('稍后')],
               defaultId: 0,
               cancelId: 1,
             });
@@ -1154,7 +1164,7 @@ function buildTray() {
       },
       { type: 'separator' },
       {
-        label: '退出',
+        label: tr('退出'),
         click: async () => {
           try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
           quitting = true;
@@ -1164,7 +1174,7 @@ function buildTray() {
     ]);
     tray.setContextMenu(menu);
   };
-  tray.setToolTip('ApkStart — 安卓应用运行器');
+  tray.setToolTip(tr('ApkStart — 安卓应用运行器'));
   // Windows 托盘的惯例是单击就打开主窗口（双击当然也可以）。
   // 之前只绑了 double-click，用户单击没反应，会以为托盘图标坏了。
   // 右键才出菜单，所以这里单击直接 showWindow 不会和菜单冲突。
@@ -1184,10 +1194,10 @@ async function runInstall(filePath) {
   // 同一个包正在装（用户连点了几次图标 / 拖了好几次）→ 只提示一次，别重复跑一遍安装
   if (installBusy) {
     if (installBusy === filePath) {
-      send('toast', { type: 'info', message: '这个 APK 正在安装中，请稍等…' });
+      send('toast', { type: 'info', message: tr('这个 APK 正在安装中，请稍等…') });
       return { ok: false, error: '正在安装中' };
     }
-    send('toast', { type: 'info', message: '已有安装任务在进行，请等它装完。' });
+    send('toast', { type: 'info', message: tr('已有安装任务在进行，请等它装完。') });
     return { ok: false, error: '已有安装任务在进行' };
   }
   installBusy = filePath;
@@ -1197,7 +1207,7 @@ async function runInstall(filePath) {
     send('install:done', result);
     // 新建的桌面图标要让资源管理器立刻刷新，否则用户会以为「没创建快捷方式」
     windowctl.refreshShell().catch(() => {});
-    notify('安装完成', `${result.app.label} 已安装${result.app.shortcutPath ? '，桌面快捷方式已创建' : ''}`);
+    notify('安装完成', `${result.app.label} ${tr('已安装')}${result.app.shortcutPath ? tr('，桌面快捷方式已创建') : ''}`);
     return result;
   } catch (e) {
     send('install:error', { message: e.message, file: filePath });
@@ -1517,7 +1527,7 @@ async function launchOne(pkg) {
     // 下次点应用还是走同一条隐藏 → embed 的路径。
     if (winAgent) armAgent(winAgent).catch(() => {});
     showWindow();
-    send('toast', { type: 'error', message: `启动失败：${e.message}` });
+    send('toast', { type: 'error', message: tr('启动失败：{msg}', { msg: e.message }) });
     return { ok: false, error: e.message };
   }
 }
@@ -1630,7 +1640,7 @@ function registerIpc() {
   // 选文件夹（用于把运行时/镜像/已装应用挪到非系统盘）
   ipcMain.handle('dialog:openDir', async (_e, defaultPath) => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择数据存放目录',
+      title: tr('选择数据存放目录'),
       defaultPath: defaultPath || store.DATA_DIR,
       properties: ['openDirectory', 'createDirectory'],
     });
@@ -1660,8 +1670,8 @@ function registerIpc() {
 
   ipcMain.handle('apk:pick', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择要安装的 APK',
-      filters: [{ name: 'Android 应用', extensions: ['apk', 'apks', 'xapk'] }],
+      title: tr('选择要安装的 APK'),
+      filters: [{ name: tr('Android 应用'), extensions: ['apk', 'apks', 'xapk'] }],
       properties: ['openFile', 'multiSelections'],
     });
     if (r.canceled) return [];
@@ -1975,8 +1985,8 @@ function registerIpc() {
   ipcMain.handle('drivers:import', async () => {
     const drv = require('./core/drivers');
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择驱动文件（.json）',
-      filters: [{ name: '驱动 JSON', extensions: ['json'] }],
+      title: tr('选择驱动文件（.json）'),
+      filters: [{ name: tr('驱动 JSON'), extensions: ['json'] }],
       properties: ['openFile'],
     });
     if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
@@ -1995,9 +2005,9 @@ function registerIpc() {
     const overview = await driverOverview();
     const tpl = drv.templateFromHost(overview.host);
     const r = await dialog.showSaveDialog(mainWindow, {
-      title: '导出本机驱动模板',
+      title: tr('导出本机驱动模板'),
       defaultPath: path.join(drv.userDir(store), `${tpl.id}.json`),
-      filters: [{ name: '驱动 JSON', extensions: ['json'] }],
+      filters: [{ name: tr('驱动 JSON'), extensions: ['json'] }],
     });
     if (r.canceled || !r.filePath) return { ok: false, canceled: true };
     fs.mkdirSync(path.dirname(r.filePath), { recursive: true });
@@ -2224,10 +2234,10 @@ function registerIpc() {
   ipcMain.handle('app:confirm', async (_e, opts = {}) => {
     const { response } = await dialog.showMessageBox(mainWindow || undefined, {
       type: opts.type || 'question',
-      title: opts.title || '确认',
-      message: opts.message || '',
-      detail: opts.detail || '',
-      buttons: ['取消', opts.okLabel || '确定'],
+      title: opts.title || tr('确认'),
+      message: tr(opts.message || ''),
+      detail: tr(opts.detail || ''),
+      buttons: [tr('取消'), tr(opts.okLabel || '确定')],
       defaultId: 1,
       cancelId: 0,
       noLink: true,
@@ -2301,7 +2311,7 @@ function registerIpc() {
     try {
       const r = runtime.emulator.resizeDataPartition(mb);
       appLog(`data partition -> ${want}GB: ${JSON.stringify(r)}`);
-      if (r && r.ok) notify('数据分区已调整', `安卓可用空间约 ${want} GB${stopped ? '（运行时已重启）' : ''}`);
+      if (r && r.ok) notify('数据分区已调整', tr('安卓可用空间约 {gb} GB{note}', { gb: want, note: stopped ? tr('（运行时已重启）') : '' }));
       return { ok: !!(r && r.ok), stopped, ...r, ...runtime.emulator.dataInfo() };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -2315,15 +2325,15 @@ function registerIpc() {
     const preview = await runtime.cleanup(pass);
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      buttons: ['取消', `清理 ${preview.candidates.length} 项`],
+      buttons: [tr('取消'), tr('清理 {n} 项', { n: preview.candidates.length })],
       defaultId: 0,
       cancelId: 0,
-      title: '确认清理运行时缓存',
-      message: `将释放约 ${(preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0)} MB`,
-      detail: (opts.includeSnapshots
+      title: tr('确认清理运行时缓存'),
+      message: tr('将释放约 {mb} MB', { mb: (preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0) }),
+      detail: tr(opts.includeSnapshots
         ? '会先停止运行时，再删除旧镜像、当前 AVD 的快速启动快照、锁文件和非活动 AVD 的缓存。已安装的应用本身保留（只清快照），'
         : '只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。')
-        + '此操作不可撤销，建议先导出诊断报告。',
+        + tr('此操作不可撤销，建议先导出诊断报告。'),
     });
     if (response !== 1) return { ...preview, cancelled: true };
     return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots });
@@ -2588,8 +2598,8 @@ function registerIpc() {
 
   ipcMain.handle('provision:importIso', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择 Android-x86 / Bliss OS 系统镜像',
-      filters: [{ name: '系统镜像', extensions: ['iso', 'img'] }],
+      title: tr('选择 Android-x86 / Bliss OS 系统镜像'),
+      filters: [{ name: tr('系统镜像'), extensions: ['iso', 'img'] }],
       properties: ['openFile'],
     });
     if (r.canceled) return { ok: false, canceled: true };
@@ -2602,8 +2612,8 @@ function registerIpc() {
 
   ipcMain.handle('provision:importDisk', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择已安装 Android 的虚拟磁盘',
-      filters: [{ name: '虚拟磁盘', extensions: ['qcow2', 'img', 'vmdk', 'raw'] }],
+      title: tr('选择已安装 Android 的虚拟磁盘'),
+      filters: [{ name: tr('虚拟磁盘'), extensions: ['qcow2', 'img', 'vmdk', 'raw'] }],
       properties: ['openFile'],
     });
     if (r.canceled) return { ok: false, canceled: true };
@@ -3201,8 +3211,8 @@ if (!gotLock) {
       if (freeMB && freeMB < 3072) {
         appLog(`LOW_DISK free=${freeMB}MB dir=${store.DATA_DIR}`);
         setTimeout(() => {
-          notify('磁盘空间不足', `只剩 ${(freeMB / 1024).toFixed(1)} GB。请到「设置 → 系统集成」把安卓数据目录/运行时目录改到其他盘，或先清理磁盘。`);
-          send('toast', { type: 'error', message: `磁盘只剩 ${(freeMB / 1024).toFixed(1)} GB，安卓可能无法启动（设置 → 系统集成 可换盘）` });
+          notify('磁盘空间不足', tr('只剩 {gb} GB。请到「设置 → 系统集成」把安卓数据目录/运行时目录改到其他盘，或先清理磁盘。', { gb: (freeMB / 1024).toFixed(1) }));
+          send('toast', { type: 'error', message: tr('磁盘只剩 {gb} GB，安卓可能无法启动（设置 → 系统集成 可换盘）', { gb: (freeMB / 1024).toFixed(1) }) });
         }, 3000).unref?.();
       }
     }
@@ -3275,7 +3285,7 @@ if (!gotLock) {
     // 再并发下载解压只会让桌面更卡。真有应用要打开时 ensure() 自会准备。
     setTimeout(() => {
       autoDeploy().then((r) => {
-        if (r && r.ok) send('toast', { type: 'ok', message: '运行时已自动准备完成' });
+        if (r && r.ok) send('toast', { type: 'ok', message: tr('运行时已自动准备完成') });
       }).catch(() => {});
     }, 20000).unref?.();
 
