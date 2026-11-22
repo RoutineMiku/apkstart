@@ -288,7 +288,7 @@ function evaluate(obs) {
       category: 'settings',
       severity: 'warn',
       title: '安卓应用声音已在设置里关闭',
-      hint: '模拟器是以 -no-audio 启动的，所以只有 ApkStart 里的应用没声音。点「处理」重新打开，并重启一次运行时即可。',
+      hint: '安卓声音开关被关掉了，所以只有 ApkStart 里的应用没声音。点「处理」重新打开，并重启一次运行时即可。',
       fix: 'audio',
     });
   }
@@ -300,6 +300,18 @@ function evaluate(obs) {
       title: 'Windows 音频服务（Audiosrv）未运行',
       hint: '这会连系统其它软件一起没声音。到 services.msc 启动 Windows Audio 并设为自动，或在管理员 PowerShell 里执行 net start Audiosrv。',
       fix: 'audioService',
+    });
+  }
+  // 麦克风输入被关掉：语音/通话/录音类应用会拿不到录音设备。
+  // 只在明确关掉时才提示（micEnabled===false），探测不到不报，避免误报。
+  if (audio.checked && audio.micEnabled === false) {
+    push({
+      code: 'audio.microphoneDisabled',
+      category: 'settings',
+      severity: 'warn',
+      title: '麦克风输入已在设置里关闭',
+      hint: '应用里的语音、通话、录音会失败（查不到录音设备）。点「处理」重新打开并重启一次运行时即可；同时确认 Windows 的麦克风权限已允许桌面应用访问。',
+      fix: 'microphone',
     });
   }
 

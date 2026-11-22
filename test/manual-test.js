@@ -1,6 +1,6 @@
 'use strict';
 /**
- * 内置手册映射测试（0.6.2）
+ * 内置手册映射测试（0.6.4）
  *
  * 重点守两件事：
  *  1) 每个章节锚点都必须真的存在于随包分发的 src/ui/manual.html；
@@ -39,10 +39,16 @@ test('每个主题的锚点都存在于随包 HTML', () => {
   }
 });
 
-test('手册正文包含 0.6.2 版本号与声音章节', () => {
-  assert(html.includes('v0.6.2'), '手册应标注 v0.6.2');
+test('手册正文包含 0.6.4 版本号与声音章节', () => {
+  assert(html.includes('v0.6.4'), '手册应标注 v0.6.4');
   assert(html.includes('应用没有声音'), '手册应有声音排障章节');
   assert(html.includes('内置使用手册与自动教程'), '手册应说明自动教程');
+});
+
+test('手册有 6.8 商店版 DLL 加载失败章节，且纠正一刀切误判', () => {
+  assert(html.includes('商店版启动失败'), '手册应有 6.8 章节');
+  assert(/不等于.*VC\+\+|不等于.*运行库|不等于.*杀毒/.test(html.replace(/<[^>]+>/g, '')),
+    '6.8 应明确 0xC0000135 不等于一定缺 VC++');
 });
 
 console.log('\n[内置手册 · 自动检测问题 → 章节]');
@@ -61,6 +67,19 @@ test('声音开关与服务停止都定位到 6.7', () => {
   assert(manual.topicForIssue({ code: 'audio.windowsServiceStopped' }).id === 'sound', '音频服务应到 6.7');
 });
 
+test('麦克风定位到 6.9，声音/麦克风不会串到同一节', () => {
+  assert(manual.topicForIssue({ code: 'audio.microphoneDisabled' }).id === 'mic', '麦克风应到 6.9');
+  const micTopic = manual.resolve({ issue: 'audio.microphoneDisabled' });
+  assert(micTopic.anchor.includes('6-9'), `锚点应指向 6.9，实际 ${micTopic.anchor}`);
+});
+
+test('DLL / VC++ 诊断问题定位到 6.8', () => {
+  assert(manual.topicForIssue({ code: 'DLL', title: '运行时依赖 DLL 加载失败' }).id === 'dll', 'DLL 分类应到 6.8');
+  assert(manual.topicForIssue({ code: 'vcRedist', title: '缺少 VC++ 运行库' }).id === 'dll', 'VC++ 实测项应到 6.8');
+  const t = manual.topicForIssue({ code: 'runtime.bootFailed', title: '启动失败', detail: '0xC0000135 emulator exit' });
+  assert(t.id === 'dll', `带 0xC0000135 的启动失败应到 6.8，实际 ${t.id}`);
+});
+
 test('启动失败带 ARM 日志时优先定位到 6.3', () => {
   const t = manual.topicForIssue({
     code: 'runtime.bootFailed',
@@ -68,6 +87,14 @@ test('启动失败带 ARM 日志时优先定位到 6.3', () => {
     detail: 'DoBadTrampoline libndk_translation',
   });
   assert(t.id === 'arm', `应定位到 arm，实际 ${t.id}`);
+});
+
+test('反模拟 / 安全校验导致的启动退出也定位到 6.3', () => {
+  for (const detail of ['emulator detected', 'SafetyNet attest failed', '反调试 hook detected']) {
+    const t = manual.topicForIssue({ code: 'runtime.bootFailed', title: '应用启动退出', detail });
+    assert(t.id === 'arm', `${detail} 应定位到 arm，实际 ${t.id}`);
+  }
+  assert(manual.topicForError('play integrity failed 主动退出').id === 'arm', '原始报错也应到 arm');
 });
 
 test('普通启动失败定位到 6.5', () => {
@@ -87,6 +114,11 @@ test('其它 INSTALL_FAILED 定位到安装章节', () => {
 test('adb 与声音的原始报错分别定位', () => {
   assert(manual.topicForError('ADB_UNAUTHORIZED').id === 'adb', 'adb 报错应到 6.4');
   assert(manual.topicForError('audio disabled -no-audio').id === 'sound', '声音报错应到 6.7');
+});
+
+test('0xC0000135 原始报错定位到 6.8 而非安装章节', () => {
+  assert(manual.topicForError('emulator exit 3221225781').id === 'dll', '十进制退出码应到 6.8');
+  assert(manual.topicForError('0xC0000135 STATUS_DLL_NOT_FOUND').id === 'dll', '十六进制退出码应到 6.8');
 });
 
 console.log('\n[内置手册 · 统一入口]');
@@ -124,6 +156,7 @@ test('安装失败与修复失败都会自动打开对应教程', () => {
   assert(/openManualForError\(raw, 'install-failed'\)/.test(js), '安装失败未自动开教程');
   assert(/function failFix\([\s\S]*openManualForIssue\(issue, 'fix-failed'\)/.test(js), '修复失败未自动开教程');
   assert(/case 'audioService'/.test(js) && /case 'audio':/.test(js), '声音修复动作未接入');
+  assert(/case 'microphone':/.test(js), '麦克风修复动作未接入');
 });
 
 test('诊断条目带教程按钮', () => {
@@ -132,6 +165,14 @@ test('诊断条目带教程按钮', () => {
     '自动检测条目缺少教程按钮');
   assert(js.includes("tr('v062.m0063'") && /class="ec-help"/.test(zhMessages['v062.m0063']),
     '自检条目缺少教程按钮');
+});
+
+test('0xC0000135 不再被一刀切成杀毒删 DLL / 缺 VC++', () => {
+  const doctor = fs.readFileSync(path.join(ROOT, 'src', 'core', 'doctor.js'), 'utf8');
+  const emu = fs.readFileSync(path.join(ROOT, 'src', 'core', 'emulator.js'), 'utf8');
+  assert(!/title: '运行时组件被杀毒软件删除或缺少 VC\+\+ 运行库'/.test(doctor), 'doctor 仍在静态归因杀毒/VC++');
+  assert(!/缺少 DLL（VC\+\+ 运行库 \/ 运行时组件被杀毒删除）/.test(emu), 'emulator 退出码描述仍在一刀切');
+  assert(/原因待查/.test(emu) && /具体原因待定位/.test(doctor), '应标明原因待定位');
 });
 
 console.log(`\n内置手册测试：${passed} 通过，${failed} 失败\n`);

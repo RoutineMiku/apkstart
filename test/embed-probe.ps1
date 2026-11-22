@@ -1,4 +1,4 @@
-# Throwaway probe: can the emulator Qt window be re-parented into another HWND
+﻿# Throwaway probe: can the emulator Qt window be re-parented into another HWND
 # and still render? Creates a WinForms host, SetParent()s the emulator window in,
 # screenshots the host, then detaches. ASCII only.
 param(

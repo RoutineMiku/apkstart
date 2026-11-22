@@ -213,5 +213,31 @@ console.log('\n[合成 APK：axml + apk 全链路]');
   });
 }
 
+console.log('\n[gpupref.js 独显/核显偏好]');
+const gpupref = require('../src/core/gpupref');
+test('模式归一化：非法值一律回退 auto，不拼进注册表命令', () => {
+  assert(gpupref.normalize('DISCRETE') === 'discrete');
+  assert(gpupref.normalize('  integrated ') === 'integrated');
+  assert(gpupref.normalize('../../ evil') === 'auto');
+  assert(gpupref.normalize(undefined) === 'auto');
+});
+test('注册表值：独显=2 / 核显=1 / auto=删除', () => {
+  assert(gpupref.valueFor('discrete') === 'GpuPreference=2;');
+  assert(gpupref.valueFor('integrated') === 'GpuPreference=1;');
+  assert(gpupref.valueFor('auto') === '');
+  const d = gpupref.preferenceCommand('C:\\emulator\\emulator.exe', 'discrete');
+  assert(d.action === 'set' && d.args[0] === 'add' && d.args.includes('GpuPreference=2;'));
+  assert(d.args.includes('REG_SZ'));
+  const a = gpupref.preferenceCommand('C:\\emulator\\emulator.exe', 'auto');
+  assert(a.action === 'remove' && a.args[0] === 'delete' && a.args.includes('/f'));
+  assert(gpupref.preferenceCommand('', 'discrete') === null, '空路径不生成命令');
+});
+test('读取注册表值能识别模式（兼容大小写与多键串）', () => {
+  assert(gpupref.parseValue('GpuPreference=2;') === 'discrete');
+  assert(gpupref.parseValue('GpuPreference=1;Other=x;') === 'integrated');
+  assert(gpupref.parseValue('gpuPreference = 2 ;') === 'discrete');
+  assert(gpupref.parseValue('') === 'auto');
+});
+
 console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
 process.exit(failed ? 1 : 0);

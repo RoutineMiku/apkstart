@@ -1,0 +1,27 @@
+Partner Center 填法：Apps and games → ApkStart → 当前提交 → Store listings（商店一览）
+→ 选语言 → 「What's new in this version」（此版本中的新增功能），上限 1500 字符。
+中文、英文各填一次（每个语言单独保存）。
+
+说明：商店（MSIX）版的更新由 Microsoft Store 负责，更新时只下载变化的部分（差分更新），
+不会每次重装完整应用，也不会影响运行时、已装应用和快照。下面的「增量更新」一项描述的是
+从 GitHub / Gitee 安装的便携版新增能力，商店版用户无需关心、也不会因此重新下载系统镜像。
+
+—— 简体中文（粘贴下面整段）——
+
+0.6.3 更新：
+· 启动动画焕新：极简苹果风——柔和光晕、图标缓慢呼吸、细腻淡入淡出；图标改用完整源不再缺角，且至少完整播放约 2 秒，不再一闪而过。打开应用时动画保持到应用画出第一屏才淡出，不提前露白底。
+· 打开应用更快：合并窗口接管时的重复等待、加快进程存活探测，点开到出画面更利落。
+· 设置新增「实验室」分组，含「Windows 原生多窗口多开（实验性）」开关：开启后多个应用可驻留后台、随时切回并保留登录态（默认关闭）。受限于单一模拟器窗口，同一时刻仍只显示一个应用画面。
+· 启动失败诊断更准确：0xC0000135 不再一律说「重装 VC++/杀毒删文件」，而是区分真缺运行库、商店版只读目录限制或杀软隔离，并带你到内置手册 6.8 节对应排查步骤。
+· 便携版新增增量更新：从 GitHub / Gitee 升级只下几 MB 代码，不重下系统镜像、运行时、已装应用和快照；有哈希校验、失败回退完整包。商店版仍经 Microsoft Store 差分更新。
+· 保留 0.6.2 的内置手册、故障自动教程、声音检测与 ARM 安装修复。
+
+—— English (United States) ——
+
+What's new in 0.6.3:
+· Refreshed launch animation in a minimal Apple-inspired style: soft glow, a gently breathing icon and smooth fades. The icon now uses the full-resolution source (no clipped corners) and plays for at least ~2s instead of flashing by. When opening an app it stays until the first frame is drawn instead of showing the white splash early.
+· Faster app launches: merged duplicate waits during window hand-over and sped up process-alive detection, so apps appear sooner.
+· New "Labs" settings section with an experimental "Windows native multi-window" switch: when on, multiple apps stay resident and can be switched back to instantly with their login state kept (off by default). A single emulator window still shows one app at a time.
+· More accurate startup-failure diagnosis: 0xC0000135 no longer always means "reinstall VC++ / antivirus deleted a file"; it now distinguishes a missing runtime, Store read-only path limits and antivirus quarantine, and links to manual section 6.8.
+· Incremental updates for the portable build: upgrading from GitHub / Gitee downloads only a few MB of code, not the system image, runtime, installed apps or snapshots. Hash-verified with automatic fallback. Store builds keep updating via Microsoft Store.
+· Keeps 0.6.2 features: built-in manual, automatic help, sound diagnostics and ARM install fixes.

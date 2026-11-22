@@ -358,14 +358,10 @@ class AppWindow {
     // 以前的顺序是 show() → setTitle()，所以那半秒一定看得到。
     const title = this.state && this.state.label ? this.state.label : 'ApkStart';
     await this.agent.setTitle(title).catch(() => {});
-    await sleep(600);
-    // 让模拟器窗口真的可见
-    const shown = await this.agent.show().catch((e) => ({ ok: false, error: e.message }));
-    this._detachedDebug += ` show=${JSON.stringify(shown)}`;
-    if (!shown || shown.ok === false) { this.lastEmbedError = this._detachedDebug; return false; }
-    // 图标也换成当前应用的：模拟器原生窗口默认是 Google 绿机器人，独立窗口模式
-    // 下任务栏/Alt+Tab 会露馅。Win32 LoadImage 对 .ico 支持最可靠（PNG 不一定认），
-    // installer 已为每个应用生成过同名 .ico，这里优先用它。
+    // 图标和标题都在窗口 show 之前设好：既避免旧标题/绿色机器人图标先闪一下，
+    // 又把原来「setTitle 后等 600ms + show + setIcon 后再等 300ms」两次等待合并成
+    // 一次 —— 打开应用到出画面省约 300ms（默认就是原生窗口模式，每次都走这里）。
+    // 图标只影响任务栏/Alt+Tab，设给已存在的 Qt 窗口，不依赖它 show 过。
     const icoForNative = this.iconFilePath
       ? this.iconFilePath.replace(/\.png$/i, '.ico')
       : '';
@@ -374,7 +370,11 @@ class AppWindow {
     } else if (this.iconFilePath) {
       try { await this.agent.setIcon(this.iconFilePath); } catch (_) { /* ignore */ }
     }
-    await sleep(300);
+    await sleep(600);
+    // 让模拟器窗口真的可见
+    const shown = await this.agent.show().catch((e) => ({ ok: false, error: e.message }));
+    this._detachedDebug += ` show=${JSON.stringify(shown)}`;
+    if (!shown || shown.ok === false) { this.lastEmbedError = this._detachedDebug; return false; }
     // 按屏幕可用区居中和 sizing。
     // 注意：模拟器原生窗口自己按设备面板比例锁宽高比（竖屏 9:16），
     // 给一个不匹配的 w/h，它会把宽夹回高度对应的值，结果就是「设了 1280 宽

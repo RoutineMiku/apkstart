@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const settings = structuredClone(require('../src/core/store').DEFAULT_SETTINGS);
 settings.engine.priorityMode = 'game';
+settings.engine.gpuPreference = 'discrete';
 const { getCatalog } = require('../src/core/i18n');
 const api = {};
 for (const match of fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8').matchAll(/^  (\w+): /gm)) {
@@ -24,6 +25,7 @@ api.runtimeUsage = async () => ({ totalText: '0 MB', reclaimable: 0, count: 0 })
 api.dataInfo = async () => ({ imageGB: 6, freeDiskMB: 20480, overlay: true, pendingGB: 12, configuredGB: 12 });
 api.resources = async () => ({ host: { totalMB: 16384, cores: 8 }, limits: { maxMB: 12288, maxGB: 64 }, freeMB: 81920 });
 api.driversList = async () => ({ drivers: [], errors: [], host: {} });
+api.gpuStatus = async () => ({ supported: true, mode: 'discrete', applied: 'discrete' });
 api.selfCheck = async () => ({ issues: [] });
 api.autodebugState = async () => ({ at: Date.now(), issues: [{
   code: 'device.unauthorized', category: 'device', severity: 'error',

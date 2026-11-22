@@ -1,4 +1,4 @@
-# Inspect parent/style/rect of every emulator Qt window + the Electron host window.
+﻿# Inspect parent/style/rect of every emulator Qt window + the Electron host window.
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

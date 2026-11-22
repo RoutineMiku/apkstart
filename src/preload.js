@@ -108,6 +108,8 @@ contextBridge.exposeInMainWorld('apkstart', {
   assocStatus: () => invoke('assoc:status'),
   assocRegister: () => invoke('assoc:register'),
   assocUnregister: () => invoke('assoc:unregister'),
+  gpuStatus: () => invoke('gpu:status'),
+  gpuApply: () => invoke('gpu:apply'),
 
   syncShared: () => invoke('share:sync'),
   openSharedDir: () => invoke('share:open'),

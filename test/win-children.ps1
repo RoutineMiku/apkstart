@@ -1,4 +1,4 @@
-# List child windows of the ApkStart app window (the embedded emulator lives there).
+﻿# List child windows of the ApkStart app window (the embedded emulator lives there).
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

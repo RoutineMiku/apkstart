@@ -1,4 +1,4 @@
-# Hide the emulator's floating side toolbar (class contains QWindowTool).
+﻿# Hide the emulator's floating side toolbar (class contains QWindowTool).
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

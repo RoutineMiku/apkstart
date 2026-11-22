@@ -1,4 +1,4 @@
-# Post Ctrl+Left directly to the emulator child window (no focus needed).
+﻿# Post Ctrl+Left directly to the emulator child window (no focus needed).
 param([string]$Key = "left")
 
 $src = @'

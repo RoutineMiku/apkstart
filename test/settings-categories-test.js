@@ -46,12 +46,12 @@ test('设置面板有分类导航与搜索框', () => {
   assert(html.includes('id="settingsBody"'), '内容区应有稳定 id（定位与滚动要用）');
 });
 
-test('导航项覆盖全部 8 个分类', () => {
+test('导航项覆盖全部 9 个分类（含实验室）', () => {
   const navMatch = html.match(/<nav class="set-nav" id="setNav"[\s\S]*?<\/nav>/);
   assert(navMatch, '应有 nav');
   const items = navMatch[0].match(/data-cat="([a-z]+)"/g) || [];
   const ids = items.map((s) => s.replace(/data-cat="|"/g, ''));
-  const expected = ['basic', 'display', 'input', 'perf', 'net', 'diag', 'files', 'about'];
+  const expected = ['basic', 'display', 'input', 'perf', 'net', 'diag', 'files', 'about', 'lab'];
   assert(ids.length === expected.length, `导航项应有 ${expected.length} 个，实际 ${ids.length}`);
   for (const e of expected) {
     assert(ids.includes(e), `导航缺少分类 ${e}`);
@@ -91,6 +91,7 @@ test('关键分组落在合理的分类里', () => {
     ['id="downloadGroup"', 'net'],
     ['id="updateGroup"', 'about'],
     ['id="aboutGroup"', 'about'],
+    ['id="labGroup"', 'lab'],
   ];
   for (const [marker, cat] of expect) {
     const idx = html.indexOf(marker);
@@ -140,6 +141,21 @@ test('自动检测面板的修复按钮复用 fixIssue', () => {
   assert(appJs.includes("tr('v062.m0046', [esc(it.code)])")
     && zhMessages['v062.m0046'].includes('data-code="{0}"'), '检测项应带 code 以便修复');
   assert(appJs.includes('fixIssue(issue)'), '应复用统一的修复入口');
+});
+
+test('实验室分组有多开开关，且接到 engine.multiWindow', () => {
+  assert(html.includes('id="setMultiWindow"'), '应有多窗口多开开关');
+  assert(html.includes('id="setKeepBackground"'), '应有后台保留数设置');
+  assert(html.includes('class="lab-notice"'), '实验室要有实验性提示');
+  // 开关要读写真实设置项，而不是空壳
+  assert(/setMultiWindow'\)\.checked = !!s\.engine\.multiWindow/.test(appJs), '要回填 multiWindow 状态');
+  assert(/engine:\s*\{\s*multiWindow:\s*e\.target\.checked/.test(appJs), '要把开关存到 engine.multiWindow');
+  assert(/engine:\s*\{\s*keepBackground:/.test(appJs), '要保存后台保留数');
+  // 底层确实消费这个设置（不是只有 UI）
+  const engineJs = fs.readFileSync(path.join(ROOT, 'src/core/engine.js'), 'utf8');
+  assert(/s\.engine && s\.engine\.multiWindow/.test(engineJs), 'engine 要读取 multiWindow 决定不 force-stop 旧应用');
+  const storeJs = fs.readFileSync(path.join(ROOT, 'src/core/store.js'), 'utf8');
+  assert(/multiWindow:\s*false/.test(storeJs), 'store 要有 multiWindow 默认值且默认关闭');
 });
 
 console.log('\n[设置分类 · 样式]');

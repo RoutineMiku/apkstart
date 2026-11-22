@@ -1,4 +1,4 @@
-# Probe: does the emulator map mouse side buttons (XBUTTON1/2) to BACK?
+﻿# Probe: does the emulator map mouse side buttons (XBUTTON1/2) to BACK?
 param([int]$Button = 1)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'

@@ -58,11 +58,17 @@ const DEFAULT_SETTINGS = {
     // 带窗口的模拟器是原生 60fps + 原生鼠标键盘，ApkStart 只负责把它打扮成应用窗口。
     headless: false,
     gpuMode: 'auto',         // auto = 按 emulator 版本自动挑后端并逐级降级
+    // 独显/核显偏好：auto=系统默认 | discrete=独显优先 | integrated=核显优先。
+    // 通过 Windows UserGpuPreferences 给 emulator.exe 指定，让 host 渲染真正吃到目标 GPU。
+    gpuPreference: 'auto',
     // 上次「拉起就崩」的渲染后端（格式 `<emulator版本>|<gpu>`）；auto 模式下下次把它排到最后，
     // 免得每次开机都先白等 20 多秒再退到软件渲染。升级运行时会自动失效。
     badGpu: '',
     forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
     audio: true,             // 安卓应用的声音（提示音/视频）。关闭可省一点 CPU
+    // 麦克风输入：默认开启，让应用能用 PC 麦克风（语音/通话/录音）。
+    // 关掉后 config.ini 写 hw.audioInput=none，guest 里查不到录音设备。
+    microphone: true,
     // ---- 轻量容器（默认全开省资源，用户可逐项关掉）----
     liteMode: true,          // 收敛 vCPU 配额，避免 qemu 占满物理核拖慢 Windows
     // 一句话策略：save（省资源）/ balanced（均衡）/ smooth（流畅，视频·游戏优先）。

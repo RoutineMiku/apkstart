@@ -1,4 +1,4 @@
-# Probe 2: embed with the 8px emulator padding shifted outside the host,
+﻿# Probe 2: embed with the 8px emulator padding shifted outside the host,
 # so the Android framebuffer fills the host exactly and the side rail is clipped.
 param([int]$W = 480, [int]$H = 853, [int]$Margin = 8, [string]$Out = "embed2.png", [switch]$Keep)
 $ErrorActionPreference = 'Stop'

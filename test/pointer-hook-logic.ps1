@@ -1,4 +1,4 @@
-# Smoke-test the mouse mapping INSIDE agent.ps1 without starting a real emulator.
+﻿# Smoke-test the mouse mapping INSIDE agent.ps1 without starting a real emulator.
 # Loads the embedded C# and drives the private hook callback via reflection.
 # InOurLcd() needs a real foreground window, which a CI / non-interactive session
 # has none of; the compiled copy therefore gets a test-only early return that

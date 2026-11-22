@@ -86,16 +86,30 @@ function friendlyInstallError(raw) {
   return msg ? `${msg}（${tag}）` : `安装失败：${raw}`;
 }
 
+/**
+ * 反模拟 / 安全校验关键词：应用主动检测到模拟器或转译环境后退出。
+ * 这类是应用自身的限制（校验传感器、基带、SafetyNet/Play Integrity 等），
+ * 不是 ApkStart 的故障，也不要谎称「切换镜像就能解决」——0.6.3 只有一份带
+ * 翻译层的通用镜像，没有第二套可切。必须在文案里如实说清并指向手册 6.3。
+ */
+const ANTI_EMULATOR_RE = /anti[-_ ]?emulat|emulator.?detect|检测到.{0,6}(模拟|虚拟|调试)|反模拟|反仿真|反调试|anti[-_ ]?debug|safetynet|play.?integrity|cts.?profile|hook.?detect/i;
+
 /** 把启动后的崩溃日志翻译成能看懂的原因 */
 function friendlyLaunchError(raw, pkg) {
   const t = String(raw || '');
+  if (ANTI_EMULATOR_RE.test(t)) {
+    return `${pkg || '应用'} 检测到模拟器 / 转译环境后主动退出（反模拟、反调试或安全校验），`
+      + '属于应用自身限制，不是故障；ApkStart 无法绕过，详见内置手册 6.3。';
+  }
   if (/DoBadTrampoline|libndk_translation|houdini|SIGABRT.*arm/i.test(t)) {
-    return `${pkg || '应用'} 启动后崩溃：ARM 翻译层与该应用的信号处理不兼容。`
-      + 'ApkStart 会自动切换到 Android 14 兼容镜像后重试。';
+    return `${pkg || '应用'} 启动后崩溃：应用与 ARM 翻译层不兼容`
+      + '（常见于反调试 / 反模拟检测或 native hook 冲突）。'
+      + '若运行时尚未启用兼容镜像会自动切换重试一次；已启用仍崩溃则属于应用兼容性限制，'
+      + '不是故障，详见内置手册 6.3。';
   }
   if (/UnsatisfiedLinkError|dlopen failed|couldn't find "lib|\.so.*not found/i.test(t)) {
     return `${pkg || '应用'} 启动后崩溃：缺少设备原生库（应用可能只提供 ARM 版本）。`
-      + '会自动切换到带 ARM 翻译层的兼容镜像后重试。';
+      + '若运行时尚未启用 ARM 翻译层会自动切换兼容镜像重试；已启用仍崩溃多为应用限制，详见内置手册 6.3。';
   }
   if (/ClassNotFoundException|NoClassDefFoundError|AndroidRuntime/i.test(t)) {
     return `${pkg || '应用'} 启动即崩溃（应用内部异常，可能与模拟器环境或缺少 Google 服务有关）。`;
@@ -610,8 +624,10 @@ class AdbClient {
       // eslint-disable-next-line no-await-in-loop
       const pid = await this.shell(`pidof ${pkg}`, { timeout: 6000 }).catch(() => '');
       if (String(pid).trim()) return { ok: true };
+      // 350ms 轮询（原 1000ms）：进程一出现就更快确认存活、让启动流程往下走。
+      // pidof 是轻量 shell，密一点不会增加可感知负担，但对「点开到出画面」有直接收益。
       // eslint-disable-next-line no-await-in-loop
-      await sleep(1000);
+      await sleep(350);
     }
     let crash = '';
     try {

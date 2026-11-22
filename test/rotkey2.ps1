@@ -1,4 +1,4 @@
-# Focus the emulator child window across processes, then press Ctrl+Left/Right.
+﻿# Focus the emulator child window across processes, then press Ctrl+Left/Right.
 param([string]$Key = "left")
 
 $src = @'

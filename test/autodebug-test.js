@@ -165,6 +165,21 @@ test('音频服务探测失败不当成问题', () => {
   assert(!codes(issues).includes('audio.windowsServiceStopped'), '不知道就不该报');
 });
 
+test('麦克风被关掉会报出来，并带一键处理与教程', () => {
+  const issues = ad.evaluate({ audio: { checked: true, enabled: true, micEnabled: false, serviceRunning: true } });
+  const it = issues.find((i) => i.code === 'audio.microphoneDisabled');
+  assert(it, '应报麦克风被关');
+  assert(it.category === 'settings' && it.fix === 'microphone', '应能一键处理');
+  assert(it.help && it.help.id === 'mic', '应带麦克风专属教程（6.9）');
+});
+
+test('麦克风开启或探测不到都不报', () => {
+  const on = ad.evaluate({ audio: { checked: true, enabled: true, micEnabled: true, serviceRunning: true } });
+  assert(!codes(on).includes('audio.microphoneDisabled'), '开启时不该报');
+  const unknown = ad.evaluate({ audio: { checked: true, enabled: true, micEnabled: null, serviceRunning: true } });
+  assert(!codes(unknown).includes('audio.microphoneDisabled'), '探测不到不该报');
+});
+
 console.log('\n[自动检测 · 网络与日志]');
 test('安卓没网会报出来，并给出修复动作', () => {
   const issues = ad.evaluate({ network: { ok: false, reason: 'dns timeout' } });

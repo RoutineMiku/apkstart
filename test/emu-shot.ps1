@@ -1,4 +1,4 @@
-# Resize the running emulator window and screenshot it (probe helper).
+﻿# Resize the running emulator window and screenshot it (probe helper).
 param([int]$W = 900, [int]$H = 1650, [string]$Out = "emu-shot.png")
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing

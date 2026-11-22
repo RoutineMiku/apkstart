@@ -83,10 +83,18 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
     assert.equal(preflight.recommendGpu({ vendor: 'nvidia', accelOk: false, vramMB: 8192 }).gpuMode, 'software');
   });
 
-  test('NVIDIA + 加速 → host；AMD/Intel → swangle', () => {
+  test('NVIDIA/AMD/Intel + 加速 → host（独显/核显都用上硬件渲染）', () => {
     assert.equal(preflight.recommendGpu({ vendor: 'nvidia', accelOk: true, vramMB: 8192 }).gpuMode, 'host');
-    assert.equal(preflight.recommendGpu({ vendor: 'amd', accelOk: true, vramMB: 2048 }).gpuMode, 'swangle');
-    assert.equal(preflight.recommendGpu({ vendor: 'intel', accelOk: true, vramMB: 2048 }).gpuMode, 'swangle');
+    assert.equal(preflight.recommendGpu({ vendor: 'amd', accelOk: true, vramMB: 2048 }).gpuMode, 'host');
+    assert.equal(preflight.recommendGpu({ vendor: 'intel', accelOk: true, vramMB: 2048 }).gpuMode, 'host');
+  });
+
+  test('核显共享内存报显存 0，不该被误判成弱显卡降到 swangle', () => {
+    assert.equal(preflight.recommendGpu({ vendor: 'intel', accelOk: true, vramMB: 0 }).gpuMode, 'host');
+  });
+
+  test('显存真的小（<512MB）才降到 swangle', () => {
+    assert.equal(preflight.recommendGpu({ vendor: 'amd', accelOk: true, vramMB: 256 }).gpuMode, 'swangle');
   });
 
   test('显卡型号读不到时不乱猜，交回 auto', () => {
@@ -95,12 +103,12 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 
   console.log('\n[体检 · 场景判断]');
 
-  test('一切正常：level=good，建议 host 或 swangle，不强制 TCG', () => {
+  test('一切正常：level=good，建议 host（用上独显/核显），不强制 TCG', () => {
     const r = preflight.evaluate({ hw: hwBase(), settings: {} });
     assert.equal(r.level, 'good', r.summary);
     assert.equal(r.patch.engine.forceTcg, false);
     assert.equal(r.patch.engine.gpuMode, 'auto');
-    assert.equal(r.recommended.gpuMode, 'swangle');
+    assert.equal(r.recommended.gpuMode, 'host');
   });
 
   test('BIOS 虚拟化没开：判 bad，只给「进 BIOS」的手动指引，不假装能一键', () => {
@@ -205,7 +213,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
     const v = drivers.validateDriver(r.driver);
     assert.equal(v.ok, true, v.errors.join('；'));
     assert.deepEqual(v.driver.match.gpuVendor, ['amd']);
-    assert.equal(v.driver.effect.gpuMode, 'swangle');
+    assert.equal(v.driver.effect.gpuMode, 'host', '生成的驱动应锁定 host 用上显卡，不再强制软件渲染');
     assert.equal(v.driver.effect.forceTcg, null, '有加速时不该写 forceTcg');
   });
 

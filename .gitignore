@@ -34,3 +34,6 @@ docs/store-shots/raw-*.png
 
 # 调试用截图 / 临时产物（不入库）
 build/_test/
+
+# 清理旧文件时备份的快捷方式等（不入库）
+build/_removed-backup/

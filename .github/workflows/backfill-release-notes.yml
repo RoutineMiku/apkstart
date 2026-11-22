@@ -1,0 +1,95 @@
+name: Backfill Release Notes
+
+# 把 .github/release-notes-v*.md 的说明回填到所有已存在的 GitHub Release。
+# 起因：0.6.1~0.6.4 的 Release body 只有自动生成的「Full Changelog」一行，
+# 因为发布工作流只在「新建 Release」时写 notes，已有 Release 从不更新。
+# 这个工作流在 main 上 push 或手动触发时，逐个 tag 用 gh release edit 回填，
+# 幂等安全（说明内容一致时是空操作），不动任何资产。
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/release-notes-v*.md'
+      - '.github/workflows/backfill-release-notes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    name: 回填各版本 Release 说明
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 逐个 tag 回填 GitHub 说明
+        # 直接走 REST API，不依赖 gh CLI 对 annotated tag 的本地校验
+        # （v0.6.3 曾因 gh release create 反复静默失败而始终缺 Release 页面）。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          echo "## 回填结果" >> "$GITHUB_STEP_SUMMARY"
+          echo "扫描 .github/release-notes-v*.md …"
+          count=0
+          for notes in .github/release-notes-v*.md; do
+            [ -f "$notes" ] || continue
+            tag="$(basename "$notes" .md | sed 's/^release-notes-//')"
+            count=$((count+1))
+            title="ApkStart $tag"
+            body="$(jq -Rs . < "$notes")"
+            code="$(curl -sS -o /tmp/rel.json -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/releases/tags/$tag")"
+            if [ "$code" = "200" ]; then
+              id="$(jq -r '.id' /tmp/rel.json)"
+              pcode="$(curl -sS -o /tmp/patch.json -w '%{http_code}' -X PATCH \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "$API/releases/$id" \
+                -d "{\"name\":\"$title\",\"body\":$body}")"
+              echo "- $tag: 回填 PATCH $pcode (id=$id)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              # 缺失 Release：REST API 直接挂到远端已有 tag 上，无需本地 tag 对象。
+              ccode="$(curl -sS -o /tmp/create.json -w '%{http_code}' -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "$API/releases" \
+                -d "{\"tag_name\":\"$tag\",\"name\":\"$title\",\"body\":$body}")"
+              echo "- $tag: 缺失，新建 POST $code->$ccode $(jq -r '.html_url // .message' /tmp/create.json)" >> "$GITHUB_STEP_SUMMARY"
+              [ "$ccode" = "201" ]
+            fi
+          done
+          echo "完成：扫描 $count 份说明文件"
+
+      - name: 回填 Gitee 说明
+        continue-on-error: true
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        shell: bash
+        run: |
+          echo "## Gitee 回填结果" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "${GITEE_TOKEN:-}" ]; then
+            echo "- ⚠ 未配置 GITEE_TOKEN secret，Gitee 说明无法回填（GitHub 端不受影响）" >> "$GITHUB_STEP_SUMMARY"
+            echo "· 无 GITEE_TOKEN，跳过 Gitee 回填"
+            exit 0
+          fi
+          # 不再用 || true 吞掉错误：每个 tag 的结果写入 summary，便于诊断。
+          failed=0
+          for notes in .github/release-notes-v*.md; do
+            [ -f "$notes" ] || continue
+            tag="$(basename "$notes" .md | sed 's/^release-notes-//')"
+            if out="$(node tools/backfill-gitee-notes.js "$tag" --notes "$notes" 2>&1)"; then
+              echo "- ✓ $tag: $out" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- ✗ $tag: $out" >> "$GITHUB_STEP_SUMMARY"
+              failed=$((failed+1))
+            fi
+          done
+          if [ "$failed" -gt 0 ]; then
+            echo "- 共 $failed 个 tag 回填失败，请检查 GITEE_TOKEN 是否有效（需 releases 写权限）" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -206,6 +206,44 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   await test('ARM 翻译层崩溃能给出可执行的中文结论', () => {
     const s = friendlyLaunchError('F DEBUG: DoBadTrampoline libndk_translation SIGABRT', 'com.phoenix.read');
     assert(s.includes('ARM 翻译层') && s.includes('兼容镜像'), s);
+    // 0.6.3 单镜像：不能再无条件承诺「会自动切换重试」，要说清「已启用则属限制」
+    assert(s.includes('已启用') && s.includes('限制'), `文案要说清单镜像下的真实后果：${s}`);
+  });
+
+  await test('反模拟 / 安全校验导致的退出给出「限制不是故障」的中文说明', () => {
+    for (const raw of [
+      'emulator detected, exiting',
+      'SafetyNet attest failed',
+      '检测到模拟器环境 主动退出',
+      'anti-debug hook detected',
+    ]) {
+      const s = friendlyLaunchError(raw, 'com.bank.app');
+      assert(s.includes('限制') && s.includes('不是故障'), `${raw} → ${s}`);
+      assert(s.includes('手册 6.3'), `应指向手册 6.3：${s}`);
+    }
+    // 不能把反模拟误说成翻译层崩溃而让用户白等一次镜像切换
+    const s = friendlyLaunchError('emulator detected', 'com.bank.app');
+    assert(!s.includes('自动切换'), `反模拟不该承诺切镜像：${s}`);
+  });
+
+  await test('反模拟崩溃报错能定位到手册 6.3', () => {
+    const manual = require('../src/core/manual');
+    const s = friendlyLaunchError('emulator detected / play integrity failed', 'com.bank.app');
+    const t = manual.topicForError(s);
+    assert(t.id === 'arm', `反模拟报错应到 ARM/6.3 章节，实际 ${t.id}`);
+  });
+
+  await test('启动崩溃重试按真实翻译能力判断，不看镜像文件在不在', () => {
+    const root = path.join(__dirname, '..');
+    const inst = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    const at = inst.indexOf('const hasArm = await runningHasArm(rt.client)');
+    const blk = inst.slice(at, at + 1400);
+    // 旧写法 !playImageInfo().ok 在单镜像架构下恒 false，是永不执行的死代码
+    assert(!/e\.code === 'APP_CRASHED' && !this\.runtime\.provisioner\.playImageInfo\(\)\.ok/.test(inst),
+      '启动崩溃重试条件不能再依赖 !playImageInfo().ok');
+    assert(/runningHasArm\(rt\.client\)/.test(blk), '要看当前这台运行时的真实翻译能力');
+    assert(/needSwitch/.test(blk) && /playReady/.test(blk), '未开翻译层或缺镜像文件才切换重试');
+    assert(/throw e/.test(blk), '翻译层已生效时如实抛出限制结论，不做无意义重启');
   });
 
   console.log('\n[sharer 不再来回搬运（磁盘写满的元凶）]');
@@ -571,12 +609,14 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(calls.length === 1 && /input tap/.test(calls[0]), `应发一次 input tap，实际: ${calls.join('|')}`);
   });
 
-  await test('GPU 厂商检测：返回已知值或 unknown，AMD 机器 swangle 优先', () => {
+  await test('GPU 厂商检测：返回已知值或 unknown；host 优先（独显/核显真正参与渲染）', () => {
     const doc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'doctor.js'), 'utf8');
     assert(/detectGpuVendor/.test(doc), '要有 detectGpuVendor 函数');
     assert(/Get-CimInstance Win32_VideoController/.test(doc), '要用 PowerShell CIM（wmic 在 Win11 24H2+ 已移除）');
-    assert(/vendor === 'amd'[\s\S]{0,200}swangle.*host/.test(doc), 'AMD 机器应把 swangle 排在 host 前面');
     const d = require('../src/core/doctor');
+    // 0.6.4：任何厂商都 host 优先，不再把 AMD/Intel 强制降到软件渲染
+    assert(d.gpuCandidates('37.3.8.0')[0] === 'host', 'host 必须排第一，才能调用独显/核显');
+    assert(!/vendor === 'amd'[\s\S]{0,200}return \['swangle'/.test(doc), '不应再把 AMD 强制降级到 swangle');
     const v = d.detectGpuVendor();
     assert(['nvidia', 'amd', 'intel', 'unknown'].includes(v), `返回值应为已知厂商或 unknown，实际: ${v}`);
   });
@@ -674,17 +714,32 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/-no-window/.test(headless));
   });
 
-  await test('音频：默认开启（不带 -no-audio），关闭后才带 -no-audio', () => {
+  await test('音频：默认开启不带 -no-audio；声音+麦克风都关才带', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));
-    // 覆盖 settings getter：默认开启不应有 -no-audio
-    Object.defineProperty(emu, 'settings', { configurable: true, get: () => ({ engine: { audio: true } }) });
-    const on = emu.buildArgs({ headless: false, gpu: 'software' }).join(' ');
-    assert(!/-no-audio/.test(on), 'audio=true 时不应传 -no-audio');
-    // 关闭后才应带 -no-audio
-    Object.defineProperty(emu, 'settings', { configurable: true, get: () => ({ engine: { audio: false } }) });
-    const off = emu.buildArgs({ headless: false, gpu: 'software' }).join(' ');
-    assert(/-no-audio/.test(off), 'audio=false 时应传 -no-audio');
+    const argsFor = (engine) => {
+      Object.defineProperty(emu, 'settings', { configurable: true, get: () => ({ engine }) });
+      return emu.buildArgs({ headless: false, gpu: 'software' }).join(' ');
+    };
+    assert(!/-no-audio/.test(argsFor({ audio: true })), '默认不应传 -no-audio');
+    assert(!/-no-audio/.test(argsFor({ audio: false })), '只关声音时麦克风还开着，不能传 -no-audio');
+    assert(!/-no-audio/.test(argsFor({ audio: true, microphone: false })), '只关麦克风时声音还开着，不能传 -no-audio');
+    assert(/-no-audio/.test(argsFor({ audio: false, microphone: false })), '声音与麦克风都关才传 -no-audio');
+  });
+
+  await test('麦克风：默认写 hw.audioInput=yes，关闭后写 no', () => {
+    const { EmulatorEngine } = require('../src/core/emulator');
+    const emuOn = new EmulatorEngine(path.join(__dirname, '..'));
+    Object.defineProperty(emuOn, 'settings', { configurable: true, get: () => ({ engine: { microphone: true } }) });
+    const on = emuOn.ensureAvd({ memoryMB: 2048, cores: 2, gpu: 'software', dataMB: 4096, accel: 'auto' });
+    assert(/^hw\.audioInput=yes$/m.test(fs.readFileSync(path.join(on.avdDir, 'config.ini'), 'utf8')), '默认应开启麦克风');
+
+    const emuOff = new EmulatorEngine(path.join(__dirname, '..'));
+    Object.defineProperty(emuOff, 'settings', { configurable: true, get: () => ({ engine: { microphone: false } }) });
+    const off = emuOff.ensureAvd({ memoryMB: 2048, cores: 2, gpu: 'software', dataMB: 4096, accel: 'auto' });
+    assert(/^hw\.audioInput=no$/m.test(fs.readFileSync(path.join(off.avdDir, 'config.ini'), 'utf8')), '关闭后应写 no');
+    // 还原成默认，避免污染后续共用同一个 AVD 配置的测试
+    emuOn.ensureAvd({ memoryMB: 2048, cores: 2, gpu: 'software', dataMB: 4096, accel: 'auto' });
   });
 
   await test('旧配置强制迁移：无头与「启动后退出」不再生效', () => {
@@ -2320,7 +2375,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const root = path.join(__dirname, '..');
     const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
     const launchIdx = mainJs.indexOf('async function runLaunch(');
-    const body = mainJs.slice(launchIdx, launchIdx + 1600);
+    const body = mainJs.slice(launchIdx, launchIdx + 2600);
     const hideIdx = body.indexOf('mainWindow.hide()');
     const openIdx = body.indexOf('openAppWindow(pkg');
     assert(hideIdx > 0 && openIdx > 0, '两个调用都要在 runLaunch 里');
@@ -2734,14 +2789,48 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 收动画前必须等首帧，否则用户看到白底 + 应用图标，以为卡死
     const idx = mainJs.indexOf('waitForAppFirstFrame');
     assert(idx > 0, 'main 要调用 waitForAppFirstFrame');
-    const after = mainJs.slice(idx, idx + 800);
-    assert(/splashDone/.test(after), '首帧之后才 splashDone');
+    const after = mainJs.slice(idx, idx + 900);
+    assert(/finishBootAnimation/.test(after), '首帧之后才统一收启动动画');
     // 判定必须用 `dumpsys window`：`dumpsys window windows` 里没有 mCurrentFocus，
     // 会把焦点判断永远判成否，导致每次启动都白等满超时。
     assert(/dumpsys window \| grep -E "Splash Screen\|mCurrentFocus"/.test(adbJs),
       '首帧判定要用 dumpsys window（含 mCurrentFocus）');
     // 红果这类重应用首帧要 15 秒以上，12 秒超时会把动画提前收掉
     assert(/timeoutMs:\s*20000/.test(mainJs), '首帧等待给足 20 秒');
+  });
+
+  await test('启动动画：boot 遮罩与 splash 统一收尾，且保持到首帧', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 幂等的统一收尾函数：splash 窗口 + appWin 的 boot 遮罩一起收
+    assert(/const finishBootAnimation = \(\) =>/.test(mainJs), '要有统一收尾函数');
+    const fn = mainJs.slice(mainJs.indexOf('const finishBootAnimation'),
+      mainJs.indexOf('const finishBootAnimation') + 700);
+    assert(/bootAnimDone/.test(fn), '收尾必须幂等，避免多处触发重复收');
+    assert(/setState\(\{ ready: true/.test(fn), '收尾要通知 boot 遮罩淡出');
+    assert(/splashDone/.test(fn), '收尾要同时关掉早期 splash 窗口');
+    // launch 结束处不能再无条件 setState ready（会在白底 Splash 阶段提前收动画）
+    assert(/if \(!attachDoneEarly\) finishBootAnimation\(\)/.test(mainJs),
+      '只有没走提前接画面时才在 launch 结束直接收');
+    // 总保险丝：任何路径卡住都会强制收，绝不永久停在动画里
+    assert(/setTimeout\(finishBootAnimation, 24000\)/.test(mainJs), '要有 24 秒总保险丝');
+  });
+
+  await test('启动动画：图标用完整 PNG + 兜底，极简风视觉元素齐全', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 图标优先用原始 PNG（iconPath），不再用 ICO（Chromium <img> 渲染会缺角）
+    assert(/setIcon\(rec && \(rec\.iconPath \|\| rec\.icoPath\)\)/.test(mainJs),
+      '启动动画图标要用完整 PNG');
+    const shellHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'shell.html'), 'utf8');
+    const shellCss = fs.readFileSync(path.join(root, 'src', 'ui', 'shell.css'), 'utf8');
+    const shellJs = fs.readFileSync(path.join(root, 'src', 'ui', 'shell.js'), 'utf8');
+    assert(/object-fit:\s*contain/.test(shellCss), '图标用 contain 完整显示，不裁切缺角');
+    assert(/class="boot-aura"/.test(shellHtml) && /class="boot-glow"/.test(shellHtml),
+      'boot 要有柔和光晕层（极简苹果风）');
+    assert(/@keyframes bootBreathe/.test(shellCss), '图标要有缓慢呼吸动效');
+    assert(/prefers-reduced-motion/.test(shellCss), '要尊重系统减少动态效果偏好');
+    assert(/FALLBACK/.test(shellJs) && /logo-128/.test(shellJs), '图标加载失败要有品牌图兜底');
   });
 
   await test('启动提速：权限授过就不再重复授（省 20s+）', () => {

@@ -1,4 +1,4 @@
-# Full desktop screenshot for layout inspection.
+﻿# Full desktop screenshot for layout inspection.
 param([string]$Out = "screen.png")
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $b = [System.Windows.Forms.SystemInformation]::VirtualScreen

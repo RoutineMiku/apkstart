@@ -131,13 +131,13 @@ node build/msix.js --sign          # 生成自签证书 + 尝试签名
 # 如果上一步报 signtool 不可用，用 SDK 里的那一份手工签：
 & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe" `
   sign /fd SHA256 /a /f dist\store\ApkStart-test.pfx /p 'ApkStart!test' `
-  dist\store\ApkStart_0.6.2.0_x64.msix
+  dist\store\ApkStart_0.6.4.0_x64.msix
 
 # 管理员 PowerShell 里信任证书（一次即可）
 Import-PfxCertificate -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' `
   -FilePath 'dist\store\ApkStart-test.pfx' `
   -Password (ConvertTo-SecureString 'ApkStart!test' -Force -AsPlainText)
-Add-AppxPackage -Path 'dist\store\ApkStart_0.6.2.0_x64.msix'
+Add-AppxPackage -Path 'dist\store\ApkStart_0.6.4.0_x64.msix'
 ```
 
 卸载：`Get-AppxPackage *ApkStart* | Remove-AppxPackage`

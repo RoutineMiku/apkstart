@@ -217,15 +217,21 @@ function recommendResources({ totalMB = 0, cores = 0, accelOk = false, vramMB = 
   return { memoryMB, cores: c, renderSize };
 }
 
-/** 渲染后端建议：按厂商 + 加速状态 + 显存给一个「先试这个」的档位 */
+/**
+ * 渲染后端建议：0.6.4 起默认建议 host —— 让独显/核显真正参与渲染。
+ * 之前 AMD/Intel 一律建议 swangle（软件渲染），独显机器也吃不到硬件加速。
+ * 现在 host 崩了有 badGpu 记忆自动降级，swangle 只在「没加速 / 显存极小」时建议。
+ */
 function recommendGpu({ vendor = 'unknown', accelOk = false, vramMB = 0 } = {}) {
   if (!accelOk) return { gpuMode: 'software', why: '没有可用的硬件加速，先用软件渲染保证画面能出来' };
   if (vendor === 'unknown') return { gpuMode: 'auto', why: '显卡型号读不到，交给自动降级链去试' };
-  if (!vramMB || vramMB < 512) return { gpuMode: 'swangle', why: '显存很小（或读不到），用 swangle 更稳' };
+  if (vramMB > 0 && vramMB < 512) return { gpuMode: 'swangle', why: '显存很小，用 swangle 更稳' };
+  // 有硬件加速、显卡识别得出就走 host（真正调用独显/核显）。显存读不到（0）不再
+  // 当成「显卡弱」——核显共享内存本来就报 0，这正是以前误把核显降到软件的原因。
   if (vendor === 'nvidia') return { gpuMode: 'host', why: 'NVIDIA 驱动成熟，host 直通通常最快' };
-  if (vendor === 'amd') return { gpuMode: 'swangle', why: 'AMD 核显/老驱动下 host 可能起来后崩，swangle 更稳' };
-  if (vendor === 'intel') return { gpuMode: 'swangle', why: 'Intel 核显对 GLES 支持参差，swangle 更稳' };
-  return { gpuMode: 'auto', why: '显卡型号读不到，交给自动降级链去试' };
+  if (vendor === 'amd') return { gpuMode: 'host', why: 'AMD 显卡走 host 才能用上硬件加速；若崩溃会自动降级' };
+  if (vendor === 'intel') return { gpuMode: 'host', why: 'Intel 核显走 host 才能用上硬件加速；若崩溃会自动降级' };
+  return { gpuMode: 'auto', why: '交给自动降级链去试' };
 }
 
 /**

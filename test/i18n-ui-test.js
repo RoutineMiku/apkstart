@@ -41,6 +41,25 @@ app.whenReady().then(async () => {
       assert.equal(priority.value, 'game');
       assert.equal(priority.label, getCatalog(next)['settings.gamePriority']);
       assert.equal(priority.note, getCatalog(next)['settings.gamePriorityNote']);
+      const hardware = await win.webContents.executeJavaScript(`(() => {
+        switchSettingsCat('perf');
+        const microphone = document.getElementById('setMicrophone');
+        const gpu = document.getElementById('setGpuPreference');
+        const result = { microphone: microphone.checked, gpu: gpu.value,
+          note: document.getElementById('gpuPrefNote').textContent };
+        switchSettingsCat('lab');
+        result.labVisible = !document.getElementById('labGroup').hidden;
+        result.labTitle = document.querySelector('#labGroup .group-title').textContent;
+        result.notice = document.querySelector('#labGroup .lab-notice').textContent.trim();
+        switchSettingsCat('basic');
+        return result;
+      })()`);
+      assert.equal(hardware.microphone, true);
+      assert.equal(hardware.gpu, 'discrete');
+      assert.ok(hardware.note.includes(getCatalog(next)['v064.m0005']));
+      assert.equal(hardware.labVisible, true);
+      assert.equal(hardware.labTitle, getCatalog(next)['v064.m0002']);
+      assert.equal(hardware.notice, getCatalog(next)['v064.m0029']);
       const labels = await win.webContents.executeJavaScript(`(() => {
         showMenu(20, 20, 'org.example.app');
         const result = {

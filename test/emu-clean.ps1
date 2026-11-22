@@ -1,4 +1,4 @@
-# Force a full repaint of the emulator window (minimize -> restore) then screenshot it.
+﻿# Force a full repaint of the emulator window (minimize -> restore) then screenshot it.
 param([int]$W = 540, [int]$H = 983, [string]$Out = "emu-clean.png")
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'

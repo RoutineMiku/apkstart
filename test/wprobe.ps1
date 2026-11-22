@@ -1,4 +1,4 @@
-# Probe child-window z-order of the ApkStart app window (ASCII only).
+﻿# Probe child-window z-order of the ApkStart app window (ASCII only).
 $src = @'
 using System;
 using System.Text;

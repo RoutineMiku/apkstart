@@ -1,4 +1,4 @@
-# Compile-check the C# embedded in agent.ps1 without starting the agent.
+﻿# Compile-check the C# embedded in agent.ps1 without starting the agent.
 $path = Join-Path $PSScriptRoot '..\src\core\win\agent.ps1'
 $text = Get-Content $path -Raw
 $m = [regex]::Match($text, "(?s)@'\r?\n(.*?)\r?\n'@")

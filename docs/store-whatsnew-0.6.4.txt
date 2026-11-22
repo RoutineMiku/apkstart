@@ -1,0 +1,25 @@
+Partner Center 填法：Apps and games → ApkStart → 当前提交 → Store listings（商店一览）
+→ 选语言 → 「What's new in this version」（此版本中的新增功能），上限 1500 字符。
+中文、英文各填一次（每个语言单独保存）。
+
+说明：商店（MSIX）版的更新由 Microsoft Store 负责，更新时只下载变化的部分（差分更新），
+不会每次重装完整应用，也不会影响运行时、已装应用和快照。下面的「增量更新」一项描述的是
+从 GitHub / Gitee 安装的便携版新增能力，商店版用户无需关心、也不会因此重新下载系统镜像。
+
+—— 简体中文（粘贴下面整段）——
+
+0.6.4 更新：
+· App 可用电脑麦克风：修复模拟器配置把录音输入写死为「无」的问题，语音、通话、录音类应用现在能调用 PC 麦克风；设置 → 性能与资源新增「麦克风输入」开关（默认开启）。自动检测能发现麦克风被关并一键恢复；排查步骤见内置手册 6.9 节。
+· 独显/核显渲染生效：修复显卡被一律降级为软件渲染的问题，NVIDIA/AMD/Intel 一律优先用真实显卡（host）渲染，游戏和视频更流畅；崩溃时仍自动逐级降级，不影响稳定。设置新增「显卡偏好」下拉：系统默认 / 独显优先 / 核显优先，并显示是否已生效；说明见手册 6.10 节。
+· 转译层与反模拟诊断更准：修复 ARM 翻译层崩溃「自动切镜像重试」实际永不执行的死逻辑，改为按运行时真实翻译能力判断——翻译层已生效时如实告知属于应用兼容性限制，不再让你白等重启；对带反模拟/反调试检测的应用新增中文说明，明确这是限制而非故障。内置手册 6.3 节同步更新。
+· 声音开关更聪明：关闭安卓声音但保留麦克风时不再误关整条音频链路。
+· 保留 0.6.3 的启动动画焕新、应用提速、实验室多开、增量更新，以及 0.6.2 的内置手册与故障自动教程。
+
+—— English (United States) ——
+
+What's new in 0.6.4:
+· Apps can now use your PC microphone: fixed the emulator config that hard-coded audio input to "none", so voice, calling and recording apps work. New "Microphone input" switch under Settings → Performance & Resources (on by default). Auto-diagnostics detect a disabled microphone and restore it with one click; see manual section 6.9.
+· Discrete / integrated GPU rendering now works: fixed GPUs being forced to software rendering. NVIDIA, AMD and Intel all prefer real-GPU (host) rendering first for smoother games and video, with automatic fallback still in place. New "GPU preference" dropdown: System default / Discrete GPU / Integrated GPU, with an applied indicator; see manual section 6.10.
+· More accurate translation-layer and anti-emulator diagnosis: fixed dead logic where ARM translation crashes never triggered the "switch image and retry" path; it now checks the runtime's real translation capability, and reports an app-compatibility limit honestly instead of a pointless restart. Added a clear Chinese explanation for apps with anti-emulator / anti-debugging detection. Manual section 6.3 updated.
+· Smarter sound switch: turning off Android sound while keeping the microphone no longer shuts down the whole audio chain.
+· Keeps 0.6.3 features (refreshed animation, faster launches, Labs multi-window, incremental updates) and 0.6.2 features (built-in manual, automatic help).

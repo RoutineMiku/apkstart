@@ -1,4 +1,4 @@
-# UI action probe (ASCII only): synthesize real mouse input for acceptance tests.
+﻿# UI action probe (ASCII only): synthesize real mouse input for acceptance tests.
 #   click  X Y      left click at screen coords
 #   xdown / xup     side button 1 (BROWSER_BACK) press / release
 #   move   X Y      move cursor

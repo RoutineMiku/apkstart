@@ -38,7 +38,10 @@ function describeExitCode(code) {
     case 1: return '启动参数或环境错误';
     case 3221225477: return '0xC0000005 访问冲突，渲染后端崩溃';
     case 3221225725: return '0xC00000FD 栈溢出';
-    case 3221225781: return '0xC0000135 缺少 DLL（VC++ 运行库 / 运行时组件被杀毒删除）';
+    // 0xC0000135 只说明「某个依赖 DLL 没加载成功」，不能据此断定是 VC++ 没装
+    // 或杀毒删文件：商店版从 WindowsApps 只读目录拉起子进程时同样会报这个码。
+    // 具体是哪个 DLL，要看 WER 的 FaultingModuleName，别在 UI 上替用户下结论。
+    case 3221225781: return '0xC0000135 依赖 DLL 加载失败（原因待查，见内置手册 6.8）';
     case 3221225506: return '0xC0000022 拒绝访问（驱动或权限问题）';
     case 3221225595: return '0xC000007B 镜像位数不匹配或 DLL 损坏';
     default: return '';
@@ -490,7 +493,10 @@ class EmulatorEngine {
       // 快照完全由命令行 -snapshot apkstart 控制：用独立名字，绝不误加载
       // 旧版遗留的 default_boot（那是 API30 镜像的内存状态，加载必进引导循环）。
       'hw.sdCard=no',
-      'hw.audioInput=none',
+      // 麦克风输入：0.6.4 起默认开启，让语音/通话/录音类应用能用 PC 麦克风。
+      // 旧版写死 none 会让 guest 里查不到任何录音设备（AudioRecord 直接失败）。
+      // 用户可在设置里显式关掉（engine.microphone=false）。驱动补丁可覆盖此键。
+      `hw.audioInput=${this.settings?.engine?.microphone === false ? 'no' : 'yes'}`,
       'hw.camera.back=none',
       'hw.camera.front=none',
       'hw.gps=no',
@@ -643,8 +649,11 @@ class EmulatorEngine {
     const args = [
       '-avd', AVD_NAME,
       '-port', String(port),
-      // 音频：默认开启（让安卓应用的提示音/视频声音能放出来）。      // 仅当用户在设置里显式关闭时才传 -no-audio 省一点 CPU。
-      ...(this.settings?.engine?.audio === false ? ['-no-audio'] : []),
+      // 音频：-no-audio 会连麦克风一起关掉（整个音频子系统都停）。
+      // 只有「声音」和「麦克风」都显式关闭时才传它省 CPU；
+      // 只要有一边还开着就必须保留音频子系统，否则 config.ini 的 hw.audioInput=yes 也白设。
+      ...(this.settings?.engine?.audio === false && this.settings?.engine?.microphone === false
+        ? ['-no-audio'] : []),
       '-no-boot-anim',
       '-no-metrics',
       // 关掉崩溃上报：一旦历史崩溃报告存在，emulator 会弹「同意上传」模态框，

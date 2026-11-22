@@ -662,18 +662,34 @@ class Installer {
         throw err;
       }
     } catch (e) {
-      if (e.code === 'APP_CRASHED' && !this.runtime.provisioner.playImageInfo().ok) {
-        // 崩溃来自 ARM 翻译层：自动切镜像、重装备份 APK、再启动一次
-        onLog('检测到 ARM 翻译层崩溃，正在自动切换兼容镜像…');
-        await this.ensureCompatImage(onLog ? (m) => onLog(m.message || '') : () => {});
-        const rt2 = await this.switchToCompat((m) => onLog(m.message || ''));
-        if (app && app.apkPath && fs.existsSync(app.apkPath)) {
-          try { await rt2.client.install(app.apkPath); } catch (_) { /* 保留原包 */ }
+      if (e.code === 'APP_CRASHED' && e.crash) {
+        // 崩溃日志明确指向 ARM 翻译层。关键：0.6.3 只有一份带翻译层的通用镜像，
+        // playImageInfo().ok 恒为 true —— 不能再拿 !ok 当「要不要切镜像」的开关，
+        // 那样这个分支永远进不去，手册承诺的「自动重试」就成了死代码。
+        // 真正要问的是「当前这台运行时有没有翻译能力」：
+        //   没有翻译层 / 压根没有兼容镜像文件 → 切镜像 + 重启才有意义
+        //     （轻量版首次遇到 ARM 应用、复用了无翻译层的旧快照/旧运行时）；
+        //   翻译层已生效 → 崩溃是应用自身与翻译层的兼容性限制（如 DoBadTrampoline、
+        //     反模拟检测），再切一次还是同一份镜像，纯属白等，如实抛中文结论即可。
+        const hasArm = await runningHasArm(rt.client);
+        const playReady = this.runtime.provisioner.playImageInfo().ok;
+        const needSwitch = hasArm === false || !playReady;
+        if (needSwitch) {
+          onLog('当前运行时未启用 ARM 翻译层，正在自动切换兼容镜像后重试…');
+          await this.ensureCompatImage((m) => onLog(m.message || ''));
+          const rt2 = await this.switchToCompat((m) => onLog(m.message || ''));
+          if (app && app.apkPath && fs.existsSync(app.apkPath)) {
+            try { await rt2.client.install(app.apkPath); } catch (_) { /* 保留原包 */ }
+          }
+          await rt2.client.startApp(app ? app.package : pkg, app ? app.activity : null, {
+            freeform: settings.freeform,
+            bounds: app ? app.bounds : null,
+          });
+        } else {
+          // 翻译层已经生效，这次崩溃属于应用自身的反模拟 / 兼容性限制，不是故障。
+          // friendlyLaunchError 已给出中文结论并指向手册 6.3，直接抛出即可。
+          throw e;
         }
-        await rt2.client.startApp(app ? app.package : pkg, app ? app.activity : null, {
-          freeform: settings.freeform,
-          bounds: app ? app.bounds : null,
-        });
       } else {
         throw e;
       }

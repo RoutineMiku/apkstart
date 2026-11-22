@@ -133,7 +133,7 @@ async function collect(ctx) {
     network: {},
     logs: {},
     accel: { checked: false },
-    audio: { checked: false, enabled: null, serviceRunning: null },
+    audio: { checked: false, enabled: null, serviceRunning: null, micEnabled: null },
   };
 
   // ---- 设置（最便宜，先取） ----
@@ -155,6 +155,8 @@ async function collect(ctx) {
   obs.audio = {
     checked: true,
     enabled: !(settings.engine && settings.engine.audio === false),
+    // 麦克风输入：默认开启；显式关掉时应用将查不到录音设备（语音/通话失效）。
+    micEnabled: !(settings.engine && settings.engine.microphone === false),
     serviceRunning: await withTimeout(queryWindowsAudioService(), 9000, null),
   };
 

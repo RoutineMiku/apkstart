@@ -1,4 +1,4 @@
-# List every top-level window of the emulator process(es) with class/rect/visible.
+﻿# List every top-level window of the emulator process(es) with class/rect/visible.
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

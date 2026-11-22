@@ -1,4 +1,4 @@
-# Probe: rotate the emulator with Ctrl+Left / Ctrl+Right (Qt UI shortcut) and observe.
+﻿# Probe: rotate the emulator with Ctrl+Left / Ctrl+Right (Qt UI shortcut) and observe.
 param([switch]$Right)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'

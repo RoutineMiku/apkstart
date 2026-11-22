@@ -1,4 +1,4 @@
-# Capture the ApkStart main window (with embedded Android view) to PNG. v2
+﻿# Capture the ApkStart main window (with embedded Android view) to PNG. v2
 param([string]$Out = "hongguo-final.png")
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing

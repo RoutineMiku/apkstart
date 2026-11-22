@@ -1053,6 +1053,7 @@ function fillSettings(s) {
   if ($('setMirrorPrefix')) $('setMirrorPrefix').value = (s.runtime && s.runtime.mirrorPrefix) || '';
   if ($('setConnections')) $('setConnections').value = Number((s.runtime && s.runtime.downloadConnections) || 8);
   $('setAudio').checked = s.engine.audio !== false;
+  if ($('setMicrophone')) $('setMicrophone').checked = s.engine.microphone !== false;
   $('setLiteMode').checked = s.engine.liteMode !== false;
   $('setPrewarm').checked = s.engine.prewarm !== false;
   $('setPriorityMode').value = ['performance', 'game'].includes(s.engine.priorityMode)
@@ -1063,6 +1064,11 @@ function fillSettings(s) {
     ? s.engine.mouseWheelMode : 'smooth';
   $('setMouseSideButtons').checked = !!s.engine.mouseSideButtons;
   if ($('setKeymapEnabled')) $('setKeymapEnabled').checked = s.engine.keymapEnabled !== false;
+  // 实验室：原生多窗口多开（实验性）
+  if ($('setMultiWindow')) $('setMultiWindow').checked = !!s.engine.multiWindow;
+  if ($('setKeepBackground')) $('setKeepBackground').value = String(
+    Number(s.engine.keepBackground) >= 0 ? Number(s.engine.keepBackground) : 1,
+  );
   $('setCompat').checked = !!(s.runtime && s.runtime.compatImage);
   $('setAutoShortcut').checked = !!s.createShortcutOnInstall;
   $('setStartMenuShortcut').checked = s.createStartMenuShortcut !== false;
@@ -1073,6 +1079,7 @@ function fillSettings(s) {
   $('setAutoStart').checked = s.autoStart !== false;
   const eng = s.engine || {};
   if ($('setResourceMode')) $('setResourceMode').value = eng.resourceMode || 'balanced';
+  if ($('setGpuPreference')) $('setGpuPreference').value = eng.gpuPreference || 'auto';
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
@@ -1129,6 +1136,7 @@ const SETTINGS_CATS = [
   { id: 'diag', get name() { return tr('v062.m0033'); } },
   { id: 'files', get name() { return tr('v062.m0034'); } },
   { id: 'about', get name() { return tr('v062.m0035'); } },
+  { id: 'lab', get name() { return tr('v064.m0002'); } },
 ];
 
 const settingsCatState = { cat: 'basic', query: '' };
@@ -1422,6 +1430,18 @@ async function openSettings() {
   api.doctorProfile().then((r) => {
     if (r && r.text) $('autoProfileText').textContent = r.text;
   }).catch(() => { $('autoProfileText').textContent = tr('m0146'); });
+  // 显卡偏好：显示 Windows 是否真的应用了（支持但没生效时提示重启安卓）
+  if ($('gpuPrefNote') && api.gpuStatus) {
+    api.gpuStatus().then((g) => {
+      if (!g || !g.supported) { $('gpuPrefNote').textContent = tr('v064.m0003'); return; }
+      const applied = g.applied || 'auto';
+      const want = g.mode || 'auto';
+      const label = { auto: tr('v064.m0004'), discrete: tr('v064.m0005'), integrated: tr('v064.m0006') };
+      $('gpuPrefNote').textContent = applied === want || want === 'auto'
+        ? tr('v064.m0007', [label[applied] || applied])
+        : tr('v064.m0008', [label[want] || want]);
+    }).catch(() => {});
+  }
   api.runtimeUsage().then((u) => {
     $('usageText').textContent = u
       ? tr('m0147', [u.totalText, u.reclaimable ? tr('m0148', [u.reclaimableText, u.count]) : tr('m0149')])
@@ -1649,6 +1669,12 @@ function bindSettings() {
       toast({ title: tr('m0178'), body: tr('m0179'), type: 'ok' });
     });
   }
+  if ($('setGpuPreference')) {
+    $('setGpuPreference').addEventListener('change', (e) => {
+      save({ engine: { gpuPreference: e.target.value } });
+      toast({ title: tr('v064.m0009'), body: tr('v064.m0010'), type: 'ok' });
+    });
+  }
   if ($('setRenderSize')) {
     $('setRenderSize').addEventListener('change', (e) => save({ engine: { renderSize: e.target.value } }));
   }
@@ -1751,6 +1777,9 @@ function bindSettings() {
     });
   }
   $('setAudio').addEventListener('change', (e) => save({ engine: { audio: e.target.checked } }));
+  if ($('setMicrophone')) {
+    $('setMicrophone').addEventListener('change', (e) => save({ engine: { microphone: e.target.checked } }));
+  }
   $('setLiteMode').addEventListener('change', (e) => save({ engine: { liteMode: e.target.checked } }));
   $('setPrewarm').addEventListener('change', (e) => save({ engine: { prewarm: e.target.checked } }));
   $('setPriorityMode').addEventListener('change', (e) => save({ engine: { priorityMode: e.target.value } }));
@@ -1766,6 +1795,22 @@ function bindSettings() {
     $('setKeymapEnabled').addEventListener('change', async (e) => {
       await api.keymap.setEnabled(e.target.checked);
       toast({ title: e.target.checked ? tr('v058.m0125') : tr('v058.m0126'), type: 'ok' });
+    });
+  }
+  // 实验室：多开开关与后台保留数。改完提示下次打开应用生效（切换应用路径才读它）。
+  if ($('setMultiWindow')) {
+    $('setMultiWindow').addEventListener('change', (e) => {
+      save({ engine: { multiWindow: e.target.checked } });
+      toast({
+        title: e.target.checked ? tr('v064.m0011') : tr('v064.m0012'),
+        body: e.target.checked ? tr('v064.m0013') : '',
+        type: 'ok',
+      });
+    });
+  }
+  if ($('setKeepBackground')) {
+    $('setKeepBackground').addEventListener('change', (e) => {
+      save({ engine: { keepBackground: Number(e.target.value) } });
     });
   }
   $('setDeepTrim').addEventListener('change', async (e) => {
@@ -2757,6 +2802,21 @@ async function fixIssue(issue) {
       // MSIX / 普通权限都拿不到系统服务的提权操作，直接把教程送到用户面前
       toast({ title: tr('v062.m0091'), body: tr('v062.m0092'), type: 'info', sticky: true });
       openManualForIssue(issue, 'clicked');
+      break;
+    }
+    case 'microphone': {
+      const t = toast({ title: tr('v064.m0014'), body: tr('v064.m0015'), type: 'info', sticky: true, spinner: true });
+      const s = await api.setSettings({ engine: { microphone: true } }).catch(() => null);
+      if (!s) { failFix(issue, t, tr('v064.m0016')); break; }
+      state.settings = s;
+      fillSettings(s);
+      const r = await api.restartRuntime().catch(() => ({ ok: false }));
+      if (r && r.ok !== false) {
+        t.update({ title: tr('v064.m0017'), body: tr('v064.m0018'), type: 'ok' });
+        setTimeout(t.dismiss, 3600);
+      } else {
+        failFix(issue, t, tr('v064.m0019'));
+      }
       break;
     }
     case 'repairNetwork': {

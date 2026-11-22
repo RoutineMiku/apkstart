@@ -50,6 +50,7 @@ const DEBUG_ISSUES = [
 ];
 
 const OVERRIDES = {
+  'gpu:status': () => ({ supported: true, mode: 'auto', applied: 'auto' }),
   'i18n:get': () => ({ locale: 'zh-CN', preference: 'zh-CN', messages: getCatalog('zh-CN') }),
   'settings:get': () => SETTINGS,
   'settings:set': () => SETTINGS,
@@ -143,7 +144,8 @@ app.whenReady().then(async () => {
     groups: document.querySelectorAll('#settingsBody [data-cat]').length,
     visible: Array.from(document.querySelectorAll('#settingsBody [data-cat]')).filter(g => !g.hidden).map(g => g.dataset.cat),
   }))()`);
-  step('导航项渲染出来了', navInfo.items === 8, `${navInfo.items} 项`);
+  step('导航项渲染出来了', navInfo.items === 9, `${navInfo.items} 项`);
+  step('有实验室分类', navInfo.cats.indexOf('lab') >= 0, navInfo.cats.join(','));
   // 注意：分类会被记住（localStorage），所以这里只断言「同一时刻只显示一个分类的分组」
   const oneCat = navInfo.visible.length > 0 && navInfo.visible.every((c) => c === navInfo.visible[0]);
   step('同一时刻只显示一个分类的分组', oneCat, `默认可见：${navInfo.visible.join(',')}`);
@@ -159,6 +161,36 @@ app.whenReady().then(async () => {
   step('导航高亮跟着切换', afterSwitch.on === 'display', `高亮：${afterSwitch.on}`);
 
   await win.capturePage().then((img) => fs.writeFileSync(path.join(OUT, 'settings-display.png'), img.toPNG()));
+
+  // 点「性能与资源」，看麦克风与显卡偏好
+  await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="perf"]').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  const perf = await evalJs(`(() => {
+    const mic = document.getElementById('setMicrophone');
+    const gpu = document.getElementById('setGpuPreference');
+    return {
+      hasMic: !!mic,
+      micChecked: mic ? mic.checked : false,
+      hasGpu: !!gpu,
+      gpuOptions: gpu ? Array.from(gpu.options).map(o => o.value) : [],
+      gpuValue: gpu ? gpu.value : '',
+    };
+  })()`);
+  step('性能页有麦克风开关且默认开启', perf.hasMic && perf.micChecked, `mic=${perf.hasMic} checked=${perf.micChecked}`);
+  step('性能页有显卡偏好下拉（自动/独显/核显）', perf.hasGpu && ['auto', 'discrete', 'integrated'].every((v) => perf.gpuOptions.includes(v)), perf.gpuOptions.join(','));
+
+  // 点「实验室」，看多开开关
+  await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="lab"]').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  const lab = await evalJs(`(() => ({
+    visible: Array.from(document.querySelectorAll('#settingsBody [data-cat]')).filter(g => !g.hidden).map(g => g.dataset.cat),
+    hasSwitch: !!document.getElementById('setMultiWindow'),
+    hasKeep: !!document.getElementById('setKeepBackground'),
+    notice: (document.querySelector('#labGroup .lab-notice') || {}).textContent || '',
+  }))()`);
+  step('切到「实验室」只显示该分类', lab.visible.length > 0 && lab.visible.every((c) => c === 'lab'), `可见：${lab.visible.join(',')}`);
+  step('实验室有多开开关与后台保留数', lab.hasSwitch && lab.hasKeep, `switch=${lab.hasSwitch} keep=${lab.hasKeep}`);
+  step('实验室有实验性提示', /实验/.test(lab.notice), lab.notice.slice(0, 30));
 
   // 点「诊断与修复」，看自动检测面板
   await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="diag"]').click()`);

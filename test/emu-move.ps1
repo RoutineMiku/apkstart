@@ -1,4 +1,4 @@
-# Move the emulator main window to a known spot, then full-screen shot.
+﻿# Move the emulator main window to a known spot, then full-screen shot.
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 Add-Type -TypeDefinition @'
 using System;
