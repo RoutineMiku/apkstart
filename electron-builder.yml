@@ -21,11 +21,13 @@ files:
   - "!node_modules/@napi-rs/lzma/*.ts"
   - "!node_modules/@napi-rs/lzma/browser-entry.*"
 
-# 只保留中英文界面语言（Electron locales 从 41MB 降到 ~3MB）
+# 只保留中英西界面语言（Electron locales 从 41MB 降到 ~3MB）
 electronLanguages:
   - zh-CN
   - zh-TW
   - en-US
+  - es
+  - es-419
 
 # 完整运行时（emulator + platform-tools + 系统镜像），由 build/prepare-runtime.js 生成。
 # 打进包里之后首次启动不再需要任何下载。

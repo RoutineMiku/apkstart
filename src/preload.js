@@ -3,7 +3,16 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
+// 界面语言：同步算好再交给页面，避免先闪一下中文再换成译文
+let uiLang = 'zh-CN';
+try {
+  const i18n = require('./i18n/i18n');
+  const store = require('./core/store');
+  uiLang = i18n.resolveLang(store.getSettings().uiLang, navigator.languages);
+} catch (_) { /* 读不到设置就保持中文 */ }
+
 contextBridge.exposeInMainWorld('apkstart', {
+  lang: uiLang,
   info: () => invoke('app:info'),
   listApps: () => invoke('apps:list'),
   pickApk: () => invoke('apk:pick'),
