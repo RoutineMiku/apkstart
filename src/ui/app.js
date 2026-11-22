@@ -2078,7 +2078,7 @@ function bindSettings() {
       }
       const items = r.items || [];
       if (!items.length) {
-        toast({ title: '很干净', body: '没有发现旧版本残留。', type: 'ok' });
+        toast({ title: '暂无可自动清理项', body: '没有发现可自动清理的旧版本残留。', type: 'info' });
         return;
       }
       const mb = Math.round((r.totalBytes || 0) / 1048576);
@@ -2087,9 +2087,9 @@ function bindSettings() {
       const ok = await api.confirm({
         type: 'warning',
         title: '清理旧版本残留？',
-        message: `找到 ${items.length} 项残留，约 ${mb} MB：`,
-        detail: `${lines.join('\n')}\n\n只删除「旧版本程序目录 / 已失效的卸载项 / 更新临时文件」，`
-          + '当前正在运行的版本和你的应用数据都不会动。',
+        message: `找到 ${items.length} 项清理候选，文件大小估算约 ${mb} MB：`,
+        detail: `${lines.join('\n')}\n\n只处理列表中的「旧版本程序目录 / 已失效的卸载项 / 更新临时文件 / 旧模拟器快照」。`
+          + '未通过检查或被占用的项目将跳过，并在结果中显示原因。',
         buttons: ['取消', '开始清理'],
         defaultId: 1,
         cancelId: 0,
@@ -2100,11 +2100,13 @@ function bindSettings() {
         toast({ title: '清理失败', body: (c && c.error) || '请重试', type: 'error' });
         return;
       }
-      const failNote = (c.failed && c.failed.length) ? `，${c.failed.length} 项被占用未删` : '';
+      const failNote = (c.failed && c.failed.length) ? `，${c.failed.length} 项未清理` : '';
+      const reasons = [...new Set((c.failed || []).map((x) => x.reason).filter(Boolean))].slice(0, 3);
+      const reasonNote = reasons.length ? `未清理原因：${reasons.join('；')}。` : '';
       toast({
-        title: '已清理旧版本残留',
-        body: `删除 ${c.removed.length} 项，释放 ${c.freedMB || 0} MB${failNote}。`,
-        type: 'ok',
+        title: '旧版本残留清理结果',
+        body: `删除 ${c.removed.length} 项，文件大小合计约 ${c.freedMB || 0} MB${failNote}。${reasonNote}`,
+        type: (c.failed && c.failed.length) ? 'info' : 'ok',
       });
       const u = await api.runtimeUsage();
       $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
