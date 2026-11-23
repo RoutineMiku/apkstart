@@ -14,7 +14,10 @@ const { app, ipcMain, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-const OUT = path.join(__dirname, 'out');
+const LANG = (process.env.APKSTART_LANG === 'en' || process.argv.includes('--en')) ? 'en' : 'zh';
+// 英文冒烟时默认打开漏翻收集；preload 在渲染进程启动时读这个变量
+if (LANG === 'en') process.env.APKSTART_I18N_COLLECT = '1';
+const OUT = path.join(__dirname, 'out', LANG === 'en' ? 'en' : 'zh');
 const UI = path.join(__dirname, '..', 'src', 'ui');
 
 const SETTINGS = {
@@ -39,6 +42,7 @@ const SETTINGS = {
   autoStart: true,
   notifyOnInstall: true,
   debug: { auto: true, intervalMin: 10, notify: true },
+  welcome: { disabled: true },
 };
 
 const DEBUG_ISSUES = [
@@ -51,7 +55,7 @@ const OVERRIDES = {
   'settings:get': () => SETTINGS,
   'settings:set': () => SETTINGS,
   'app:info': () => ({ version: '0.6.0', isDev: true, dataDir: 'C:\\data', runtimeDir: 'C:\\data\\runtime' }),
-  'apps:list': () => ({ apps: [] }),
+  'apps:list': () => [],
   'assoc:status': () => ({ registered: false }),
   'doctor:profile': () => ({ profile: {}, text: '均衡 · 4 核 / 4 GB / 720p' }),
   'doctor:selfCheck': () => ({ issues: [], accel: { ok: true }, free: 102400 }),
@@ -109,6 +113,8 @@ app.whenReady().then(async () => {
 
   for (const ch of CHANNELS) ipcMain.handle(ch, async () => ({}));
   for (const [ch, fn] of Object.entries(OVERRIDES)) ipcMain.handle(ch, async (_e, ...args) => fn(...args));
+  // 真实 preload 会用 sendSync 问一次界面语言；这里按环境变量回答，支持中英文冒烟。
+  ipcMain.on('i18n:bootstrap', (e) => { e.returnValue = { lang: LANG }; });
 
   const win = new BrowserWindow({
     width: 1180, height: 860, show: false,
@@ -119,11 +125,23 @@ app.whenReady().then(async () => {
     },
   });
   const errors = [];
+  const i18nMissing = [];
   win.webContents.on('console-message', (_e, level, message) => {
+    if (/\[i18n-missing\]/.test(message)) {
+      i18nMissing.push(message.replace(/^.*\[i18n-missing\]\s*/, ''));
+      return;
+    }
     if (level >= 2) errors.push(message);   // 2=warning, 3=error
   });
   await win.loadFile(path.join(UI, 'index.html'));
+  // 隐藏窗口的合成器不会重绘弹窗，capturePage 会拿到旧帧；showInactive 不抢焦点。
+  if (typeof win.showInactive === 'function') win.showInactive();
   await new Promise((r) => setTimeout(r, 1200));
+  // 欢迎卡会挡住设置页截图；先点掉（与真实用户点「开始使用」等价）
+  await win.webContents.executeJavaScript(
+    "(() => { const b = document.getElementById('welcomeOk'); if (b) b.click(); return true; })()",
+  );
+  await new Promise((r) => setTimeout(r, 300));
 
   const evalJs = (code) => win.webContents.executeJavaScript(code, true);
 
@@ -186,7 +204,7 @@ app.whenReady().then(async () => {
   }))()`);
   step('切到「实验室」只显示该分类', lab.visible.length > 0 && lab.visible.every((c) => c === 'lab'), `可见：${lab.visible.join(',')}`);
   step('实验室有多开开关与后台保留数', lab.hasSwitch && lab.hasKeep, `switch=${lab.hasSwitch} keep=${lab.hasKeep}`);
-  step('实验室有实验性提示', /实验/.test(lab.notice), lab.notice.slice(0, 30));
+  step('实验室有实验性提示', (LANG === 'en' ? /experimental/i : /实验/).test(lab.notice), lab.notice.slice(0, 30));
 
   // 点「诊断与修复」，看自动检测面板
   await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="diag"]').click()`);
@@ -201,7 +219,7 @@ app.whenReady().then(async () => {
   step('「诊断与修复」下能看到本机体检、驱动与自动检测', diag.visible.includes('diag') && diag.visible.length === 3, `可见：${diag.visible.join(',')}`);
   step('自动检测结果按分类分组渲染', diag.groups >= 3 && diag.items === 3, `${diag.groups} 组 / ${diag.items} 项`);
   step('每条问题都有「处理」按钮', diag.fixBtns === 3, `${diag.fixBtns} 个按钮`);
-  step('状态行显示上次检测时间', /上次检测/.test(diag.text), diag.text);
+  step('状态行显示上次检测时间', LANG === 'en' ? /Last checked/.test(diag.text) : /上次检测/.test(diag.text), diag.text);
 
   // 滚到自动检测面板再截图（等合成器跟上，避免拍到上一帧）
   await evalJs(`document.getElementById('autodebugGroup').scrollIntoView({ block: 'start' })`);
@@ -209,7 +227,7 @@ app.whenReady().then(async () => {
   await win.capturePage().then((img) => fs.writeFileSync(path.join(OUT, 'settings-diag.png'), img.toPNG()));
 
   console.log('\n[设置页 · 搜索]');
-  await evalJs(`(() => { const s = document.getElementById('setSearch'); s.value = '横屏'; s.dispatchEvent(new Event('input')); })()`);
+  await evalJs(`(() => { const s = document.getElementById('setSearch'); s.value = ${JSON.stringify(LANG === 'en' ? 'landscape' : '横屏')}; s.dispatchEvent(new Event('input')); })()`);
   await new Promise((r) => setTimeout(r, 300));
   const search = await evalJs(`(() => ({
     visible: Array.from(document.querySelectorAll('#settingsBody [data-cat]')).filter(g => !g.hidden).length,
@@ -234,6 +252,12 @@ app.whenReady().then(async () => {
   console.log('\n[设置页 · 渲染无异常]');
   const realErrors = errors.filter((e) => !/Autofill|devtools|Request Autofill/i.test(e));
   step('控制台没有报错', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
+  const missing = [...new Set(i18nMissing)];
+  if (missing.length) {
+    console.error(`\n[i18n] 界面还有 ${missing.length} 条中文没有译文：`);
+    for (const m of missing) console.error(`  ✗ ${m}`);
+  }
+  step('界面文案没有漏翻', missing.length === 0, `${missing.length} 条`);
 
   console.log(`\n结果：${passed} 通过，${failed} 失败`);
   app.exit(failed ? 1 : 0);
