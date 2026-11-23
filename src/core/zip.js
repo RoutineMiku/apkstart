@@ -104,7 +104,7 @@ class ZipArchive {
     for (let i = buf.length - 22; i >= maxScan; i--) {
       if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
     }
-    if (eocd < 0) throw new Error('不是有效的 ZIP/APK 文件（未找到 EOCD）');
+    if (eocd < 0) throw new Error('Not a valid ZIP/APK file (EOCD not found)');
 
     const { total, cdOffset } = readEndOfCentralDirectory(buf, eocd, 0);
     let offset = cdOffset;
@@ -145,18 +145,18 @@ class ZipArchive {
     const e = this.entries.get(name);
     if (!e) return null;
     const buf = this.buf;
-    if (e.localOffset + 30 > buf.length) throw new Error(`本地文件头越界: ${name}`);
+    if (e.localOffset + 30 > buf.length) throw new Error(`Local file header out of bounds: ${name}`);
     if (buf.readUInt32LE(e.localOffset) !== LOC_SIG) {
-      throw new Error(`本地文件头损坏: ${name}`);
+      throw new Error(`Corrupted local file header: ${name}`);
     }
     const nameLen = buf.readUInt16LE(e.localOffset + 26);
     const extraLen = buf.readUInt16LE(e.localOffset + 28);
     const start = e.localOffset + 30 + nameLen + extraLen;
-    if (start + e.compSize > buf.length) throw new Error(`条目数据越界: ${name}`);
+    if (start + e.compSize > buf.length) throw new Error(`Entry data out of bounds: ${name}`);
     const raw = buf.subarray(start, start + e.compSize);
     if (e.method === 0) return Buffer.from(raw);
     if (e.method === 8) return zlib.inflateRawSync(raw);
-    throw new Error(`不支持的压缩方式 ${e.method}: ${name}`);
+    throw new Error(`Unsupported compression method ${e.method}: ${name}`);
   }
 
   /** 列出匹配某个前缀/正则的条目名 */
@@ -171,10 +171,10 @@ class ZipArchive {
    */
   pipeTo(name, dest) {
     const e = this.entries.get(name);
-    if (!e) return Promise.reject(new Error(`条目不存在: ${name}`));
+    if (!e) return Promise.reject(new Error(`Entry does not exist: ${name}`));
     const buf = this.buf;
     if (buf.readUInt32LE(e.localOffset) !== LOC_SIG) {
-      return Promise.reject(new Error(`本地文件头损坏: ${name}`));
+      return Promise.reject(new Error(`Corrupted local file header: ${name}`));
     }
     const nameLen = buf.readUInt16LE(e.localOffset + 26);
     const extraLen = buf.readUInt16LE(e.localOffset + 28);
@@ -190,7 +190,7 @@ class ZipArchive {
         dest.end(raw);
         return;
       }
-      if (e.method !== 8) return done(new Error(`不支持的压缩方式 ${e.method}: ${name}`));
+      if (e.method !== 8) return done(new Error(`Unsupported compression method ${e.method}: ${name}`));
 
       const inflater = zlib.createInflateRaw();
       // 分片喂入，避免一次性把 GB 数据塞进 zlib 缓冲区
@@ -250,7 +250,7 @@ class ZipFile {
   }
 
   _parse() {
-    if (this.size < 22) throw new Error('不是有效的 ZIP/APK 文件（文件过小）');
+    if (this.size < 22) throw new Error('Not a valid ZIP/APK file (file too small)');
     const tailLen = Math.min(this.size, 22 + 65557 + 4096);
     const tailBase = this.size - tailLen;
     const tail = this._readAt(tailBase, tailLen);
@@ -258,11 +258,11 @@ class ZipFile {
     for (let i = tail.length - 22; i >= 0; i -= 1) {
       if (tail.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
     }
-    if (eocd < 0) throw new Error('不是有效的 ZIP/APK 文件（未找到 EOCD）');
+    if (eocd < 0) throw new Error('Not a valid ZIP/APK file (EOCD not found)');
 
     const { total, cdSize, cdOffset, eocdAbs } = readEndOfCentralDirectory(tail, eocd, tailBase);
     if (cdOffset + cdSize > this.size) {
-      throw new Error('ZIP 中央目录偏移异常');
+      throw new Error('Invalid ZIP central directory offset');
     }
 
     let cd = tail;
@@ -270,7 +270,7 @@ class ZipFile {
     if (cdOffset < tailBase || cdOffset + cdSize > eocdAbs) {
       // 中央目录不在尾部缓冲里（超大注释 / 多分卷），按声明大小精确读一段
       const len = Math.min(cdSize, 256 * 1024 * 1024);
-      if (len <= 0) throw new Error('ZIP 中央目录偏移异常');
+      if (len <= 0) throw new Error('Invalid ZIP central directory offset');
       cd = this._readAt(cdOffset, len);
       cdBase = cdOffset;
     }
@@ -310,9 +310,9 @@ class ZipFile {
 
   _range(name) {
     const e = this.entries.get(name);
-    if (!e) throw new Error(`条目不存在: ${name}`);
+    if (!e) throw new Error(`Entry does not exist: ${name}`);
     const head = this._readAt(e.localOffset, 30);
-    if (head.length < 30 || head.readUInt32LE(0) !== LOC_SIG) throw new Error(`本地文件头损坏: ${name}`);
+    if (head.length < 30 || head.readUInt32LE(0) !== LOC_SIG) throw new Error(`Corrupted local file header: ${name}`);
     const nameLen = head.readUInt16LE(26);
     const extraLen = head.readUInt16LE(28);
     const start = e.localOffset + 30 + nameLen + extraLen;
@@ -324,13 +324,13 @@ class ZipFile {
     // read() 会把整个条目解到内存：给一个明确上限，避免未来某个调用点顺手
     // 拿来读 GB 级镜像（那正是 issue #21 里「大包必炸」的形态）。
     if (e.compSize > MAX_READ) {
-      throw new Error(`条目过大（${(e.compSize / 1048576).toFixed(0)}MB），请改用 pipeTo: ${name}`);
+      throw new Error(`Entry too large (${(e.compSize / 1048576).toFixed(0)}MB), use pipeTo instead: ${name}`);
     }
     const raw = this._readAt(start, e.compSize);
-    if (raw.length < e.compSize) throw new Error(`条目数据被截断: ${name}`);
+    if (raw.length < e.compSize) throw new Error(`Entry data truncated: ${name}`);
     if (e.method === 0) return raw;
     if (e.method === 8) return zlib.inflateRawSync(raw);
-    throw new Error(`不支持的压缩方式 ${e.method}: ${name}`);
+    throw new Error(`Unsupported compression method ${e.method}: ${name}`);
   }
 
   pipeTo(name, dest) {
@@ -342,7 +342,7 @@ class ZipFile {
       dest.on('error', done);
       dest.on('finish', () => done(null));
       if (e.compSize === 0) { dest.end(); return undefined; }
-      if (e.method !== 0 && e.method !== 8) return done(new Error(`不支持的压缩方式 ${e.method}: ${name}`));
+      if (e.method !== 0 && e.method !== 8) return done(new Error(`Unsupported compression method ${e.method}: ${name}`));
       const src = fs.createReadStream(null, {
         fd: this.fd, autoClose: false, start, end: Math.max(start, end),
       });

@@ -135,7 +135,7 @@ function scanDirs(installDir) {
       kind: 'dir',
       path: full,
       size: dirSize(full),
-      note: '旧版本程序目录（含 ' + EXE + '）',
+      note: 'Legacy version directory (contains ' + EXE + ')',
     });
   };
   for (const root of candidateRoots(installDir)) {
@@ -194,7 +194,7 @@ function scanRegistry() {
         kind: 'registry',
         path: key,
         size: 0,
-        note: `失效的卸载项${disp ? `：${String(disp).trim()}` : ''}`,
+        note: `Broken uninstall entry${disp ? `: ${String(disp).trim()}` : ''}`,
       });
     }
   }
@@ -216,7 +216,7 @@ function scanTemp(dataDir) {
       const full = path.join(d, name);
       let size = 0;
       try { size = e.isDirectory() ? dirSize(full) : fs.statSync(full).size; } catch (_) { /* ignore */ }
-      out.push({ kind: 'temp', path: full, size, note: '更新下载的临时文件' });
+      out.push({ kind: 'temp', path: full, size, note: 'Update download temporary file' });
     }
   }
   return out;
@@ -238,7 +238,7 @@ function scanSnapshots(avdHome) {
       kind: 'dir',
       path: full,
       size: dirSize(full),
-      note: e.name.startsWith('default_boot') ? '旧版遗留的快速启动快照' : '废弃的快照残留',
+      note: e.name.startsWith('default_boot') ? 'Legacy Quickboot snapshot' : 'Obsolete snapshot leftover',
     });
   }
   return out;
@@ -271,20 +271,20 @@ function clean(items, { installDir }) {
     try {
       if (it.kind === 'dir') {
         // 双保险：绝不删当前正在运行的目录
-        if (norm(it.path) === cur) { failed.push({ path: it.path, reason: '这是当前正在运行的版本' }); continue; }
-        if (!fs.existsSync(path.join(it.path, EXE))) { failed.push({ path: it.path, reason: '目录里没有 ' + EXE }); continue; }
+        if (norm(it.path) === cur) { failed.push({ path: it.path, reason: 'Currently running version' }); continue; }
+        if (!fs.existsSync(path.join(it.path, EXE))) { failed.push({ path: it.path, reason: 'Missing ' + EXE }); continue; }
         if (rm(it.path)) { freed += it.size || 0; removed.push(it.path); }
-        else failed.push({ path: it.path, reason: '文件被占用（可能有窗口还开着）' });
+        else failed.push({ path: it.path, reason: 'File in use (a window may still be open)' });
       } else if (it.kind === 'registry') {
         const r = execFileSync('reg', ['delete', it.path, '/f'], { windowsHide: true, timeout: 10000 });
         void r;
         removed.push(it.path);
       } else if (it.kind === 'temp') {
         if (rm(it.path)) { freed += it.size || 0; removed.push(it.path); }
-        else failed.push({ path: it.path, reason: '文件被占用' });
+        else failed.push({ path: it.path, reason: 'File in use' });
       } else if (it.kind === 'shortcut') {
         if (rm(it.path)) removed.push(it.path);
-        else failed.push({ path: it.path, reason: '删除失败' });
+        else failed.push({ path: it.path, reason: 'Delete failed' });
       }
     } catch (e) {
       failed.push({ path: it.path, reason: e.message });

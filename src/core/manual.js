@@ -11,29 +11,29 @@
 
 /** 章节 id 与 src/ui/manual.html 的锚点一一对应（由 docs/build-manual-html.py 生成） */
 const TOPICS = Object.freeze({
-  overview: { id: 'overview', anchor: 'apkstart-产品使用手册与问题解决方案', title: '使用手册 · 目录' },
-  accel: { id: 'accel', anchor: '6-1-提示-未启用硬件加速-开机很慢', title: '未启用硬件加速 / 开机很慢' },
-  install: { id: 'install', anchor: '6-2-安装失败-install_failed_', title: '安装失败（INSTALL_FAILED_*）' },
-  arm: { id: 'arm', anchor: '6-3-系统镜像没有-arm-转译层-arm-应用装不上或闪退', title: 'ARM 转译层 / ARM 应用装不上' },
-  adb: { id: 'adb', anchor: '6-4-adb-未授权-允许-usb-调试', title: 'adb 未授权（允许 USB 调试）' },
-  startup: { id: 'startup', anchor: '6-5-双击图标没反应-一直转圈-出现带旋转按钮的窗口', title: '打不开 / 带旋转按钮的窗口' },
-  other: { id: 'other', anchor: '6-6-其它启动类问题速查表', title: '其它启动类问题速查表' },
-  sound: { id: 'sound', anchor: '6-7-应用没有声音-声音很小', title: '应用没有声音 / 声音很小' },
-  dll: { id: 'dll', anchor: '6-8-商店版启动失败-0xc0000135-dll-加载失败', title: '商店版启动失败 / 0xC0000135（DLL 加载失败）' },
-  mic: { id: 'mic', anchor: '6-9-应用用不到麦克风-无法语音通话录音', title: '应用用不到麦克风 / 无法语音通话录音' },
-  gpu: { id: 'gpu', anchor: '6-10-独显-核显渲染-显卡偏好', title: '独显 / 核显渲染（显卡偏好）' },
-  diagnose: { id: 'diagnose', anchor: '5-4-内置使用手册与自动教程', title: '内置手册与自动教程' },
-  settings: { id: 'settings', anchor: '3-6-设置页导航', title: '设置页导航' },
-  storage: { id: 'storage', anchor: '8-数据与目录说明', title: '数据与目录说明' },
-  network: { id: 'network', anchor: '5-2-自动检测-自动-debug', title: '自动检测与网络修复' },
+  overview: { id: 'overview', anchor: 'apkstart-user-manual-troubleshooting-guide', title: 'User Manual · Contents' },
+  accel: { id: 'accel', anchor: '6-1-hardware-acceleration-not-enabled-slow-boot', title: 'Hardware Acceleration Not Enabled / Slow Boot' },
+  install: { id: 'install', anchor: '6-2-installation-failed-install_failed_', title: 'Installation Failed (INSTALL_FAILED_*)' },
+  arm: { id: 'arm', anchor: '6-3-missing-arm-translation-layer-arm-app-fails-to-install-or-crashes', title: 'ARM Translation Layer / ARM App Fails to Install' },
+  adb: { id: 'adb', anchor: '6-4-adb-unauthorized-allow-usb-debugging', title: 'adb Unauthorized (Allow USB Debugging)' },
+  startup: { id: 'startup', anchor: '6-5-double-clicking-icon-does-nothing-infinite-spinner-window-with-rotate-button', title: 'Launch Failure / Window with Rotate Button' },
+  other: { id: 'other', anchor: '6-6-other-startup-issues-quick-reference', title: 'Other Startup Issues Quick Reference' },
+  sound: { id: 'sound', anchor: '6-7-no-sound-low-volume-in-apps', title: 'No Sound / Low Volume in Apps' },
+  dll: { id: 'dll', anchor: '6-8-store-edition-launch-failure-0xc0000135-dll-load-failed', title: 'Store Edition Launch Failure / 0xC0000135 (DLL Load Failed)' },
+  mic: { id: 'mic', anchor: '6-9-app-cannot-access-microphone-voice-calls-recording-fail', title: 'App Cannot Access Microphone / Recording Fail' },
+  gpu: { id: 'gpu', anchor: '6-10-discrete-integrated-gpu-rendering-gpu-preference', title: 'Discrete / Integrated GPU Rendering (GPU Preference)' },
+  diagnose: { id: 'diagnose', anchor: '5-4-built-in-user-manual-auto-tutorials', title: 'Built-in User Manual & Auto-Tutorials' },
+  settings: { id: 'settings', anchor: '3-6-settings-navigation', title: 'Settings Navigation' },
+  storage: { id: 'storage', anchor: '8-data-directory-layout', title: 'Data & Directory Layout' },
+  network: { id: 'network', anchor: '5-2-auto-debug-automatic-diagnostics', title: 'Auto-Debug & Network Repair' },
 });
 
 // 反模拟 / 安全校验导致的启动退出也归到 6.3：该章节末尾已说明这类应用属于限制。
-const ARM_RE = /NO_MATCHING_ABIS|DoBadTrampoline|libndk_translation|UnsatisfiedLinkError|arm64-v8a|armeabi-v7a|ARM 翻译层|ARM 转译层|反模拟|反仿真|反调试|anti[-_ ]?emulat|emulator.?detect|safetynet|play.?integrity/i;
-const ADB_RE = /ADB_UNAUTHORIZED|unauthorized|允许 USB 调试|调试授权/i;
-const SOUND_RE = /audio|AUDIO|sound|声音|音量|静音|Audiosrv/i;
+const ARM_RE = /NO_MATCHING_ABIS|DoBadTrampoline|libndk_translation|UnsatisfiedLinkError|arm64-v8a|armeabi-v7a|ARM translation|ARM 翻译层|ARM 转译层|反模拟|反仿真|反调试|anti[-_ ]?emulat|emulator.?detect|safetynet|play.?integrity/i;
+const ADB_RE = /ADB_UNAUTHORIZED|unauthorized|Allow USB debugging|USB debugging|debugging authorization|允许 USB 调试|调试授权/i;
+const SOUND_RE = /audio|AUDIO|sound|volume|mute|声音|音量|静音|Audiosrv/i;
 // 0xC0000135 / DLL 加载失败： Decimal 3221225781 也要认，诊断里两种写法都出现
-const DLL_RE = /0x0?c0000135|3221225781|STATUS_DLL_NOT_FOUND|DLL 加载失败|依赖 DLL|missing DLL|MSVCP140|VCRUNTIME|FaultingModuleName/i;
+const DLL_RE = /0x0?c0000135|3221225781|STATUS_DLL_NOT_FOUND|DLL load failed|DLL 加载失败|依赖 DLL|missing DLL|MSVCP140|VCRUNTIME|FaultingModuleName/i;
 
 /** 自动检测的问题 code → 章节 id */
 const ISSUE_MAP = Object.freeze({
@@ -71,11 +71,11 @@ function topicByText(text) {
   if (ADB_RE.test(s)) return 'adb';
   if (SOUND_RE.test(s)) return 'sound';
   if (DLL_RE.test(s)) return 'dll';
-  if (/INSTALL_FAILED|INSTALL_PARSE|签名|安装包|APK 损坏/i.test(s)) return 'install';
-  if (/硬件加速|虚拟机监控程序|WHPX|AEHD|hypervisor|accel/i.test(s)) return 'accel';
-  if (/attach failed|emu:0|旋转|嵌入|打不开|没反应|图标/i.test(s)) return 'startup';
-  if (/磁盘|空间|disk|共享目录|数据分区/i.test(s)) return 'storage';
-  if (/网络|联网|DNS|下载源/i.test(s)) return 'network';
+  if (/INSTALL_FAILED|INSTALL_PARSE|signature|invalid apk|签名|安装包|APK 损坏/i.test(s)) return 'install';
+  if (/hardware acceleration|hypervisor|WHPX|AEHD|accel|硬件加速|虚拟机监控程序/i.test(s)) return 'accel';
+  if (/attach failed|emu:0|rotate|embedded|cannot lock AVD|failed to start|旋转|嵌入|打不开|没反应|图标/i.test(s)) return 'startup';
+  if (/disk|space|shared folder|data partition|磁盘|空间|共享目录|数据分区/i.test(s)) return 'storage';
+  if (/network|DNS|download source|网络|联网|下载源/i.test(s)) return 'network';
   return 'overview';
 }
 
@@ -101,8 +101,8 @@ function topicForError(text) {
   if (ADB_RE.test(s)) return TOPICS.adb;
   if (SOUND_RE.test(s)) return TOPICS.sound;
   if (DLL_RE.test(s)) return TOPICS.dll;
-  if (/INSTALL_|PARSE_FAILED|安装失败|签名|安装包/.test(s)) return TOPICS.install;
-  if (/attach failed|emu:0|device not found|旋转窗口/.test(s)) return TOPICS.startup;
+  if (/INSTALL_|PARSE_FAILED|Install failed|signature|安装失败|签名|安装包/i.test(s)) return TOPICS.install;
+  if (/attach failed|emu:0|device not found|rotate button|旋转窗口/i.test(s)) return TOPICS.startup;
   return topicByText(s) === 'overview' ? TOPICS.install : TOPICS[topicByText(s)];
 }
 

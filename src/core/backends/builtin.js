@@ -21,11 +21,11 @@ const { diskRequiredMB, diskVerdict, hostProfile, memoryLimits, memVerdict, disk
 class BuiltinBackend extends Backend {
   static get id() { return 'builtin'; }
 
-  static get label() { return '自带运行时（Android Emulator + QEMU）'; }
+  static get label() { return 'Built-in Runtime (Android Emulator + QEMU)'; }
 
   static get summary() {
-    return '零第三方依赖：apkstart 自己下载并管理 Android 14 镜像，ARM 应用走镜像自带的翻译层。'
-      + '首次启动约 25 秒，之后靠 quickboot 快照秒进。';
+    return 'Zero third-party dependencies: ApkStart downloads and manages the Android 14 image, with built-in ARM translation. '
+      + 'First boot takes ~25s, then quickboot snapshots resume in seconds.';
   }
 
   static get embedCapable() { return true; }
@@ -53,28 +53,28 @@ class BuiltinBackend extends Backend {
   running() { return !!(this.rt && this.rt.emuRunning); }
 
   async probe() {
-    if (!this.rt) return { ok: false, found: false, detail: '运行时未初始化' };
+    if (!this.rt) return { ok: false, found: false, detail: 'Runtime not initialized' };
     const p = this.rt.provisioner.paths();
     const found = fs.existsSync(p.emulatorExe) || fs.existsSync(p.adbExe);
     return { ok: true, found, path: p.emulatorExe, detail: p.root };
   }
 
   async check() {
-    if (!this.rt) return { ok: false, reason: '运行时未初始化' };
+    if (!this.rt) return { ok: false, reason: 'Runtime not initialized' };
     const env = await this.rt.provisioner.checkEnv().catch(() => null);
-    if (!env) return { ok: false, reason: '运行时探测失败' };
-    if (!env.adb.ok) return { ok: false, reason: '缺 adb', needs: 'adb' };
-    if (!env.emulator.ok) return { ok: false, reason: '缺 Android Emulator', needs: 'emulator' };
-    if (!env.sysimg.ok) return { ok: false, reason: '缺系统镜像', needs: 'sysimg' };
+    if (!env) return { ok: false, reason: 'Runtime probe failed' };
+    if (!env.adb.ok) return { ok: false, reason: 'Missing adb', needs: 'adb' };
+    if (!env.emulator.ok) return { ok: false, reason: 'Missing Android Emulator', needs: 'emulator' };
+    if (!env.sysimg.ok) return { ok: false, reason: 'Missing system image', needs: 'sysimg' };
     return { ok: true, env };
   }
 
   async resolveAdb() { return this.rt ? this.rt.adbPath() : ''; }
 
   async ensure({ onLog = () => {} } = {}) {
-    if (!this.rt) return { ok: false, error: '运行时未初始化' };
+    if (!this.rt) return { ok: false, error: 'Runtime not initialized' };
     const r = await this.rt.ensure({ onLog });
-    if (!r || !r.ok) return { ok: false, error: (r && r.error) || '安卓运行时未能启动' };
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'Android runtime failed to start' };
     // serial 用可写字段（见 syncSerial 的说明），ensure 成功后同步一次
     this.syncSerial();
     this.adbPath = this.rt.adbPath();
@@ -100,13 +100,13 @@ class BuiltinBackend extends Backend {
   }
 
   async stop({ graceful = true } = {}) {
-    if (!this.rt) return { ok: false, error: '运行时未初始化' };
+    if (!this.rt) return { ok: false, error: 'Runtime not initialized' };
     const ok = await this.rt.stop({ graceful }).catch((e) => ({ error: e.message }));
     return { ok: ok !== false };
   }
 
   async install(component, onProgress = () => {}) {
-    if (!this.rt) return { ok: false, error: '运行时未初始化' };
+    if (!this.rt) return { ok: false, error: 'Runtime not initialized' };
     const prov = this.rt.provisioner;
     switch (component) {
       case 'runtime': return prov.installRuntimePack(onProgress);
@@ -116,7 +116,7 @@ class BuiltinBackend extends Backend {
       case 'playimg': return prov.installPlayImage(onProgress);
       case 'aehd': return prov.installAehd(onProgress);
       case 'qemu': return prov.installQemu(onProgress);
-      default: return { ok: false, error: `未知组件 ${component}` };
+      default: return { ok: false, error: `Unknown component ${component}` };
     }
   }
 
@@ -149,8 +149,8 @@ class BuiltinBackend extends Backend {
       freeMB,
       pending: false,
       verdict: memVerdict(memMB, host.totalMB),
-      note: '自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」——'
-        + '能就地扩就保留已装应用，安卓正在用快速启动差量盘时会提示你重置后按新容量重建。',
+      note: 'Built-in runtime RAM/CPU changes take effect on next Android boot; after increasing Data Partition, click "Expand Now" — '
+        + 'resizes in-place when possible, or prompts to rebuild if using a Quickboot differential disk.',
     };
   }
 
@@ -168,8 +168,8 @@ class BuiltinBackend extends Backend {
     if (capGB && capGB * 1024 < need) {
       return {
         ok: false,
-        message: `安卓数据分区不足：当前 ${capGB} GB，这个游戏建议至少 ${Math.ceil(need / 1024)} GB。`
-          + '请在设置 → 引擎里把「数据分区容量」调大后重启安卓（会就地扩容，不丢已装应用）。',
+        message: `Insufficient Android data partition: currently ${capGB} GB, this game recommends at least ${Math.ceil(need / 1024)} GB. `
+          + 'Please increase "Data partition size" in Settings → Engine and restart Android (expands in place without losing installed apps).',
       };
     }
     return { ok: true, requiredMB: need };

@@ -45,9 +45,9 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   };
   const add = (p, size, reason, kind = 'file') => candidates.push({ path: p, size, reason, kind });
 
-  groupOf('emulator 引擎', path.join(root, 'emulator'));
-  groupOf('系统镜像（只读基础层）', path.join(root, 'system-images'));
-  groupOf('AVD 可写层 / 快照', path.join(root, 'avd'));
+  groupOf('emulator engine', path.join(root, 'emulator'));
+  groupOf('System image (read-only base layer)', path.join(root, 'system-images'));
+  groupOf('AVD writable layer / snapshots', path.join(root, 'avd'));
   groupOf('platform-tools', path.join(root, 'platform-tools'));
 
   // 1) QEMU 只需要 x86_64 一个目标；包里另外 7 个架构的二进制纯属浪费
@@ -55,7 +55,7 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   if (exists(qemuDir)) {
     for (const f of walk(qemuDir)) {
       if (/qemu-system-(aarch64|armel|i386)/i.test(path.basename(f.path))) {
-        add(f.path, f.size, '非 x86_64 的 QEMU 目标，运行时用不到');
+        add(f.path, f.size, 'Non-x86_64 QEMU target, unused at runtime');
       }
     }
   }
@@ -63,7 +63,7 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   // 2) 镜像包里的许可证文本 / 冗余目录
   for (const f of walk(path.join(root, 'system-images'))) {
     if (/^(NOTICE\.txt|source\.properties)$/i.test(path.basename(f.path)) && f.size > 1024 * 1024) {
-      add(f.path, f.size, '镜像包内的大体积说明文件');
+      add(f.path, f.size, 'Large notice/metadata file inside system image package');
     }
   }
 
@@ -71,10 +71,10 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   const play34 = path.join(root, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64', 'system.img');
   if (exists(play34)) {
     const legacy = path.join(root, 'system-images', 'android-30');
-    if (exists(legacy)) add(legacy, dirSize(legacy), '旧版 API 30 镜像（含过时的 ARM 翻译层）', 'dir');
+    if (exists(legacy)) add(legacy, dirSize(legacy), 'Legacy API 30 image (with outdated ARM translation layer)', 'dir');
   }
   const stray = path.join(root, 'x86_64');
-  if (exists(stray)) add(stray, dirSize(stray), '解压错位产生的重复镜像目录', 'dir');
+  if (exists(stray)) add(stray, dirSize(stray), 'Duplicate image directory from misplaced extraction', 'dir');
 
   // 4) 非活动 AVD：产品只用 apkstart 一个；测试期遗留的 apkstart-arm / -houdini 等可清
   const avdHome = path.join(root, 'avd');
@@ -82,11 +82,11 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
     for (const e of fs.readdirSync(avdHome, { withFileTypes: true })) {
       if (!e.isDirectory() || !e.name.endsWith('.avd') || e.name === keepAvd) continue;
       add(path.join(avdHome, e.name), dirSize(path.join(avdHome, e.name)),
-        '非活动 AVD（含 8-16GB 的旧用户数据镜像）', 'dir');
+        'Inactive AVD (contains 8-16GB old user data image)', 'dir');
     }
     // 5) 锁文件：残留会导致「AVD is already running」
     for (const f of walk(avdHome)) {
-      if (/\.lock$/i.test(f.path)) add(f.path, f.size, '上次异常退出残留的锁文件');
+      if (/\.lock$/i.test(f.path)) add(f.path, f.size, 'Leftover lock file from previous abnormal exit');
     }
     // 6) 快速启动快照：ram.img ≈ 分配给虚拟机的内存，损坏或配置变更后必须丢弃
     const activeAvd = path.join(avdHome, keepAvd);
@@ -95,7 +95,7 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
         // 正常快照 + 删除失败时改名留下的旧快照，都可回收
         if (!e.isDirectory() || !/^snapshots(\.stale-\d+)?$/.test(e.name)) continue;
         const p = path.join(activeAvd, e.name);
-        add(p, dirSize(p), '旧 quickboot 快照（配置变更后会自动重建）', 'dir');
+        add(p, dirSize(p), 'Old quickboot snapshot (rebuilt automatically after config changes)', 'dir');
       }
     }
   }
@@ -105,7 +105,7 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
     const p = path.join(root, d);
     if (exists(p)) {
       const size = dirSize(p);
-      if (size > 0) add(p, size, d === '_tmp' ? '下载临时文件' : '旧的 QEMU/ISO 遗留文件', 'dir');
+      if (size > 0) add(p, size, d === '_tmp' ? 'Temporary download files' : 'Legacy QEMU/ISO files', 'dir');
     }
   }
 
@@ -114,7 +114,7 @@ function analyze(root, { keepAvd = 'apkstart.avd', aggressive = false, keepSnaps
   // 实测删掉会直接起不来，绝不能放进清单；qsn/netsim 也可能被快照与网络功能按需调用，保守保留。
   if (aggressive) {
     const extras = [
-      ['emulator/crashreport.exe', '崩溃上报工具（无头运行不需要）'],
+      ['emulator/crashreport.exe', 'Crash reporter tool (not needed in headless mode)'],
     ];
     for (const [rel, reason] of extras) {
       const p = path.join(root, rel);
@@ -161,10 +161,10 @@ function summary(root) {
   // AVD（应用数据 + 快照）、APK 缓存、图标、日志都算进来。
   const store = require('./store');
   const extra = [
-    { key: 'avd', label: '安卓数据（应用 + 快照）', path: path.join(store.DATA_DIR, 'avd') },
-    { key: 'apk', label: 'APK 安装包缓存', path: store.APK_DIR },
-    { key: 'icons', label: '桌面图标缓存', path: store.ICON_DIR },
-    { key: 'logs', label: '日志', path: path.join(store.DATA_DIR, 'logs') },
+    { key: 'avd', label: 'Android data (apps + snapshots)', path: path.join(store.DATA_DIR, 'avd') },
+    { key: 'apk', label: 'APK installer cache', path: store.APK_DIR },
+    { key: 'icons', label: 'Desktop icon cache', path: store.ICON_DIR },
+    { key: 'logs', label: 'Logs', path: path.join(store.DATA_DIR, 'logs') },
   ].map((g) => ({ ...g, size: dirSize(g.path) })).filter((g) => g.size > 0);
 
   const extraTotal = extra.reduce((n, g) => n + g.size, 0);
@@ -174,7 +174,7 @@ function summary(root) {
     totalText: mb(totalAll),
     runtimeText: mb(a.total),
     groups: [
-      { key: 'runtime', label: '运行时（引擎 + 系统镜像）', size: a.total, text: mb(a.total) },
+      { key: 'runtime', label: 'Runtime (engine + system image)', size: a.total, text: mb(a.total) },
       ...extra.map((g) => ({ ...g, text: mb(g.size) })),
     ],
     reclaimable: a.candidates.reduce((n, c) => n + c.size, 0),

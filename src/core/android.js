@@ -45,7 +45,7 @@ class AndroidSettings {
 
   async client() {
     const rt = await this.runtime.ensure();
-    if (!rt.ok) throw new Error(rt.error || '运行时未就绪');
+    if (!rt.ok) throw new Error(rt.error || 'Runtime is not ready');
     return rt.client;
   }
 

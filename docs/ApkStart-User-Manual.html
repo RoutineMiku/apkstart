@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ApkStart User Manual &amp; Troubleshooting Guide</title>
+<style>
+:root{--bg:#ffffff;--fg:#1f2328;--mut:#57606a;--line:#d0d7de;--code:#eff1f3;--accent:#0969da;--accent-soft:#ddf4ff;--warn:#9a6700;--warn-bg:#fff8c5;--head:#f6f8fa;--tbl:#f6f8fa}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--fg);background:var(--bg)}
+.wrap{display:flex;max-width:1180px;margin:0 auto}
+aside{position:sticky;top:0;height:100vh;overflow:auto;width:280px;flex:0 0 280px;border-right:1px solid var(--line);padding:24px 18px;background:var(--head)}
+aside h2{font-size:15px;margin:0 0 14px;letter-spacing:.5px}
+aside a{display:block;color:var(--mut);text-decoration:none;padding:3px 8px;border-radius:6px;font-size:13.5px;line-height:1.45}
+aside a:hover{background:var(--accent-soft);color:var(--accent)}
+#tocSearch{width:100%;margin-bottom:12px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;font:13px/1.4 inherit;background:#fff;color:var(--fg)}
+#tocSearch:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+.toc-l3{padding-left:22px!important;font-size:12.5px!important;color:#8c959f!important}
+main{flex:1;min-width:0;padding:40px 48px 80px}
+h1{font-size:30px;margin:0 0 8px;padding-bottom:16px;border-bottom:2px solid var(--line)}
+h2{font-size:23px;margin:42px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--line);scroll-margin-top:16px}
+h3{font-size:18px;margin:30px 0 12px;scroll-margin-top:16px}
+h4{font-size:16px;margin:22px 0 8px}
+p{margin:12px 0}
+a{color:var(--accent)}
+code{background:var(--code);padding:2px 6px;border-radius:6px;font:13.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+pre{background:var(--code);padding:16px 18px;border-radius:8px;overflow:auto;border:1px solid var(--line)}
+pre code{background:none;padding:0}
+blockquote{margin:16px 0;padding:10px 16px;border-left:4px solid var(--warn);background:var(--warn-bg);color:#633c01;border-radius:0 8px 8px 0}
+blockquote p{margin:0}
+ul,ol{margin:12px 0;padding-left:26px}
+li{margin:5px 0}
+hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+.tw{overflow:auto;margin:16px 0}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--tbl);font-weight:600;white-space:nowrap}
+tbody tr:nth-child(even){background:#fbfcfd}
+.btnbar{position:fixed;right:22px;bottom:22px;display:flex;gap:8px}
+.btnbar button{border:1px solid var(--line);background:#fff;color:var(--fg);border-radius:8px;padding:9px 14px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.btnbar button:hover{border-color:var(--accent);color:var(--accent)}
+@media (max-width:880px){aside{display:none}main{padding:24px 20px 60px}h1{font-size:25px}}
+@media print{aside,.btnbar{display:none}main{padding:0;max-width:none}h2{page-break-after:avoid}table,pre,blockquote{page-break-inside:avoid}a{color:inherit;text-decoration:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<aside><h2>Contents</h2>
+<input id="tocSearch" type="search" placeholder="Filter contents (Ctrl+F to search)" autocomplete="off" />
+<div id="tocList"><a class="toc-l2" href="#contents">Contents</a>
+<a class="toc-l2" href="#1-apkstart-in-30-seconds">1. ApkStart in 30 Seconds</a>
+<a class="toc-l2" href="#2-installation-first-launch">2. Installation &amp; First Launch</a>
+<a class="toc-l3" href="#2-1-choosing-the-right-edition">2.1 Choosing the Right Edition</a>
+<a class="toc-l3" href="#2-2-what-happens-on-first-launch">2.2 What Happens on First Launch</a>
+<a class="toc-l2" href="#3-daily-usage">3. Daily Usage</a>
+<a class="toc-l3" href="#3-1-installing-apps">3.1 Installing Apps</a>
+<a class="toc-l3" href="#3-2-launching-apps">3.2 Launching Apps</a>
+<a class="toc-l3" href="#3-3-window-display">3.3 Window &amp; Display</a>
+<a class="toc-l3" href="#3-4-keyboard-shortcuts">3.4 Keyboard Shortcuts</a>
+<a class="toc-l3" href="#3-5-file-sharing-windows-android">3.5 File Sharing (Windows ↔ Android)</a>
+<a class="toc-l3" href="#3-6-settings-navigation">3.6 Settings Navigation</a>
+<a class="toc-l3" href="#3-7-online-updates">3.7 Online Updates</a>
+<a class="toc-l2" href="#4-three-core-concepts-understanding-errors">4. Three Core Concepts (Understanding Errors)</a>
+<a class="toc-l3" href="#4-1-runtime-system-image">4.1 Runtime / System Image</a>
+<a class="toc-l3" href="#4-2-hardware-acceleration">4.2 Hardware Acceleration</a>
+<a class="toc-l3" href="#4-3-arm-translation-layer">4.3 ARM Translation Layer</a>
+<a class="toc-l2" href="#5-first-step-when-troubleshooting-preflight-auto-debug">5. First Step When Troubleshooting: Preflight &amp; Auto-Debug</a>
+<a class="toc-l3" href="#5-1-host-preflight-auto-config">5.1 Host Preflight &amp; Auto-Config</a>
+<a class="toc-l3" href="#5-2-auto-debug-automatic-diagnostics">5.2 Auto-Debug (Automatic Diagnostics)</a>
+<a class="toc-l3" href="#5-3-export-diagnostic-report">5.3 Export Diagnostic Report</a>
+<a class="toc-l3" href="#5-4-built-in-user-manual-auto-tutorials">5.4 Built-in User Manual &amp; Auto-Tutorials</a>
+<a class="toc-l2" href="#6-common-troubleshooting-solutions">6. Common Troubleshooting Solutions</a>
+<a class="toc-l3" href="#6-1-hardware-acceleration-not-enabled-slow-boot">6.1 &quot;Hardware Acceleration Not Enabled&quot; / Slow Boot</a>
+<a class="toc-l3" href="#6-2-installation-failed-install_failed_">6.2 Installation Failed (INSTALL_FAILED_*)</a>
+<a class="toc-l3" href="#6-3-missing-arm-translation-layer-arm-app-fails-to-install-or-crashes">6.3 Missing ARM Translation Layer / ARM App Fails to Install or Crashes</a>
+<a class="toc-l3" href="#6-4-adb-unauthorized-allow-usb-debugging">6.4 adb Unauthorized (Allow USB Debugging)</a>
+<a class="toc-l3" href="#6-5-double-clicking-icon-does-nothing-infinite-spinner-window-with-rotate-button">6.5 Double-Clicking Icon Does Nothing / Infinite Spinner / Window with Rotate Button</a>
+<a class="toc-l3" href="#6-6-other-startup-issues-quick-reference">6.6 Other Startup Issues Quick Reference</a>
+<a class="toc-l3" href="#6-7-no-sound-low-volume-in-apps">6.7 No Sound / Low Volume in Apps</a>
+<a class="toc-l3" href="#6-8-store-edition-launch-failure-0xc0000135-dll-load-failed">6.8 Store Edition Launch Failure / 0xC0000135 (DLL Load Failed)</a>
+<a class="toc-l3" href="#6-9-app-cannot-access-microphone-voice-calls-recording-fail">6.9 App Cannot Access Microphone / Voice Calls &amp; Recording Fail</a>
+<a class="toc-l3" href="#6-10-discrete-integrated-gpu-rendering-gpu-preference">6.10 Discrete / Integrated GPU Rendering (GPU Preference)</a>
+<a class="toc-l2" href="#7-command-line-reference">7. Command-Line Reference</a>
+<a class="toc-l2" href="#8-data-directory-layout">8. Data &amp; Directory Layout</a>
+<a class="toc-l2" href="#9-help-feedback">9. Help &amp; Feedback</a></div>
+</aside>
+<main>
+<h1 id="apkstart-user-manual-troubleshooting-guide">ApkStart User Manual &amp; Troubleshooting Guide</h1>
+<blockquote>Version: v0.6.4 · Platform: Windows 10/11 x64 · Updated: 2026-11-22  ApkStart is an Android app runner for Windows: <strong>install Android apps like native Windows software, launch from desktop icons, and double-click to run.</strong> This manual first explains how to use ApkStart, then provides step-by-step solutions organized by symptom. Every step corresponds to actual buttons and menus in the app.</blockquote>
+<hr/>
+<h2 id="contents">Contents</h2>
+<ol><li><a href="#1-apkstart-in-30-seconds">ApkStart in 30 Seconds</a></li><li><a href="#2-installation--first-launch">Installation &amp; First Launch</a></li><li><a href="#3-daily-usage">Daily Usage</a></li><li><a href="#4-three-core-concepts-understanding-errors">Three Core Concepts (Understanding Errors)</a></li><li><a href="#5-first-step-when-troubleshooting-preflight--auto-debug">First Step When Troubleshooting: Preflight &amp; Auto-Debug</a></li><li><a href="#6-common-troubleshooting-solutions">Common Troubleshooting Solutions</a></li></ol>
+<ul><li><a href="#61-hardware-acceleration-not-enabled--slow-boot">6.1 "Hardware Acceleration Not Enabled" / Slow Boot</a></li><li><a href="#62-installation-failed-install_failed_">6.2 Installation Failed (INSTALL_FAILED_*)</a></li><li><a href="#63-missing-arm-translation-layer--arm-app-fails-to-install-or-crashes">6.3 Missing ARM Translation Layer / ARM App Fails to Install or Crashes</a></li><li><a href="#64-adb-unauthorized-allow-usb-debugging">6.4 adb Unauthorized (Allow USB Debugging)</a></li><li><a href="#65-double-clicking-icon-does-nothing--infinite-spinner--window-with-rotate-button">6.5 Double-Clicking Icon Does Nothing / Infinite Spinner / Window with Rotate Button</a></li><li><a href="#66-other-startup-issues-quick-reference">6.6 Other Startup Issues Quick Reference</a></li><li><a href="#67-no-sound--low-volume-in-apps">6.7 No Sound / Low Volume in Apps</a></li><li><a href="#68-store-edition-launch-failure--0xc0000135-dll-load-failed">6.8 Store Edition Launch Failure / 0xC0000135 (DLL Load Failed)</a></li><li><a href="#69-app-cannot-access-microphone--voice-calls--recording-fail">6.9 App Cannot Access Microphone / Voice Calls &amp; Recording Fail</a></li><li><a href="#610-discrete--integrated-gpu-rendering-gpu-preference">6.10 Discrete / Integrated GPU Rendering (GPU Preference)</a></li></ul>
+<ol><li><a href="#7-command-line-reference">Command-Line Reference</a></li><li><a href="#8-data--directory-layout">Data &amp; Directory Layout</a></li><li><a href="#9-help--feedback">Help &amp; Feedback</a></li></ol>
+<hr/>
+<h2 id="1-apkstart-in-30-seconds">1. ApkStart in 30 Seconds</h2>
+<pre><code>Desktop Shortcut (real app icon .lnk)
+      │ Double-click
+      ▼
+ApkStart.exe --launch &lt;package&gt;
+      │ Android runtime not running? → Auto-start (Android 14 emulator, bundled or downloaded on first run)
+      ▼
+Launch app via system-resolved launcher entry (not hardcoded main Activity)
+      ▼
+Emulator Window = App Window (custom title, icon, portrait ratio, centered fullscreen)</code></pre>
+<p><strong>Key Features</strong></p>
+<ul><li>🖱️ <strong>Double-click .apk to install</strong>: After registering file associations in Explorer, double-clicking an APK automatically parses, installs, and creates a desktop shortcut.</li><li>🧩 <strong>One desktop icon per app</strong>: Icons are extracted offline from the APK; double-clicking the icon launches the app directly.</li><li>🪟 <strong>Each app is a window</strong>: Native rendering, fullscreen fills screen height and centers, windowed mode supports resizing, and each app remembers its own window size.</li><li>🔍 <strong>Searchable in Windows</strong>: Dual shortcuts on Desktop and Start Menu (<code>Programs\ApkStart\</code>).</li><li>📁 <strong>Shared files</strong>: Two-way sync between <code>%USERPROFILE%\ApkStartShared</code> and <code>/sdcard/ApkStartShared</code> in Android.</li><li>🪶 <strong>Self-contained runtime</strong>: Does not depend on MuMu, LDPlayer, WSA, or any third-party emulator installed on your PC.</li></ul>
+<blockquote>Note: This is an early open-source, free, ad-free project maintained in spare time. If you run into issues, this manual is here to help.</blockquote>
+<hr/>
+<h2 id="2-installation-first-launch">2. Installation &amp; First Launch</h2>
+<h3 id="2-1-choosing-the-right-edition">2.1 Choosing the Right Edition</h3>
+<p>Both sources have identical contents:</p>
+<ul><li>GitHub: <code>github.com/RoutineMiku/apkstart/releases</code></li><li>Gitee: <code>gitee.com/daily-miku/apkstart/releases</code></li></ul>
+<div class="tw"><table><thead><tr><th>Edition</th><th>Filename</th><th>When to Choose</th></tr></thead><tbody><tr><td><strong>Microsoft Store</strong></td><td><code>ApkStart_&lt;4-part-version&gt;_x64.msix</code></td><td>Install from Microsoft Store. Bundled full runtime, no download needed, updated via Store</td></tr><tr><td><strong>Full Portable</strong></td><td><code>ApkStart-v*-win64-full.zip</code> (~830 MB, ~1.3 GB extracted)</td><td>No installer and no runtime download wait: extract and run with full bundled runtime</td></tr><tr><td><strong>Installer</strong></td><td><code>ApkStart-v*-Setup.exe</code> (~1.3 GB)</td><td>Adds Start Menu/Desktop shortcuts and Windows uninstaller entry</td></tr><tr><td><strong>Lite Portable</strong></td><td><code>ApkStart-v*-win64-portable.zip</code> (96 MiB, ~227 MB extracted)</td><td>Try it out first; downloads the runtime on first launch</td></tr></tbody></table></div>
+<blockquote>⚠️ <strong>Always use the latest version (currently v0.6.4)</strong>. Older versions (v0.5.x and earlier) either lacked a bundled runtime or defaulted to an embedded shell window—which caused slow launches or a window with a rotate button. When upgrading from an older version, ensure your desktop shortcuts point to the new program folder.</blockquote>
+<h3 id="2-2-what-happens-on-first-launch">2.2 What Happens on First Launch</h3>
+<ol><li><strong>(Lite edition only) Download runtime</strong>: adb, Android Emulator, and Android 14 system image (8-thread chunked download with resume support). Full Portable and Store editions skip this step.</li><li><strong>Extract system image</strong>: The xz image is extracted once to <code>%APPDATA%\apkstart\system-images</code> (~20 seconds).</li><li><strong>Create <code>/data</code> partition</strong>: ApkStart creates an ext4 user data image with encryption and SELinux labels (the official image only ships a 1 MB placeholder).</li><li><strong>Auto-boot</strong>: Subsequent app launches only run <code>am start</code>; cold boot takes ~23s and quickboot snapshot resume takes ~10s.</li></ol>
+<blockquote>First-launch slowness is a one-time setup cost. Subsequent launches are much faster.</blockquote>
+<hr/>
+<h2 id="3-daily-usage">3. Daily Usage</h2>
+<h3 id="3-1-installing-apps">3.1 Installing Apps</h3>
+<p>Choose any of three methods:</p>
+<ul><li><strong>Double-click an APK file</strong> (register association first: Settings → Integration &amp; Files → Associate .apk files);</li><li>Click <strong>Install App</strong> in the main window;</li><li>Command line: <code>ApkStart.exe &lt;path\to.apk&gt;</code>.</li></ul>
+<p>Supports <code>.apks</code> / <code>.xapk</code> split packages (automatically uses <code>install-multiple</code>). Desktop and Start Menu shortcuts are created automatically after installation.</p>
+<h3 id="3-2-launching-apps">3.2 Launching Apps</h3>
+<p>Double-click the desktop icon. All apps share the same Android runtime, so <strong>launching a second app is nearly instant</strong>.</p>
+<h3 id="3-3-window-display">3.3 Window &amp; Display</h3>
+<div class="tw"><table><thead><tr><th>Action</th><th>Method</th></tr></thead><tbody><tr><td>Toggle Fullscreen / Windowed</td><td><code>F11</code> or tray context menu. Fullscreen scales the window while preserving aspect ratio</td></tr><tr><td>Rotate Portrait / Landscape</td><td><code>Ctrl+Alt+R</code> (global) or the titlebar rotate button; orientation is remembered per app</td></tr><tr><td>Auto Fullscreen</td><td>Settings → Display &amp; Window → Auto Fullscreen (works best with Orientation Lock)</td></tr><tr><td>Force Landscape / Portrait</td><td>Settings → Display &amp; Window → Screen Orientation</td></tr></tbody></table></div>
+<blockquote>The runtime only restarts when the panel orientation differs from the app orientation (~40s, indicated on the titlebar). Apps with the same orientation launch immediately.</blockquote>
+<h3 id="3-4-keyboard-shortcuts">3.4 Keyboard Shortcuts</h3>
+<div class="tw"><table><thead><tr><th>Shortcut</th><th>Action</th></tr></thead><tbody><tr><td><code>F11</code></td><td>Toggle fullscreen / windowed mode</td></tr><tr><td><code>Ctrl+Alt+R</code></td><td>Rotate current app portrait / landscape</td></tr><tr><td><code>Ctrl+R</code></td><td>Rotate inside shell window (use <code>Ctrl+Alt+R</code> in native detached window mode)</td></tr></tbody></table></div>
+<h3 id="3-5-file-sharing-windows-android">3.5 File Sharing (Windows ↔ Android)</h3>
+<p>Two-way sync between <code>%USERPROFILE%\ApkStartShared</code> on Windows and <code>/sdcard/ApkStartShared</code> inside Android. Go to Settings → Integration &amp; Files → File Sharing ("Sync Now" or "Open Folder").</p>
+<h3 id="3-6-settings-navigation">3.6 Settings Navigation</h3>
+<p>Starting from v0.6.0, Settings is organized into categories with a search bar at the top (search keywords like "landscape", "memory", or "proxy" across all categories):</p>
+<div class="tw"><table><thead><tr><th>Category</th><th>Contents</th></tr></thead><tbody><tr><td>General &amp; Install</td><td>Runtime &amp; environment, one-click deploy, auto-start, disk usage &amp; cleanup</td></tr><tr><td>Display &amp; Window</td><td>Display mode, auto fullscreen, screen orientation, tablet layout, window host mode</td></tr><tr><td>Input &amp; Controls</td><td>Mouse bindings, keyboard mapping</td></tr><tr><td>Performance &amp; Resources</td><td>Resource policy, GPU preference (dGPU/iGPU), microphone, display quality, data partition, system language, snapshots, boot prewarm</td></tr><tr><td>Network &amp; Downloads</td><td>Update &amp; download sources, mirror acceleration, download threads</td></tr><tr><td>Diagnostics &amp; Repair</td><td>Host preflight check, drivers &amp; compat patches, auto-debug</td></tr><tr><td>Integration &amp; Files</td><td>Desktop &amp; apps, file sharing, system integration</td></tr><tr><td>Updates &amp; About</td><td>Software updates, about</td></tr><tr><td>Labs</td><td>Multi-window (experimental), background app limit</td></tr></tbody></table></div>
+<blockquote><strong>Labs · Multi-Window (Experimental)</strong>: When enabled, opening a new app keeps previous apps resident in the background so you can switch back with login state preserved. Because the Android runtime uses one emulator window, only one app is visible in the foreground at a time, and memory usage increases. Disabled by default.</blockquote>
+<h3 id="3-7-online-updates">3.7 Online Updates</h3>
+<p>Go to Settings → Updates &amp; About → Check for Updates, or right-click the tray icon → Check for Updates. ApkStart benchmarks sources (GitHub / Gitee / mirrors), downloads in parallel chunks, and falls back automatically on failure. Updating preserves your runtime, installed apps, and snapshots.</p>
+<p>Portable editions support <strong>incremental updates</strong>: each release includes a code manifest and a small app-code archive (a few MB vs ~100 MB full package). If the Electron shell version matches, only the small archive is downloaded and verified file-by-file; otherwise it automatically falls back to the full package. Store editions are updated by Microsoft Store.</p>
+<blockquote>Note: Incremental updates apply to portable builds updated via "Check for Updates". Microsoft Store builds update through the Store channel. Neither affects installed apps, Android data, runtime, or snapshots.</blockquote>
+<hr/>
+<h2 id="4-three-core-concepts-understanding-errors">4. Three Core Concepts (Understanding Errors)</h2>
+<p>Most unexpected errors come from one of the three components below.</p>
+<h3 id="4-1-runtime-system-image">4.1 Runtime / System Image</h3>
+<p>ApkStart runs a <strong>full Android 14 system image</strong> as its base. Since v0.6.3, there is <strong>one unified image</strong> (Google Play x86_64) for both x86 and ARM apps—no separate AOSP vs compatibility image split.</p>
+<ul><li>Missing / corrupted image or mismatch with old user data → boot failure, stuck boot, or boot loops.</li><li>User data (<code>/data</code>) is a thin diff layer; the system image is shared across the installation.</li></ul>
+<h3 id="4-2-hardware-acceleration">4.2 Hardware Acceleration</h3>
+<p>Smooth emulation requires CPU virtualization acceleration. On Windows there are two paths:</p>
+<div class="tw"><table><thead><tr><th>Method</th><th>What It Is</th><th>Admin Required</th><th>Reboot After Install</th></tr></thead><tbody><tr><td><strong>WHPX</strong></td><td>Built-in Windows feature "Windows Hypervisor Platform" (<code>HypervisorPlatform</code>)</td><td>When enabling feature</td><td>Yes</td></tr><tr><td><strong>AEHD</strong></td><td>Google's kernel driver</td><td>When installing driver</td><td>No</td></tr></tbody></table></div>
+<p><strong>Emulation still works without acceleration</strong> (pure software emulation / TCG), though booting takes several minutes and frame rates are lower—this is slowness, not a fatal failure. ApkStart falls back automatically and retries up to 4 parameter combinations (renderer → acceleration → memory/cold boot).</p>
+<blockquote>Do not confuse <strong>VirtualMachinePlatform</strong> (used by WSL2) with <strong>HypervisorPlatform</strong>. The Android emulator requires <strong>HypervisorPlatform</strong>; enabling only VirtualMachinePlatform still leaves <code>emulator -accel-check</code> unavailable.</blockquote>
+<h3 id="4-3-arm-translation-layer">4.3 ARM Translation Layer</h3>
+<p>Most Android apps only ship <strong>ARM native libraries</strong> (<code>arm64-v8a</code> / <code>armeabi-v7a</code>), while the system image is <strong>x86_64</strong>. A translation layer converts ARM instructions for x86 CPUs. The unified Android 14 image includes an updated <code>ndk_translation</code> layer, so ARM apps usually work out of the box.</p>
+<ul><li>If translation components are missing when installing an ARM app, ApkStart automatically switches/prepares the compatibility image and retries (see 6.3).</li><li>Older API 30 images had compatibility issues with newer translation layers (such as <code>DoBadTrampoline</code> SIGABRT crashes); the Android 14 image fixes this.</li></ul>
+<hr/>
+<h2 id="5-first-step-when-troubleshooting-preflight-auto-debug">5. First Step When Troubleshooting: Preflight &amp; Auto-Debug</h2>
+<p>Before digging through this manual, let ApkStart check your system automatically—most issues can be fixed with one click.</p>
+<h3 id="5-1-host-preflight-auto-config">5.1 Host Preflight &amp; Auto-Config</h3>
+<p>Location: Settings → Diagnostics &amp; Repair → <strong>Run Preflight Check</strong></p>
+<ul><li>Checks: CPU virtualization (VT-x/SVM), Hyper-V / Windows Hypervisor Platform, GPU / VRAM / driver, RAM, OS build, <code>emulator -accel-check</code>, and AEHD driver.</li><li>Clicking <strong>Apply Recommended Config</strong> writes safe defaults (memory, CPU cores, resolution, quality, software emulation when acceleration is absent) and saves a local host driver profile.</li><li>Severity levels: <code>ok</code> / <code>warn</code> (usable, optimization suggested) / <code>bad</code> (must be resolved to run).</li></ul>
+<p>Only two things require manual action:</p>
+<ul><li><strong>BIOS virtualization</strong>: Reboot into BIOS → enable Intel VT-x / AMD SVM (software cannot change BIOS settings).</li><li><strong>Windows features / acceleration driver</strong>: See 6.1.</li></ul>
+<h3 id="5-2-auto-debug-automatic-diagnostics">5.2 Auto-Debug (Automatic Diagnostics)</h3>
+<p>Location: Settings → Diagnostics &amp; Repair → <strong>Auto-Debug · Smart Diagnostics</strong></p>
+<p>Runs every 10 minutes in the background, grouping issues into categories with <strong>one-click fixes</strong> (restart runtime, clear locks, kill orphan processes, invalidate snapshot, clean disk, reset Android network, etc.) and automatic re-verification:</p>
+<div class="tw"><table><thead><tr><th>Category</th><th>Covered Issues</th></tr></thead><tbody><tr><td>Runtime</td><td>Last boot failure root cause, stuck boot, leftover lock files, orphan emulator processes, empty/corrupt snapshot, missing hardware acceleration</td></tr><tr><td>Device Connection</td><td>adb unauthorized, offline, runtime running but adb cannot see device</td></tr><tr><td>Storage</td><td>Low disk space, data partition size mismatch, shared folder not writable</td></tr><tr><td>Settings</td><td>Orientation conflict with physical panel, auto-fullscreen conflict in detached window mode</td></tr><tr><td>Network / Logs</td><td>Android guest offline, download sources unreachable, recent log errors</td></tr></tbody></table></div>
+<blockquote>Two principles: failed probes are never reported as false positives; existing unresolved issues do not spam repeated notifications.</blockquote>
+<h3 id="5-3-export-diagnostic-report">5.3 Export Diagnostic Report</h3>
+<p>Location: Settings → Diagnostics &amp; Repair → <strong>Export Diagnostic Report</strong> (or in Integration &amp; Files).</p>
+<p>The report is plain text containing host hardware profile, selected launch arguments, logs, and diagnosis conclusions. Always attach it when reporting bugs.</p>
+<h3 id="5-4-built-in-user-manual-auto-tutorials">5.4 Built-in User Manual &amp; Auto-Tutorials</h3>
+<p>Starting in v0.6.3, this manual is <strong>embedded in the app</strong>: click the <code>?</code> button in the main titlebar or "Open User Manual" in Settings → Updates &amp; About. It supports search, scrolling, and Print / Save as PDF, and opens directly to the relevant section when triggered from an error.</p>
+<p>Auto-debug and auto-repair also surface tutorials automatically:</p>
+<ul><li>Each detected issue has a <strong>Tutorial</strong> button on the right that jumps straight to the matching section;</li><li>When auto-repair fails for hardware acceleration, install failures, ARM translation, adb authorization, or no sound, <strong>the matching tutorial opens automatically</strong>;</li><li>Each tutorial only auto-opens once per session so it never interrupts repeatedly.</li></ul>
+<blockquote>Manual access: click <code>?</code> in the titlebar. You can disable auto-open notifications in Auto-Debug settings while keeping the <strong>Tutorial</strong> button available on every issue card.</blockquote>
+<hr/>
+<h2 id="6-common-troubleshooting-solutions">6. Common Troubleshooting Solutions</h2>
+<h3 id="6-1-hardware-acceleration-not-enabled-slow-boot">6.1 "Hardware Acceleration Not Enabled" / Slow Boot</h3>
+<p><strong>Symptoms</strong>: Preflight or diagnostics report "Hardware acceleration is not enabled" / "unavailable"; boot takes several minutes and frame rate drops.</p>
+<p><strong>Note</strong>: This usually means slowness rather than inability to launch. ApkStart automatically falls back to software emulation. Enable acceleration for smooth performance.</p>
+<p><strong>By edition:</strong></p>
+<ul><li><strong>Installer / Portable</strong>: Settings → Diagnostics &amp; Repair → Host Preflight → find "Hardware acceleration not enabled" → click <strong>Fix</strong>. Confirm the UAC prompt to enable WHPX; if WHPX is unsupported or declined, ApkStart falls back to installing the AEHD driver.</li><li><strong>Microsoft Store (MSIX)</strong>: Store apps <strong>cannot elevate privileges directly</strong>. Clicking <strong>Fix</strong> opens "Turn Windows features on or off":</li></ul>
+<p>1. Check <strong>Windows Hypervisor Platform</strong> (<code>HypervisorPlatform</code>); 2. Click OK and <strong>reboot your PC</strong>.</p>
+<p>Or run in an <strong>elevated PowerShell</strong>:</p>
+<p>``<code>powershell dism /online /enable-feature /featurename:HypervisorPlatform /all /norestart dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart </code>``</p>
+<blockquote>Two common pitfalls: (1) Enabling only <code>VirtualMachinePlatform</code> is not enough—the emulator needs <code>HypervisorPlatform</code>. (2) If VT-x/SVM is disabled in BIOS (see 5.1), enabling Windows features alone will not work. If your GPU driver is over 3 years old, update it from the vendor's website. Some older integrated GPUs also benefit from compatibility patches in Settings → Diagnostics &amp; Repair → Drivers &amp; Compatibility Patches.</blockquote>
+<hr/>
+<h3 id="6-2-installation-failed-install_failed_">6.2 Installation Failed (INSTALL_FAILED_*)</h3>
+<p><strong>Symptoms</strong>: App installation fails with an <code>INSTALL_*</code> error code.</p>
+<p>Refer to the table below:</p>
+<div class="tw"><table><thead><tr><th>Error Code</th><th>Meaning</th><th>Solution</th></tr></thead><tbody><tr><td><code>INSTALL_FAILED_NO_MATCHING_ABIS</code></td><td>App only includes ARM libraries and current image lacks ARM translation</td><td><strong>Usually auto-handled</strong>: ApkStart switches to the compat image and retries. See <a href="#63-missing-arm-translation-layer--arm-app-fails-to-install-or-crashes">6.3</a></td></tr><tr><td><code>INSTALL_FAILED_OLDER_SDK</code></td><td>App requires a newer Android version</td><td>Requires a newer system image; current image is Android 14 (API 34)</td></tr><tr><td><code>INSTALL_PARSE_FAILED_NO_CERTIFICATES</code></td><td>APK has no valid signature</td><td>APK is corrupted or unsigned; obtain a valid APK</td></tr><tr><td><code>INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES</code> / <code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code></td><td>Signature mismatch with installed version</td><td>Uninstall the old version first</td></tr><tr><td><code>INSTALL_FAILED_VERSION_DOWNGRADE</code></td><td>A newer version is already installed</td><td>Install a newer version or uninstall first</td></tr><tr><td><code>INSTALL_FAILED_INSUFFICIENT_STORAGE</code></td><td>Insufficient runtime disk space</td><td>Free disk space or move the runtime data directory in Settings → Integration &amp; Files</td></tr><tr><td><code>INSTALL_FAILED_INVALID_APK</code></td><td>APK is corrupted or incomplete</td><td>Re-download the APK</td></tr><tr><td><code>INSTALL_FAILED_INVALID_URI</code></td><td>APK path contains special or non-ASCII characters</td><td>Move the APK to an ASCII-only path and retry</td></tr><tr><td><code>INSTALL_FAILED_ALREADY_EXISTS</code></td><td>Package already exists with a different signature</td><td>Uninstall first</td></tr><tr><td><code>INSTALL_FAILED_DEPRECATED_SDK_VERSION</code></td><td>App targets a very old Android SDK</td><td><strong>Auto-handled</strong>: ApkStart retries with official bypass flags</td></tr><tr><td><code>INSTALL_FAILED_TEST_ONLY</code></td><td>Test-only APK</td><td><strong>Auto-handled</strong>: ApkStart retries with <code>-t</code></td></tr><tr><td><code>INSTALL_FAILED_MISSING_SHARED_LIBRARY</code></td><td>Missing vendor/device-specific library</td><td>App depends on proprietary device libraries unavailable in emulator</td></tr><tr><td><code>INSTALL_FAILED_USER_RESTRICTION</code></td><td>System restricted installation</td><td>Restart runtime and retry</td></tr><tr><td><code>INSTALL_FAILED_CONFLICTING_PROVIDER</code></td><td>ContentProvider conflict with an installed app</td><td>Uninstall the conflicting app</td></tr><tr><td><code>INSTALL_FAILED_INTERNAL_ERROR</code></td><td>Internal system error (often low space or boot incomplete)</td><td>Restart runtime, wait for boot completion, and retry</td></tr></tbody></table></div>
+<blockquote>For any error code not listed above, export a diagnostic report (5.3) and attach it when reporting the issue.</blockquote>
+<hr/>
+<h3 id="6-3-missing-arm-translation-layer-arm-app-fails-to-install-or-crashes">6.3 Missing ARM Translation Layer / ARM App Fails to Install or Crashes</h3>
+<p><strong>Symptoms</strong>: Installation fails with <code>INSTALL_FAILED_NO_MATCHING_ABIS</code>, or the app crashes immediately on launch with <code>DoBadTrampoline</code>, <code>libndk_translation</code>, <code>UnsatisfiedLinkError</code>, or <code>...so not found</code> in logs.</p>
+<p><strong>How it works</strong>: Since v0.6.3, <strong>one unified Android 14 image</strong> supports both x86 and ARM with built-in translation. The legacy "Universal Compat Image (Auto-managed)" toggle is kept only for backward compatibility and normally requires no manual changes.</p>
+<p><strong>What ApkStart does automatically:</strong></p>
+<ol><li>If installation fails with <code>NO_MATCHING_ABIS</code>, ApkStart switches to the compat image, restarts the runtime, restores installed apps from local APK backups, and retries installation.</li><li>If an app crashes on launch due to ARM translation (e.g. <code>DoBadTrampoline</code>), ApkStart automatically switches to the Android 14 compat image and retries.</li></ol>
+<p><strong>What you should do:</strong></p>
+<ul><li><strong>Wait patiently</strong>: Switching images restarts the runtime (~40–60s).</li><li><strong>Verify image readiness</strong>: Check Settings → General &amp; Install → Runtime → "Universal Compat Image (Auto-managed)". If not downloaded, click "Download Compat Image" (~1.5 GB) and <strong>restart the runtime</strong> after completion.</li><li><strong>Still crashing</strong>: A few apps use strict anti-emulator checks (verifying physical sensors, baseband, etc.) and intentionally exit in emulators. This is an app limitation rather than a runtime bug.</li></ul>
+<p><strong>What if a red "Install Failed" error says "switching to compat image and retrying"?</strong></p>
+<p>That was a display bug in older builds where switching was skipped when reusing a non-translation runtime while still printing the retry message. <strong>Update to the latest v0.6.4 build</strong>, which probes actual translation capability before installing, always triggers switch + restart + snapshot clear on <code>NO_MATCHING_ABIS</code>, and reports accurately if a retry fails.</p>
+<blockquote>Verified: Hongguo Short Drama (<code>com.phoenix.read</code>, <code>arm64-v8a</code>-only) installs, loads feeds, and plays video normally on the Android 14 image with <code>ro.product.cpu.abilist = x86_64,arm64-v8a</code>.</blockquote>
+<hr/>
+<h3 id="6-4-adb-unauthorized-allow-usb-debugging">6.4 adb Unauthorized (Allow USB Debugging)</h3>
+<p><strong>Symptoms</strong>: Diagnostics report "adb unauthorized" or "Android debugging authorization incomplete", <code>adb devices</code> shows <code>unauthorized</code>, and apps fail to start.</p>
+<p><strong>Correct steps (in order):</strong></p>
+<ol><li>Check if an emulator window is showing the <strong>"Allow USB debugging?"</strong> dialog—click <strong>Allow</strong> and check <strong>"Always allow from this computer"</strong> so it won't prompt again.</li><li>If the window is unresponsive or never appears: go to Settings → General &amp; Install → <strong>Reset Android Data</strong> and retry (this clears installed app data, while local APK files are preserved for automatic reinstall).</li></ol>
+<blockquote>⚠️ <strong>Never delete <code>%USERPROFILE%\.android\adbkey</code></strong>. That is counterproductive: Android only writes a new public key when <code>adb_keys</code> does not exist; regenerating a new private key leaves the old public key inside the system, causing permanent authorization mismatch.</blockquote>
+<blockquote>CLI debugging: ApkStart runs its own adb server on <strong>dedicated port 5044</strong> (isolated from your system port 5037): ``<code>powershell $env:ANDROID_ADB_SERVER_PORT = 5044 adb devices    # should list emulator-5554 </code>`<code> Do not manually run </code>adb connect` on port 5555—Play images will pop up "Allow USB debugging?" over the app window.</blockquote>
+<hr/>
+<h3 id="6-5-double-clicking-icon-does-nothing-infinite-spinner-window-with-rotate-button">6.5 Double-Clicking Icon Does Nothing / Infinite Spinner / Window with Rotate Button</h3>
+<p>These symptoms almost always point to the <strong>launch entry or window attachment</strong>. Check in order:</p>
+<p><strong>1. Confirm you are running the latest version</strong></p>
+<ul><li>Check the start of <code>%APPDATA%\ApkStart\logs\app.log</code>: it should say <code>start v0.6.4</code>. If it shows <code>v0.5.x</code>, your desktop/Start Menu shortcut still points to an old directory.</li><li>Older versions (v0.5.x) lacked a bundled runtime and defaulted to an embedded shell window with a rotate button. Upgrade to v0.6.4 and rebuild shortcuts.</li></ul>
+<p><strong>2. Understand normal boot times</strong></p>
+<p>Cold boot takes ~23–48s and orientation-switch restart takes ~50s. <strong>Do not double-click repeatedly</strong>: launching a second instance while the first is booting can cause conflicting ownership or premature shutdown. Click once and wait.</p>
+<p><strong>3. Native window attach failed → fallback to embedded window with rotate button</strong></p>
+<p>If logs show <code>attach failed</code> or <code>emu:0</code>, the window agent could not find the emulator window and fell back to embedded mode (showing a titlebar with a rotate button).</p>
+<ul><li>Launching from directory junctions or non-standard paths can trigger this; v0.6.3+ resolves canonical paths before matching. If it still happens, attach logs when reporting.</li></ul>
+<p><strong>4. Reset Android Data (last resort)</strong></p>
+<p>Settings → General &amp; Install → <strong>Reset Android Data</strong> (with confirmation). Clears installed apps and user data while keeping the system image and app list intact so apps reinstall automatically on next launch. Useful when <code>/data</code> is corrupted or fails to mount.</p>
+<hr/>
+<h3 id="6-6-other-startup-issues-quick-reference">6.6 Other Startup Issues Quick Reference</h3>
+<p>Most runtime errors below are <strong>handled automatically</strong> by ApkStart. If auto-recovery fails, export a diagnostic report (5.3).</p>
+<div class="tw"><table><thead><tr><th>Diagnosis</th><th>Auto-Handling</th><th>What You Can Do</th></tr></thead><tbody><tr><td>Hardware acceleration unavailable</td><td>Falls back to software emulation</td><td>Enable acceleration per 6.1</td></tr><tr><td>Memory allocation failed</td><td>Reduces RAM and CPU cores</td><td>Close memory-heavy applications</td></tr><tr><td>Emulator port occupied</td><td>Switches to a free port automatically</td><td>Close other emulators (Nox/MuMu/BlueStacks) or reboot</td></tr><tr><td>Leftover lock file / "Running multiple emulators with the same AVD"</td><td>Clears AVD locks and retries</td><td>Ensure no other emulator uses the same runtime</td></tr><tr><td>System image missing / corrupted / incompatible with old data</td><td>Boots with clean user data</td><td>Re-download system image in Settings → Runtime</td></tr><tr><td>Quickboot snapshot corrupted</td><td>Discards old snapshot and cold boots</td><td>Normal exit rebuilds snapshot; or disable snapshots</td></tr><tr><td>Runtime components missing / missing VC++</td><td>—</td><td>Whitelist ApkStart in antivirus and re-extract; install Microsoft VC++ 2015-2022 Redistributable</td></tr><tr><td>Insufficient disk space</td><td>—</td><td>Move runtime directory to a drive with more free space; disable snapshots or shrink data partition</td></tr><tr><td>Non-ASCII / special characters in path</td><td>Automatically uses 8.3 short path</td><td>Move ApkStart to an ASCII path (e.g. <code>C:\ApkStart</code>)</td></tr><tr><td>Missing CPU instructions (AVX/SSE4)</td><td>—</td><td>Usually a warning; otherwise use a CPU with VT-x/AVX</td></tr><tr><td>GPU mode rejected by current runtime</td><td>Re-selects a supported GPU mode</td><td>—</td></tr><tr><td>GPU / unknown error</td><td>Retries multiple parameter sets</td><td>Update GPU drivers, try a compat patch, or export diagnostic report</td></tr></tbody></table></div>
+<p><strong>Desktop icon shows the ApkStart icon or a blank icon</strong>: Go to Settings → Integration &amp; Files → <strong>Rebuild Shortcuts</strong> (rewrites Desktop and Start Menu shortcuts with icons and Taskbar AppUserModelID). Also rebuild shortcuts if you moved the program folder.</p>
+<hr/>
+<h3 id="6-7-no-sound-low-volume-in-apps">6.7 No Sound / Low Volume in Apps</h3>
+<p><strong>Symptoms</strong>: Videos or notifications in Android apps have no sound while other Windows apps work normally.</p>
+<p><strong>Check in order:</strong></p>
+<ol><li><strong>Windows volume &amp; output device</strong>: Click the taskbar speaker icon to verify output device and unmuted volume. Open <strong>Volume Mixer</strong> and ensure ApkStart / Android runtime is not muted or turned down.</li><li><strong>In-app volume</strong>: Some apps mute media volume on first launch; raise volume inside the app or via Android volume controls.</li><li><strong>ApkStart sound toggle</strong>: Settings → Performance &amp; Resources → <strong>Android Audio</strong> must be checked. Auto-debug checks this setting and offers a one-click fix. <strong>Restart the Android runtime after changing</strong> (when both audio and mic are off, the emulator launches with <code>-no-audio</code>, which cannot be toggled live).</li><li><strong>Windows Audio service</strong>: Press <code>Win+R</code>, run <code>services.msc</code>, find <strong>Windows Audio</strong>, and verify its status is <strong>Running</strong> and startup type is <strong>Automatic</strong> (or run <code>net start Audiosrv</code> in elevated PowerShell).</li><li><strong>Bluetooth / multi-output switching</strong>: Reconnect Bluetooth headphones or restart the Android runtime if Windows did not migrate audio streams.</li><li><strong>Still silent</strong>: Export a diagnostic report (Settings → Diagnostics &amp; Repair → Export Diagnostic Report); it includes audio toggle and service status.</li></ol>
+<blockquote>If auto-repair fails, ApkStart opens this section automatically. You can also jump here from an issue's <strong>Tutorial</strong> button or <code>?</code> in the titlebar.</blockquote>
+<hr/>
+<h3 id="6-8-store-edition-launch-failure-0xc0000135-dll-load-failed">6.8 Store Edition Launch Failure / 0xC0000135 (DLL Load Failed)</h3>
+<p><strong>Symptoms</strong>: Clicking an app spins endlessly or exits immediately, and the diagnostic report shows exit code <code>0xC0000135</code> (decimal <code>3221225781</code>). Most common on <strong>Microsoft Store (MSIX)</strong> installations.</p>
+<p><strong>Important clarification</strong>: <code>0xC0000135</code> only means "a DLL failed to load"—it does <strong>not necessarily</strong> mean VC++ Redistributable is missing, nor does it necessarily mean antivirus deleted files. There are three possible causes:</p>
+<ol><li><strong>Microsoft Store (MSIX) path &amp; container isolation</strong>: The Store edition installs into read-only <code>C:\Program Files\WindowsApps\...</code>. When the runtime spawns <code>qemu</code> child processes that resolve DLLs via relative paths, MSIX path redirection / container isolation can break DLL lookup and exit with <code>0xC0000135</code>. Reinstalling VC++ will not fix this Store-specific issue.</li><li><strong>Actually missing VC++ Redistributable</strong>: The Android runtime (Qt6 / qemu) depends on Microsoft VC++ 2015-2022 (x64). If Settings → Diagnostics &amp; Repair explicitly reports <strong>"Missing VC++ Redistributable (x64)"</strong>, the DLL check confirmed it is absent—click <strong>Fix</strong> to install it.</li><li><strong>Antivirus quarantined runtime files</strong>: DLLs in the runtime folder were quarantined or deleted. Whitelist ApkStart's install and runtime data directories in your antivirus and reinstall.</li></ol>
+<p><strong>Troubleshoot in order:</strong></p>
+<ol><li><strong>Check whether VC++ is actually reported missing</strong>: Only install VC++ if Preflight explicitly flags <strong>"Missing VC++ Redistributable (x64)"</strong> (do <strong>not</strong> blindly reinstall VC++ just because you saw <code>0xC0000135</code>). Reboot after installing.</li><li><strong>If VC++ is present and launch still fails → likely MSIX path isolation</strong>: Try:</li></ol>
+<ul><li>Fully quit ApkStart (tray icon → Quit) and reopen;</li><li>Check antivirus Controlled Folder Access / Ransomware Protection and whitelist ApkStart;</li><li>If it persists, use the <strong>Portable edition</strong> (<code>ApkStart-win64-portable</code> from GitHub / Gitee Releases) extracted to an ASCII path like <code>C:\ApkStart</code>—it runs outside <code>WindowsApps</code> and avoids MSIX container restrictions.</li></ul>
+<ol><li><strong>Find the exact failing DLL (advanced)</strong>: Open Event Viewer → Windows Logs → Application, find the <code>Application Error</code> for ApkStart / emulator, and check <code>FaultingModuleName</code>, or export a diagnostic report when reporting the issue.</li><li><strong>What if <code>adb.exe</code> crashes with <code>0xC0000409</code>?</strong>: That is a separate device-connection crash, not the direct cause of emulator exit. Resolve emulator startup first using steps 1–3, and mention the adb crash separately in your report.</li></ol>
+<blockquote>This section opens automatically when a launch or repair failure is diagnosed as a DLL issue.</blockquote>
+<hr/>
+<h3 id="6-9-app-cannot-access-microphone-voice-calls-recording-fail">6.9 App Cannot Access Microphone / Voice Calls &amp; Recording Fail</h3>
+<p><strong>Symptoms</strong>: Voice messages, calls, audio recording, or voice search fail with "No microphone / recording device unavailable".</p>
+<ol><li><strong>ApkStart microphone toggle</strong>: Settings → Performance &amp; Resources → <strong>Microphone Input</strong> must be checked (enabled by default). If disabled, Auto-Debug flags it with a one-click fix. <strong>Restart the Android runtime after changing</strong> (this flag controls whether the emulator exposes a recording device to Android).</li><li><strong>Windows microphone permissions</strong>: Open Windows Settings → Privacy &amp; security → Microphone, and ensure both <strong>"Let apps access your microphone"</strong> and <strong>"Let desktop apps access your microphone"</strong> are enabled.</li><li><strong>Verify Windows recording works</strong>: Test recording with Windows Sound Recorder to ensure the microphone is unmuted and working.</li><li><strong>Select the right input device</strong>: In Windows Sound Settings → Input, set your desired microphone as the default input device.</li><li><strong>Audio &amp; microphone relationship</strong>: The emulator only disables the entire audio subsystem when <strong>both</strong> Android Audio and Microphone Input are turned off.</li></ol>
+<blockquote>When the microphone is disabled, Android apps simply see no recording device without an obvious error. Auto-Debug detects and reports this proactively.</blockquote>
+<hr/>
+<h3 id="6-10-discrete-integrated-gpu-rendering-gpu-preference">6.10 Discrete / Integrated GPU Rendering (GPU Preference)</h3>
+<p><strong>Symptoms</strong>: Apps lag or drop frames even on a PC with a discrete GPU, or you want a laptop to use the integrated GPU to save battery.</p>
+<p>ApkStart renders Android graphics using <code>-gpu host</code> to utilize your real GPU. Starting in v0.6.4, all GPUs (NVIDIA / AMD / Intel) default to host rendering instead of forcing AMD/Intel to software rendering. If host rendering crashes on a given machine, ApkStart automatically falls back to software rendering.</p>
+<p><strong>Choose which GPU to use</strong>: When your PC has both an iGPU and a dGPU, Windows may assign the emulator to the iGPU. Go to Settings → Performance &amp; Resources → <strong>GPU Preference</strong>:</p>
+<div class="tw"><table><thead><tr><th>Option</th><th>Best For</th></tr></thead><tbody><tr><td>System Default (Recommended)</td><td>Lets Windows choose based on power/load</td></tr><tr><td>Discrete GPU (Performance)</td><td>Games, video, high frame rates (higher power/heat)</td></tr><tr><td>Integrated GPU (Power Saving)</td><td>Lightweight apps, idle tasks, laptop battery life</td></tr></tbody></table></div>
+<ul><li>Uses Windows <strong>Graphics Performance Preference</strong> (<code>UserGpuPreferences</code>) for the emulator executable (<strong>requires Windows 10 1803 or later</strong>; ignored harmlessly on older systems).</li><li>Takes effect on the <strong>next Android runtime start</strong>.</li><li>For older AMD drivers where <code>host</code> crashes: update GPU drivers, or enable the built-in AMD iGPU <code>swangle</code> compatibility patch in Settings → Diagnostics &amp; Repair → Drivers &amp; Compatibility Patches.</li></ul>
+<hr/>
+<h2 id="7-command-line-reference">7. Command-Line Reference</h2>
+<pre><code>ApkStart.exe                          Open main window
+ApkStart.exe &lt;path\to.apk&gt;            Install APK
+ApkStart.exe --launch &lt;package&gt;       Launch app directly (used by desktop shortcuts)</code></pre>
+<hr/>
+<h2 id="8-data-directory-layout">8. Data &amp; Directory Layout</h2>
+<div class="tw"><table><thead><tr><th>Purpose</th><th>Location</th></tr></thead><tbody><tr><td>Runtime (adb / emulator / images)</td><td>Bundled, or <code>%APPDATA%\apkstart\runtime</code> (Lite edition)</td></tr><tr><td>Extracted system images</td><td><code>%APPDATA%\apkstart\system-images</code></td></tr><tr><td>AVD / installed apps / snapshots</td><td><code>%APPDATA%\apkstart\avd</code></td></tr><tr><td>App icons</td><td><code>%APPDATA%\apkstart\icons\&lt;package&gt;.ico</code></td></tr><tr><td>Settings &amp; app manifest</td><td><code>%APPDATA%\ApkStart\settings.json</code> / <code>apps.json</code></td></tr><tr><td>Logs / diagnostic reports</td><td><code>%APPDATA%\ApkStart\logs\</code></td></tr><tr><td>Windows ↔ Android shared folder</td><td><code>%USERPROFILE%\ApkStartShared</code> ↔ <code>/sdcard/ApkStartShared</code></td></tr></tbody></table></div>
+<blockquote>"Reset Android Data" only clears the user data layer; system images and APK files are preserved. Updating ApkStart preserves your runtime, installed apps, and snapshots.  Keep sufficient free space on <code>C:\</code>: extracted images + data partition + snapshots can total several GB. Low disk space causes install and boot failures.</blockquote>
+<hr/>
+<h2 id="9-help-feedback">9. Help &amp; Feedback</h2>
+<p>Please include these three items when reporting an issue:</p>
+<ol><li><strong>Diagnostic Report</strong>: Settings → Diagnostics &amp; Repair → Export Diagnostic Report;</li><li><strong>Last 20 lines of <code>app.log</code></strong>: <code>%APPDATA%\ApkStart\logs\app.log</code>;</li><li><strong>Version &amp; edition</strong>: e.g. "Store 0.6.4" or "Full Portable 0.6.4".</li></ol>
+<ul><li>GitHub: &lt;https://github.com/RoutineMiku/apkstart&gt; (Issues / Releases)</li><li>Gitee: &lt;https://gitee.com/daily-miku/apkstart&gt;</li></ul>
+<hr/>
+<p>*This manual corresponds to v0.6.4 and is updated with each release. If any wording differs slightly, follow the actual UI text in the app.*</p>
+</main>
+</div>
+<div class="btnbar"><button onclick="window.print()">Print / Save as PDF</button></div>
+<script>
+(function () {
+  var input = document.getElementById('tocSearch');
+  var links = Array.prototype.slice.call(document.querySelectorAll('#tocList a'));
+  if (!input) return;
+  input.addEventListener('input', function () {
+    var q = input.value.trim().toLowerCase();
+    links.forEach(function (a) { a.hidden = !!q && a.textContent.toLowerCase().indexOf(q) < 0; });
+  });
+  // 自动教程按锚点打开时，把命中的目录项滚进视野
+  if (location.hash) {
+    var hit = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (hit) setTimeout(function () { hit.scrollIntoView({ block: 'start' }); }, 80);
+  }
+}());
+</script>
+</body>
+</html>

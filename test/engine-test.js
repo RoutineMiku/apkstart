@@ -235,10 +235,10 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
       'Performing Streamed Install\nadb.exe: failed to install x.apk: '
       + 'Failure [INSTALL_FAILED_NO_MATCHING_ABIS: Failed to extract native libraries, res=-113]',
     );
-    assert(out.includes('ARM 原生库'), `应解释 ARM 原生库问题：${out}`);
+    assert(out.includes('ARM native libraries'), `应解释 ARM 原生库问题：${out}`);
     assert(out.includes('INSTALL_FAILED_NO_MATCHING_ABIS'), '应保留原始错误码');
     const other = friendlyInstallError('Failure [INSTALL_FAILED_INVALID_APK: x]');
-    assert(other.includes('损坏') || other.includes('不完整'), `未知错误也应可读：${other}`);
+    assert(other.includes('corrupted') || other.includes('incomplete'), `未知错误也应可读：${other}`);
   });
 
   await test('镜像校验：区分有效 ISO9660 / 损坏 / 未下完', async () => {
@@ -264,7 +264,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
 
     const partial = mk(path.join(TMP, 'partial.iso'), 2 * 1024 * 1024, true);
     const c = p.inspectIso(partial);
-    assert(!c.ok && /未完成/.test(c.reason), `未下完的镜像未被拦截：${JSON.stringify(c)}`);
+    assert(!c.ok && /incomplete/i.test(c.reason), `未下完的镜像未被拦截：${JSON.stringify(c)}`);
 
     for (const f of [good, broken, partial]) fs.rmSync(f, { force: true });
   });

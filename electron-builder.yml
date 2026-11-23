@@ -111,5 +111,5 @@ linux:
   desktop:
     entry:
       Name: ApkStart
-      Comment: 在 FydeOS / Linux 上管理安卓应用
+      Comment: Manage Android apps on FydeOS / Linux
       Categories: Utility;

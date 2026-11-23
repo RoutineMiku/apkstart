@@ -88,14 +88,14 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
       await atest('单流 206 范围不符时拒绝', async () => {
         const out = path.join(dir, 'resume');
         fs.writeFileSync(out, 'xxxx'); // 让请求带 Range: bytes=4-
-        await assert.rejects(download(`${base}/bad`, out), /范围/);
+        await assert.rejects(download(`${base}/bad`, out), /range/i);
       });
 
       await atest('downloadParallel 范围不符时拒绝，不留半截文件', async () => {
         const out = path.join(dir, 'two');
         await assert.rejects(
           downloadParallel(`${base}/bad`, out, { connections: 2, minChunk: 2, retries: 1 }),
-          /范围/,
+          /range/i,
         );
         assert.equal(fs.existsSync(out), false, '失败后目标文件应被清理');
       });
@@ -104,7 +104,7 @@ const baseOf = (server) => `http://127.0.0.1:${server.address().port}`;
         const out = path.join(dir, 'three');
         await assert.rejects(
           downloadMulti([`${base}/bad1`, `${base}/bad2`], out, { connections: 2, minChunk: 2, retries: 1 }),
-          /范围/,
+          /range/i,
         );
       });
 
