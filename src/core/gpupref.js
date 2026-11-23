@@ -17,9 +17,9 @@
 const KEY = 'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences';
 
 const MODES = Object.freeze({
-  auto: { value: '', preference: null, label: '系统默认（推荐）' },
-  integrated: { value: 'GpuPreference=1;', preference: 1, label: '核显优先（省电）' },
-  discrete: { value: 'GpuPreference=2;', preference: 2, label: '独显优先（性能）' },
+  auto: { value: '', preference: null, label: 'System Default (Recommended)' },
+  integrated: { value: 'GpuPreference=1;', preference: 1, label: 'Integrated GPU (Power Saving)' },
+  discrete: { value: 'GpuPreference=2;', preference: 2, label: 'Discrete GPU (Performance)' },
 });
 
 /** 归一化模式：非法值一律回退 auto，绝不让外部输入拼进注册表命令 */

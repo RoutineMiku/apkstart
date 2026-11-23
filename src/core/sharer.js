@@ -64,7 +64,7 @@ class Sharer {
     const result = { pushed: 0, pulled: 0, errors: [] };
     try {
       const client = this.runtime.client();
-      if (!(await client.isOnline())) throw new Error('运行时未连接');
+      if (!(await client.isOnline())) throw new Error('Runtime not connected');
       await this.ensureDirs(onLog);
       const state = this.loadState();
 

@@ -70,7 +70,7 @@ const GB = 1024 * 1024 * 1024;
     const r = clampMemoryMB(64 * 1024, 32768);
     assert.equal(r.mb, 24576);
     assert.equal(r.capped, true);
-    assert.ok(/最多只能分 24 GB/.test(r.reason), r.reason);
+    assert.ok(/max assignable is 24 GB/.test(r.reason), r.reason);
   });
 
   test('填 128MB 被抬到最低可启动值', () => {
@@ -103,7 +103,7 @@ const GB = 1024 * 1024 * 1024;
   test('分得太满会提示 Windows 换页', () => {
     const v = memVerdict(28672, 32768);
     assert.equal(v.level, 'insufficient');
-    assert.ok(/换页/.test(v.note), v.note);
+    assert.ok(/paging/i.test(v.note), v.note);
   });
 
   test('正常区间不打扰用户', () => {
@@ -130,7 +130,7 @@ const GB = 1024 * 1024 * 1024;
     const r = clampDataGB(64, 20 * 1024);
     assert.equal(r.gb, 16);
     assert.equal(r.capped, true);
-    assert.ok(/只剩 20\.0 GB/.test(r.reason), r.reason);
+    assert.ok(/Only 20\.0 GB free/.test(r.reason), r.reason);
   });
 
   test('磁盘充足时 64GB 分区放行', () => {
@@ -143,7 +143,7 @@ const GB = 1024 * 1024 * 1024;
     const v = storageVerdict(30 * 1024, 50 * GB);
     assert.equal(v.ok, false);
     assert.ok(v.shortMB > 0);
-    assert.ok(/还差/.test(v.note), v.note);
+    assert.ok(/short/i.test(v.note), v.note);
   });
 
   test('读不到磁盘剩余时跳过预检而不是拦死', () => {
@@ -161,8 +161,8 @@ const GB = 1024 * 1024 * 1024;
   test('diskVerdict 空间不够时给出差多少（提示运行时所在磁盘）', () => {
     const v = diskVerdict(10 * 1024, 60 * 1024);
     assert.equal(v.ok, false);
-    assert.ok(/磁盘空间不足/.test(v.message), v.message);
-    assert.ok(/ApkStart 运行时所在磁盘/.test(v.message), v.message);
+    assert.ok(/Insufficient disk space/i.test(v.message), v.message);
+    assert.ok(/drive with ApkStart runtime/i.test(v.message), v.message);
   });
 
   test('diskVerdict 读不到剩余空间时不拦', () => {

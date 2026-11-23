@@ -219,8 +219,8 @@ function manifest() {
   </Dependencies>
 
   <Resources>
-    <Resource Language="zh-CN" />
     <Resource Language="en-US" />
+    <Resource Language="zh-CN" />
   </Resources>
 
   <Capabilities>

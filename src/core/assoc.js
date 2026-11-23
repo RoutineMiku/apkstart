@@ -80,10 +80,10 @@ function registerAssociation(exePath, iconPath, extraArgs) {
   reg(['add', `${CLASSES}\\${EXT}`, '/ve', '/d', PROGID, '/f']);
   reg(['add', `${CLASSES}\\${EXT}\\OpenWithProgids`, '/v', PROGID, '/t', 'REG_NONE', '/f']);
 
-  reg(['add', `${CLASSES}\\${PROGID}`, '/ve', '/d', 'Android 应用包', '/f']);
-  reg(['add', `${CLASSES}\\${PROGID}`, '/v', 'FriendlyTypeName', '/d', 'Android 应用包', '/f']);
+  reg(['add', `${CLASSES}\\${PROGID}`, '/ve', '/d', 'Android App Package', '/f']);
+  reg(['add', `${CLASSES}\\${PROGID}`, '/v', 'FriendlyTypeName', '/d', 'Android App Package', '/f']);
   reg(['add', `${CLASSES}\\${PROGID}\\DefaultIcon`, '/ve', '/d', `"${icon}",0`, '/f']);
-  reg(['add', `${CLASSES}\\${PROGID}\\shell\\open`, '/ve', '/d', '安装到 ApkStart', '/f']);
+  reg(['add', `${CLASSES}\\${PROGID}\\shell\\open`, '/ve', '/d', 'Install with ApkStart', '/f']);
   reg(['add', `${CLASSES}\\${PROGID}\\shell\\open\\command`, '/ve', '/d', command, '/f']);
 
   notifyShell();

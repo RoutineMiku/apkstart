@@ -150,7 +150,7 @@ class AppWindow {
     // 独立窗口模式下「全屏」要作用在模拟器窗口上（我们这层壳是隐藏的，
     // maximize 一个隐藏窗口没有任何视觉效果，openDetached 会读这个标记）。
     this._wantFullscreen = !!fullscreen;
-    this.state = { label: label || '应用', tip: '正在启动安卓运行时…', ready: false, landscape: false };
+    this.state = { label: label || 'App', tip: 'Starting Android runtime...', ready: false, landscape: false };
 
     const area = this._area();
     const size = AppWindow.sizeFor(area, this.portrait, false);
@@ -519,7 +519,7 @@ class AppWindow {
     if (!this.isOpen) return this.state.landscape;
     const next = explicitNext === undefined || explicitNext === null
       ? !this.state.landscape : !!explicitNext;
-    this.setState({ tip: next ? '正在切换到横屏（重启安卓运行时，约 30-60 秒）…' : '正在切回竖屏（重启安卓运行时，约 30-60 秒）…', ready: false });
+    this.setState({ tip: next ? 'Switching to landscape (restarting Android runtime, ~30-60s)...' : 'Switching to portrait (restarting Android runtime, ~30-60s)...', ready: false });
     if (typeof onRestart === 'function') {
       const ok = await onRestart(next).catch(() => false);
       if (ok) {

@@ -2,7 +2,7 @@
   "name": "apkstart",
   "productName": "ApkStart",
   "version": "0.6.4",
-  "description": "极致轻量的 Windows 安卓应用运行器：双击 APK 即装，应用以独立窗口与桌面图标运行",
+  "description": "Lightweight Windows Android app runner: double-click APKs to install and run apps in standalone windows with desktop icons",
   "main": "src/main.js",
   "author": "RoutineMiku",
   "license": "MIT",

@@ -142,7 +142,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
     assert.ok(item);
     assert.equal(item.action.kind, 'elevate');
     assert.equal(item.action.id, 'virtualization');
-    assert.ok(/一键开启/.test(item.action.label));
+    assert.ok(/Enable Now/.test(item.action.label));
   });
 
   test('商店版不能自行提权：同一个问题只打开「Windows 功能」窗口', () => {
@@ -152,8 +152,8 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
     const r = preflight.evaluate({ hw, edition: 'store' });
     const item = r.items.find((i) => i.key === 'whpx-off');
     assert.equal(item.action.kind, 'elevate');
-    assert.ok(/Windows 功能/.test(item.action.label), item.action.label);
-    assert.ok(!/一键/.test(item.action.label));
+    assert.ok(/Windows Features/.test(item.action.label), item.action.label);
+    assert.ok(!/Enable Now/.test(item.action.label));
   });
 
   test('没有加速 + 安装版：额外提供「安装 AEHD」入口', () => {

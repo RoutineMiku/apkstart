@@ -1,5 +1,9 @@
 'use strict';
 /* 应用窗口标题栏：只有 旋转 / 最小化 / 最大化 / 关闭，其余设置都在 ApkStart 主界面 */
+if (window.i18n) {
+  window.i18n.setLocale('en');
+  window.i18n.applyToDOM();
+}
 const api = window.apkstart;
 const $ = (id) => document.getElementById(id);
 
@@ -33,7 +37,7 @@ window.addEventListener('keydown', (e) => {
 
 function applyState(s) {
   if (!s) return;
-  $('appName').textContent = s.label || '应用';
+  $('appName').textContent = s.label || 'App';
   $('bootName').textContent = s.label || '';
   const icon = s.iconUrl || '';
   // 品牌兜底图：应用图标解不出来（ICO/WebP 解码失败、file URL 被 CSP 拦）时

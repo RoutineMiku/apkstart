@@ -159,7 +159,7 @@ function iconFromXml(zip, xmlBuffer, res, depth = 0) {
  */
 function parseApk(filePath) {
   const stat = fs.statSync(filePath);
-  if (stat.size < 1024) throw new Error('文件过小，不是有效的 APK');
+  if (stat.size < 1024) throw new Error('File too small to be a valid APK');
   const zip = new ZipFile(filePath);
   try {
     return parseApkZip(zip, filePath, stat);
@@ -171,7 +171,7 @@ function parseApk(filePath) {
 /** parseApk 的主体：调用方负责关闭 zip */
 function parseApkZip(zip, filePath, stat) {
   if (!zip.has('AndroidManifest.xml')) {
-    throw new Error('缺少 AndroidManifest.xml：这不是单个 APK（可能是 .apks/.xapk 拆分包）');
+    throw new Error('Missing AndroidManifest.xml: not a standalone APK (may be a .apks/.xapk bundle)');
   }
 
   const manifestBuf = zip.read('AndroidManifest.xml');
@@ -180,11 +180,11 @@ function parseApkZip(zip, filePath, stat) {
   // package 是 manifest 上的**非命名空间**属性（ns=''），必须按「任意命名空间」找：
   // attrValue 默认只认 android 命名空间，传 null 表示不限定命名空间。
   const packageName = attrValue(manifest, 'package', null);
-  if (!packageName) throw new Error('清单中未找到 package 名');
+  if (!packageName) throw new Error('Package name not found in manifest');
   // package 会一路流到路径拼接和 adb shell，必须是纯合法的 Android 包名。
   // 恶意/损坏的清单里塞进 "../"、盘符或 shell 元字符时在这里就拦下（issue #2 P0-1）。
   if (!validPackageName(packageName)) {
-    throw new Error(`清单中的 package 名不合法：${JSON.stringify(String(packageName).slice(0, 80))}`);
+    throw new Error(`Invalid package name in manifest: ${JSON.stringify(String(packageName).slice(0, 80))}`);
   }
 
   const versionName = attrValue(manifest, 'versionName') || '1.0';
