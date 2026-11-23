@@ -44,8 +44,26 @@ const SETTINGS = {
 const DEBUG_ISSUES = [
   { code: 'device.unauthorized', category: 'device', severity: 'error', title: '安卓设备未授权调试', hint: '重启运行时后会重新弹出确认框。', fix: 'restartRuntime', detail: '' },
   { code: 'storage.diskLow', category: 'storage', severity: 'warn', title: '运行时所在磁盘空间偏紧', hint: '剩余不足 8 GB。', fix: 'disk', detail: '剩余 5120 MB' },
-  { code: 'settings.orientationConflict', category: 'settings', severity: 'warn', title: '屏幕方向策略与当前面板方向相反', hint: '把面板方向改成与策略一致即可。', fix: 'orientation', detail: '' },
+  { code: 'accel.softwareEmulation', category: 'runtime', severity: 'warn', title: '未启用硬件加速', hint: '未安装 emulator点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；失败时会自动改装 AEHD 驱动。', fix: 'virtualization', detail: '' },
 ];
+
+const DRIVER_EXAMPLES = [
+  {
+    id: 'example-amd-igpu-swangle',
+    name: 'AMD 核显 · 改用 swangle 渲染（示例）',
+    description: '部分 AMD 核显 + 老驱动下，-gpu host 能通过 emulator 自检，但 guest 起起来十几秒后进程直接崩溃（日志里只有 AEHD is operational）。把渲染后端固定成 swangle 可以绕过，代价是帧率略低。',
+  },
+  {
+    id: 'example-intel-igpu-software',
+    name: 'Intel 核显 · 软件渲染兜底（示例）',
+    description: '老款 Intel 核显（HD / UHD 6xx 之前）在部分驱动版本上会出现 GLES 初始化失败或花屏。把渲染后端固定为 software，画面一定能出来。',
+  },
+  {
+    id: 'example-no-hypervisor-tcg',
+    name: '没有硬件加速 · 直接走软件模拟（示例）',
+    description: '机器没开「虚拟机监控程序平台」、也不允许装内核驱动时，emulator 走硬件加速会直接失败。这个补丁让 ApkStart 一开始就用软件模拟（-accel off），省掉两轮白等；同时把渲染后端换成 software，避免 GL 初始化失败。',
+  },
+].map((driver) => ({ ...driver, version: '1.0.0', author: 'ApkStart', priority: 0, enabled: false, matched: false, builtin: true, hits: [] }));
 
 const OVERRIDES = {
   'settings:get': () => SETTINGS,
@@ -56,11 +74,15 @@ const OVERRIDES = {
   'doctor:profile': () => ({ profile: {}, text: '均衡 · 4 核 / 4 GB / 720p' }),
   'doctor:selfCheck': () => ({ issues: [], accel: { ok: true }, free: 102400 }),
   'doctor:report': () => ({ ok: true, file: 'C:\\report.txt' }),
-  'runtime:usage': () => ({ totalText: '8.2 GB', reclaimableText: '1.1 GB', count: 3 }),
+  'runtime:usage': () => ({ totalText: '8.2 GB', reclaimable: true, reclaimableText: '1.1 GB', count: 3 }),
   'runtime:status': () => ({ mode: 'builtin', backend: 'builtin', backendLabel: '内置', installed: true, vmRunning: false, deviceOnline: false, ready: false, phase: 'idle', needsSetup: null, error: '', env: { adb: { ok: true }, emulator: { ok: true }, sysimg: { ok: true } }, accel: { ok: true }, network: null }),
   'runtime:dataInfo': () => ({ avdDir: 'C:\\data\\avd', configuredGB: 6, actualGB: 6 }),
   'android:status': () => ({ running: false, wifi: true, airplane: false, anim: true, volume: 50, font: 1, density: 320 }),
-  'drivers:list': () => ({ drivers: [], errors: [] }),
+  'drivers:list': () => ({
+    host: { platform: 'win32', arch: 'x64', gpuVendor: 'nvidia', accel: 'none', emulatorVersion: 'unknown' },
+    drivers: DRIVER_EXAMPLES,
+    errors: [],
+  }),
   'preflight:run': () => ({ items: [] }),
   'autodebug:state': () => ({ issues: DEBUG_ISSUES, summary: { total: 3, errors: 1, warns: 2, infos: 0, health: 'error', byCategory: [] }, at: Date.now(), running: false }),
   'autodebug:run': () => ({ issues: DEBUG_ISSUES, summary: { total: 3, errors: 1, warns: 2, infos: 0, health: 'error', byCategory: [] }, at: Date.now(), running: false }),
@@ -133,6 +155,71 @@ app.whenReady().then(async () => {
   await new Promise((r) => setTimeout(r, 900));
   const modalOpen = await evalJs(`document.getElementById('settingsMask').classList.contains('on')`);
   step('设置弹窗能打开', modalOpen);
+  await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="basic"]').click()`);
+  const localization = await evalJs(`(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const remaining = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.nodeValue.trim() || !node.parentElement.getClientRects().length) continue;
+      if (/[\\u3400-\\u9fff]/.test(node.nodeValue)) remaining.push(node.nodeValue.trim());
+    }
+    return { lang: document.documentElement.lang, remaining };
+  })()`);
+  step('默认界面语言为英文', localization.lang === 'en', localization.lang);
+  step('常用设置中没有未翻译文本', localization.remaining.length === 0, localization.remaining.join(' / '));
+  const localizationBehavior = await evalJs(`(async () => {
+    const dynamicText = document.createElement('span');
+    dynamicText.textContent = '首次使用：打开右上角设置 → 运行时 → 一键完成，再回来安装应用即可。';
+    const userText = document.createElement('span');
+    userText.dataset.noLocalize = '';
+    userText.textContent = '新';
+    document.body.append(dynamicText, userText);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const dynamicTranslated = dynamicText.textContent;
+    const userTextPreserved = userText.textContent;
+    dynamicText.remove();
+    userText.remove();
+
+    const selector = document.getElementById('setLanguage');
+    selector.value = 'zh-CN';
+    selector.dispatchEvent(new Event('change'));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const chineseLanguage = document.documentElement.lang;
+    selector.value = 'en';
+    selector.dispatchEvent(new Event('change'));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return {
+      dynamicTranslated,
+      userTextPreserved,
+      chineseLanguage,
+      restoredLanguage: document.documentElement.lang,
+    };
+  })()`);
+  step('动态内容已翻译且用户文本保持原样',
+    localizationBehavior.dynamicTranslated.startsWith('First time here?') &&
+    localizationBehavior.userTextPreserved === '新',
+    localizationBehavior.dynamicTranslated);
+  step('可切换到简体中文并恢复英文',
+    localizationBehavior.chineseLanguage === 'zh-CN' && localizationBehavior.restoredLanguage === 'en',
+    `${localizationBehavior.chineseLanguage} → ${localizationBehavior.restoredLanguage}`);
+  const untranslatedByCategory = await evalJs(`(async () => {
+    const remaining = [];
+    for (const button of document.querySelectorAll('#setNav .set-nav-item')) {
+      button.click();
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const cat = button.dataset.cat;
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.nodeValue.trim() || !node.parentElement.getClientRects().length) continue;
+        if (/[\\u3400-\\u9fff]/.test(node.nodeValue)) remaining.push(cat + ': ' + node.nodeValue.trim());
+      }
+    }
+    document.querySelector('#setNav .set-nav-item[data-cat="basic"]').click();
+    return remaining;
+  })()`);
+  step('所有设置分类均已完整翻译', untranslatedByCategory.length === 0, untranslatedByCategory.join(' / '));
 
   const navInfo = await evalJs(`(() => ({
     items: document.querySelectorAll('#setNav .set-nav-item').length,
@@ -186,7 +273,7 @@ app.whenReady().then(async () => {
   }))()`);
   step('切到「实验室」只显示该分类', lab.visible.length > 0 && lab.visible.every((c) => c === 'lab'), `可见：${lab.visible.join(',')}`);
   step('实验室有多开开关与后台保留数', lab.hasSwitch && lab.hasKeep, `switch=${lab.hasSwitch} keep=${lab.hasKeep}`);
-  step('实验室有实验性提示', /实验/.test(lab.notice), lab.notice.slice(0, 30));
+  step('实验室有实验性提示', /experimental/i.test(lab.notice), lab.notice.slice(0, 30));
 
   // 点「诊断与修复」，看自动检测面板
   await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="diag"]').click()`);
@@ -197,11 +284,64 @@ app.whenReady().then(async () => {
     groups: document.querySelectorAll('#autodebugList .dbg-group').length,
     text: (document.getElementById('autodebugStateText') || {}).textContent || '',
     fixBtns: document.querySelectorAll('#autodebugList .dbg-fix').length,
+    issueTitle: (document.querySelector('#autodebugList .dbg-name') || {}).textContent || '',
+    issueHint: (document.querySelector('#autodebugList .dbg-hint') || {}).textContent || '',
+    driverSummary: (document.getElementById('drvSummary') || {}).textContent || '',
+    driverNames: Array.from(document.querySelectorAll('#drvList .drv-name')).map((el) => el.textContent),
+    driverDescriptions: Array.from(document.querySelectorAll('#drvList .drv-item .drv-meta:nth-child(3)')).map((el) => el.textContent),
   }))()`);
   step('「诊断与修复」下能看到本机体检、驱动与自动检测', diag.visible.includes('diag') && diag.visible.length === 3, `可见：${diag.visible.join(',')}`);
   step('自动检测结果按分类分组渲染', diag.groups >= 3 && diag.items === 3, `${diag.groups} 组 / ${diag.items} 项`);
   step('每条问题都有「处理」按钮', diag.fixBtns === 3, `${diag.fixBtns} 个按钮`);
-  step('状态行显示上次检测时间', /上次检测/.test(diag.text), diag.text);
+  step('状态行显示上次检测时间', /last checked/i.test(diag.text), diag.text);
+  step('硬件加速诊断标题与提示为英文',
+    diag.issueTitle === 'Hardware acceleration is disabled' &&
+    diag.issueHint.startsWith('The emulator is not installed. Select Fix'),
+    `${diag.issueTitle}: ${diag.issueHint}`);
+  step('内置驱动示例名称与描述均为英文',
+    diag.driverNames.length === 3 &&
+    diag.driverDescriptions.length === 3 &&
+    [...diag.driverNames, ...diag.driverDescriptions].every((text) => !/[\u3400-\u9fff]/.test(text)),
+    `${diag.driverNames.length} names / ${diag.driverDescriptions.length} descriptions`);
+  step('驱动状态摘要为英文',
+    diag.driverSummary.startsWith('This PC: win32/x64') && !/[\u3400-\u9fff]/.test(diag.driverSummary),
+    diag.driverSummary);
+  const localizationLayout = await evalJs(`(() => {
+    const row = document.querySelector('.usage-row');
+    const usage = document.getElementById('usageText');
+    const actions = document.querySelector('.runtime-actions');
+    return {
+      usage: usage.textContent,
+      rowWrap: getComputedStyle(row).flexWrap,
+      usageBasis: getComputedStyle(usage).flexBasis,
+      actionsWrap: getComputedStyle(actions).flexWrap,
+      actionNoteBasis: getComputedStyle(actions.querySelector('.inline-note')).flexBasis,
+    };
+  })()`);
+  step('磁盘占用说明完整显示为英文',
+    localizationLayout.usage === 'Total 8.2 GB · Reclaimable 1.1 GB (3 items)',
+    localizationLayout.usage);
+  step('磁盘占用说明独占一行，按钮可换行',
+    localizationLayout.rowWrap === 'wrap' && localizationLayout.usageBasis === '100%',
+    `${localizationLayout.rowWrap}, ${localizationLayout.usageBasis}`);
+  step('诊断操作说明换到独立行，按钮保持完整',
+    localizationLayout.actionsWrap === 'wrap' && localizationLayout.actionNoteBasis === '100%',
+    `${localizationLayout.actionsWrap}, ${localizationLayout.actionNoteBasis}`);
+  const envChipText = await evalJs(`(() => {
+    renderEnvCheck({ issues: [{ severity: 'warn', title: 'Test notice', hint: '', code: 'test.notice', fix: '' }] });
+    const text = document.getElementById('envChip').textContent;
+    renderEnvCheck({ issues: [] });
+    return text;
+  })()`);
+  step('底部诊断计数使用英文', envChipText === '1 notice', envChipText);
+  const dynamicProgress = await evalJs(`localizedText('下载运行时 17.1 MB / 1366.7 MB · 2.10 MB/s · 剩余约 11 分钟')`);
+  step('下载进度使用英文且保留进度信息',
+    dynamicProgress === 'Downloading runtime 17.1 MB / 1366.7 MB · 2.10 MB/s · about 11 min',
+    dynamicProgress);
+  const initialProgress = await evalJs(`localizedText('下载运行时（约 1.5 GB，只需一次，8 线程）…')`);
+  step('运行时部署初始进度使用英文',
+    initialProgress === 'Downloading runtime (about 1.5 GB, one-time download, 8 threads)…',
+    initialProgress);
 
   // 滚到自动检测面板再截图（等合成器跟上，避免拍到上一帧）
   await evalJs(`document.getElementById('autodebugGroup').scrollIntoView({ block: 'start' })`);

@@ -35,6 +35,9 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
+  // ApkStart interface language. English is the default; Android's system
+  // language remains independently configurable under engine.locale.
+  language: 'en',
   adbPath: '',
   device: '127.0.0.1:5555',
   /**

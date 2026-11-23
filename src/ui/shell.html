@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
@@ -9,7 +9,7 @@
 <body>
 <header class="bar" id="bar">
   <img class="ico" id="appIcon" alt="" draggable="false" />
-  <span class="name" id="appName">应用</span>
+  <span class="name" id="appName" data-no-localize>App</span>
   <span class="grow"></span>
   <button class="ctl" id="btnRotate" title="横屏 / 竖屏（Ctrl+R）">
     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -37,7 +37,7 @@
     <div class="boot-ico-wrap">
       <img class="boot-ico" id="bootIcon" alt="" draggable="false" />
     </div>
-    <div class="boot-name" id="bootName"></div>
+    <div class="boot-name" id="bootName" data-no-localize></div>
     <div class="boot-bar"><i></i></div>
     <div class="boot-tip" id="bootTip">正在启动安卓运行时…</div>
   </div>

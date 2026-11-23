@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
@@ -239,6 +239,14 @@
       <div class="group" data-cat="basic">
         <div class="group-title">自动模式（默认，无需设置）</div>
         <div class="field">
+          <label>界面语言</label>
+          <select id="setLanguage">
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
+          <span class="sub">选择 ApkStart 界面语言。更改会立即生效；安卓系统语言请在性能设置中单独配置。</span>
+        </div>
+        <div class="field">
           <label>本机自适应参数</label>
           <div class="inline-note" id="autoProfileText">正在检测…</div>
           <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。
@@ -250,7 +258,7 @@
         </div>
         <div class="field">
           <label>磁盘总占用（运行时 + 安卓数据 + 缓存）</label>
-          <div class="row">
+          <div class="row usage-row">
             <span class="inline-note" id="usageText">正在统计…</span>
             <button class="btn ghost sm" id="btnCleanup">清理可回收文件</button>
             <button class="btn ghost sm" id="btnLeftovers" title="扫描并清掉旧版本留下的程序目录、失效的卸载项和更新临时文件">清理旧版本残留</button>

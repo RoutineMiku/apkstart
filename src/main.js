@@ -990,6 +990,14 @@ function openManual(payload = {}) {
 
 function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
+  if (store.getSettings().language === 'en') {
+    const englishNotifications = {
+      'ApkStart 仍在后台运行': 'ApkStart is still running in the background',
+      '点击托盘图标可重新打开；右键托盘可退出。': 'Click the tray icon to reopen it, or right-click the tray to quit.',
+    };
+    title = englishNotifications[title] || title;
+    body = englishNotifications[body] || body;
+  }
   try {
     const { Notification } = require('electron');
     if (Notification.isSupported()) new Notification({ title, body, icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
@@ -1087,6 +1095,7 @@ function buildTray() {
     return;
   }
   const refresh = () => {
+    const english = store.getSettings().language === 'en';
     const apps = store.getApps().slice(0, 8);
     // 独立窗口模式主界面是隐藏的，托盘就成了唯一随时可达的入口 ——
     // 「关闭当前应用」必须放这里，否则用户根本没法关掉正在跑的应用。
@@ -1100,15 +1109,17 @@ function buildTray() {
       ? ((store.getApp(currentAppPkg) || {}).label || currentAppPkg)
       : '';
     const menu = Menu.buildFromTemplate([
-      { label: '打开 ApkStart', click: () => showWindow() },
-      { label: '使用手册', click: () => openManual({ topic: 'overview', reason: 'tray' }) },
+      { label: english ? 'Open ApkStart' : '打开 ApkStart', click: () => showWindow() },
+      { label: english ? 'User guide' : '使用手册', click: () => openManual({ topic: 'overview', reason: 'tray' }) },
       { type: 'separator' },
       ...(apps.length
         ? apps.map((a) => ({ label: a.label, click: () => runLaunch(a.package) }))
-        : [{ label: '还没有安装应用', enabled: false }]),
+        : [{ label: english ? 'No apps installed' : '还没有安装应用', enabled: false }]),
       { type: 'separator' },
       {
-        label: hasRunning ? `关闭当前应用（${runningLabel}）` : '关闭当前应用',
+        label: hasRunning
+          ? (english ? `Close current app (${runningLabel})` : `关闭当前应用（${runningLabel}）`)
+          : (english ? 'Close current app' : '关闭当前应用'),
         enabled: !!hasRunning,
         click: () => {
           const pkg = currentAppPkg;
@@ -1118,19 +1129,25 @@ function buildTray() {
         },
       },
       {
-        label: wantLandscapeFor(currentAppPkg) ? '切回竖屏（需重启运行时）' : '切换横屏（需重启运行时）',
+        label: wantLandscapeFor(currentAppPkg)
+          ? (english ? 'Switch to portrait (runtime restart required)' : '切回竖屏（需重启运行时）')
+          : (english ? 'Switch to landscape (runtime restart required)' : '切换横屏（需重启运行时）'),
         enabled: !!currentAppPkg,
         click: () => { rotateCurrentApp().catch(() => {}); },
       },
       {
-        label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
+        label: displaySettings().mode === 'fullscreen'
+          ? (english ? 'Switch to windowed mode' : '切回竖屏窗口')
+          : (english ? 'Fullscreen (fit screen)' : '全屏（自适应屏幕）'),
         click: () => { toggleDisplayMode(); },
       },
-      { label: '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
-      { label: '同步共享目录', click: () => sharer.sync() },
-      { label: '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
+      { label: english ? 'Rebuild desktop/Start menu shortcuts' : '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
+      { label: english ? 'Sync shared folder' : '同步共享目录', click: () => sharer.sync() },
+      { label: english ? 'Settings' : '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
       {
-        label: updateInfo && updateInfo.hasUpdate ? `发现新版本 ${updateInfo.tag}` : '检查更新',
+        label: updateInfo && updateInfo.hasUpdate
+          ? (english ? `Update available: ${updateInfo.tag}` : `发现新版本 ${updateInfo.tag}`)
+          : (english ? 'Check for updates' : '检查更新'),
         click: async () => {
           showWindow();
           send('ui:navigate', 'settings');
@@ -1139,22 +1156,24 @@ function buildTray() {
           if (info && info.hasUpdate && info.asset) {
             const r = await dialog.showMessageBox(mainWindow || undefined, {
               type: 'question',
-              title: '发现新版本',
-              message: `ApkStart ${info.tag} 已发布，当前版本 v${app.getVersion()}。现在更新吗？`,
-              detail: (info.notes || '').slice(0, 600),
-              buttons: ['立即更新', '稍后'],
+              title: english ? 'Update available' : '发现新版本',
+              message: english
+                ? `ApkStart ${info.tag} is available (current version: v${app.getVersion()}). Update now?`
+                : `ApkStart ${info.tag} 已发布，当前版本 v${app.getVersion()}。现在更新吗？`,
+              detail: english ? 'See the project release page for update notes.' : (info.notes || '').slice(0, 600),
+              buttons: english ? ['Update now', 'Later'] : ['立即更新', '稍后'],
               defaultId: 0,
               cancelId: 1,
             });
             if (r.response === 0) runUpdate();
           } else if (info && !info.hasUpdate) {
-            notify('已是最新版本', `ApkStart v${app.getVersion()}`);
+            notify(english ? 'You are up to date' : '已是最新版本', `ApkStart v${app.getVersion()}`);
           }
         },
       },
       { type: 'separator' },
       {
-        label: '退出',
+        label: english ? 'Quit' : '退出',
         click: async () => {
           try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
           quitting = true;
