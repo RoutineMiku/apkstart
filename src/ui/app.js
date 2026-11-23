@@ -176,7 +176,7 @@ function renderGrid() {
           ? `<img src="${esc(a.iconUrl)}" alt="" draggable="false" />`
           : `<div class="fallback" style="background:${esc(a.accent || '#9aa6b2')}">${esc(initialOf(a.label))}</div>`}
       </div>
-      <div class="name">${esc(a.label)}</div>
+      <div class="name" data-i18n-skip>${esc(a.label)}</div>
       <div class="meta">${a.running ? '运行中' : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
       <div class="open-hint">${a.running ? '切换到前台' : '打开'}</div>
     </div>
@@ -1050,6 +1050,7 @@ async function refreshDrivers() {
 function fillSettings(s) {
   syncBackendFields();
   refreshDrivers().catch(() => {});
+  if ($('setUiLanguage')) $('setUiLanguage').value = s.uiLanguage || 'auto';
   $('setAdbPath').value = s.adbPath || '';
   $('setSystemImage').value = s.runtime.isoPath || '';
   $('setMemory').value = s.engine.memoryMB;
@@ -1616,6 +1617,18 @@ function bindSettings() {
   const save = async (patch) => {
     state.settings = await api.setSettings(patch);
   };
+
+  if ($('setUiLanguage')) {
+    $('setUiLanguage').addEventListener('change', async (e) => {
+      state.settings = await api.setSettings({ uiLanguage: e.target.value });
+      // 主进程会把新语言广播给所有窗口，i18n-dom.js 就地重译；不重载，设置页状态不丢
+      toast({
+        title: '界面语言已切换',
+        body: '已立即生效；安卓系统语言不受影响',
+        type: 'ok',
+      });
+    });
+  }
 
   if ($('btnPreflight')) $('btnPreflight').addEventListener('click', () => runPreflight());
   if ($('btnPreflightApply')) {

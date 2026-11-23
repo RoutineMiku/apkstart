@@ -14,6 +14,7 @@ const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
 const orientation = require('./core/orientation');
+const i18n = require('./core/i18n');
 
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
@@ -231,6 +232,7 @@ const ICON_PNG = loadBrandIcon().toPNG();
 
 let mainWindow = null;
 let tray = null;
+let trayTimer = null;
 let runtime = null;
 // 「哪些窗口算我们的」由 whenReady 里赋值（见 agentScope）。放模块级是因为
 // runLaunch / 预热定时器都早于那段代码定义，闭包里的 const 在它们的作用域外看不到。
@@ -970,7 +972,7 @@ function openManual(payload = {}) {
         if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       });
     }
-    manualWindow.setTitle(`ApkStart 使用手册 · ${target.title}`);
+    manualWindow.setTitle(i18n.t('ApkStart 使用手册 · {title}', { title: i18n.t(target.title) }));
     manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
@@ -992,7 +994,7 @@ function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
   try {
     const { Notification } = require('electron');
-    if (Notification.isSupported()) new Notification({ title, body, icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
+    if (Notification.isSupported()) new Notification({ title: i18n.t(title), body: i18n.t(body), icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
   } catch (_) { /* ignore */ }
 }
 
@@ -1080,6 +1082,16 @@ function scheduleAutodebug() {
 // ---------------- 托盘 ----------------
 
 function buildTray() {
+  // 切语言时会重建托盘：先销毁旧图标并停掉它的刷新定时器，
+  // 否则任务栏里会堆出两个图标、旧定时器还会往已销毁的对象上写菜单。
+  if (tray) {
+    try { tray.destroy(); } catch (_) { /* ignore */ }
+    tray = null;
+  }
+  if (trayTimer) {
+    clearInterval(trayTimer);
+    trayTimer = null;
+  }
   const icon = loadTrayIcon();
   try {
     tray = new Tray(icon);
@@ -1100,15 +1112,17 @@ function buildTray() {
       ? ((store.getApp(currentAppPkg) || {}).label || currentAppPkg)
       : '';
     const menu = Menu.buildFromTemplate([
-      { label: '打开 ApkStart', click: () => showWindow() },
-      { label: '使用手册', click: () => openManual({ topic: 'overview', reason: 'tray' }) },
+      { label: i18n.t('打开 ApkStart'), click: () => showWindow() },
+      { label: i18n.t('使用手册'), click: () => openManual({ topic: 'overview', reason: 'tray' }) },
       { type: 'separator' },
       ...(apps.length
         ? apps.map((a) => ({ label: a.label, click: () => runLaunch(a.package) }))
-        : [{ label: '还没有安装应用', enabled: false }]),
+        : [{ label: i18n.t('还没有安装应用'), enabled: false }]),
       { type: 'separator' },
       {
-        label: hasRunning ? `关闭当前应用（${runningLabel}）` : '关闭当前应用',
+        label: hasRunning
+          ? i18n.t('关闭当前应用（{name}）', { name: runningLabel })
+          : i18n.t('关闭当前应用'),
         enabled: !!hasRunning,
         click: () => {
           const pkg = currentAppPkg;
@@ -1118,19 +1132,25 @@ function buildTray() {
         },
       },
       {
-        label: wantLandscapeFor(currentAppPkg) ? '切回竖屏（需重启运行时）' : '切换横屏（需重启运行时）',
+        label: wantLandscapeFor(currentAppPkg)
+          ? i18n.t('切回竖屏（需重启运行时）')
+          : i18n.t('切换横屏（需重启运行时）'),
         enabled: !!currentAppPkg,
         click: () => { rotateCurrentApp().catch(() => {}); },
       },
       {
-        label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
+        label: displaySettings().mode === 'fullscreen'
+          ? i18n.t('切回竖屏窗口')
+          : i18n.t('全屏（自适应屏幕）'),
         click: () => { toggleDisplayMode(); },
       },
-      { label: '重建桌面/开始菜单快捷方式', click: () => { installer.ensureShortcuts().catch(() => {}); } },
-      { label: '同步共享目录', click: () => sharer.sync() },
-      { label: '设置', click: () => { showWindow(); send('ui:navigate', 'settings'); } },
+      { label: i18n.t('重建桌面/开始菜单快捷方式'), click: () => { installer.ensureShortcuts().catch(() => {}); } },
+      { label: i18n.t('同步共享目录'), click: () => sharer.sync() },
+      { label: i18n.t('设置'), click: () => { showWindow(); send('ui:navigate', 'settings'); } },
       {
-        label: updateInfo && updateInfo.hasUpdate ? `发现新版本 ${updateInfo.tag}` : '检查更新',
+        label: updateInfo && updateInfo.hasUpdate
+          ? i18n.t('发现新版本 {tag}', { tag: updateInfo.tag })
+          : i18n.t('检查更新'),
         click: async () => {
           showWindow();
           send('ui:navigate', 'settings');
@@ -1139,10 +1159,13 @@ function buildTray() {
           if (info && info.hasUpdate && info.asset) {
             const r = await dialog.showMessageBox(mainWindow || undefined, {
               type: 'question',
-              title: '发现新版本',
-              message: `ApkStart ${info.tag} 已发布，当前版本 v${app.getVersion()}。现在更新吗？`,
+              title: i18n.t('发现新版本'),
+              message: i18n.t('ApkStart {tag} 已发布，当前版本 v{version}。现在更新吗？', {
+                tag: info.tag,
+                version: app.getVersion(),
+              }),
               detail: (info.notes || '').slice(0, 600),
-              buttons: ['立即更新', '稍后'],
+              buttons: [i18n.t('立即更新'), i18n.t('稍后')],
               defaultId: 0,
               cancelId: 1,
             });
@@ -1154,7 +1177,7 @@ function buildTray() {
       },
       { type: 'separator' },
       {
-        label: '退出',
+        label: i18n.t('退出'),
         click: async () => {
           try { appWin.close({ keepApp: true }); } catch (_) { /* ignore */ }
           quitting = true;
@@ -1164,14 +1187,15 @@ function buildTray() {
     ]);
     tray.setContextMenu(menu);
   };
-  tray.setToolTip('ApkStart — 安卓应用运行器');
+  tray.setToolTip(i18n.t('ApkStart — 安卓应用运行器'));
   // Windows 托盘的惯例是单击就打开主窗口（双击当然也可以）。
   // 之前只绑了 double-click，用户单击没反应，会以为托盘图标坏了。
   // 右键才出菜单，所以这里单击直接 showWindow 不会和菜单冲突。
   tray.on('click', () => showWindow());
   tray.on('double-click', () => showWindow());
   refresh();
-  setInterval(refresh, 5000).unref?.();
+  trayTimer = setInterval(refresh, 5000);
+  trayTimer.unref?.();
 }
 
 // ---------------- 核心动作 ----------------
@@ -1630,7 +1654,7 @@ function registerIpc() {
   // 选文件夹（用于把运行时/镜像/已装应用挪到非系统盘）
   ipcMain.handle('dialog:openDir', async (_e, defaultPath) => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择数据存放目录',
+      title: i18n.t('选择数据存放目录'),
       defaultPath: defaultPath || store.DATA_DIR,
       properties: ['openDirectory', 'createDirectory'],
     });
@@ -1660,8 +1684,8 @@ function registerIpc() {
 
   ipcMain.handle('apk:pick', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择要安装的 APK',
-      filters: [{ name: 'Android 应用', extensions: ['apk', 'apks', 'xapk'] }],
+      title: i18n.t('选择要安装的 APK'),
+      filters: [{ name: i18n.t('Android 应用'), extensions: ['apk', 'apks', 'xapk'] }],
       properties: ['openFile', 'multiSelections'],
     });
     if (r.canceled) return [];
@@ -1763,6 +1787,18 @@ function registerIpc() {
   ipcMain.handle('settings:set', (_e, rawPatch) => {
     const patch = sanitizeResourcePatch(rawPatch);
     const next = store.saveSettings(patch);
+    // 界面语言变了：主进程词典 + 托盘菜单 + 所有已打开窗口即时切换。
+    // 不重载窗口，正在运行的应用和未保存的界面状态都不受影响。
+    if (patch && patch.uiLanguage !== undefined) {
+      i18n.setLanguage(i18n.resolveLanguage(
+        next.uiLanguage,
+        app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [app.getLocale()],
+      ));
+      buildTray();
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('i18n:lang', i18n.getLanguage());
+      }
+    }
     if (patch && patch.autoStart !== undefined) applyAutoStart();
     if (patch && patch.display && appWin && appWin.isOpen) {
       // 竖屏基准尺寸变了：只影响后续打开的窗口大小，不打断正在跑的应用
@@ -1975,8 +2011,8 @@ function registerIpc() {
   ipcMain.handle('drivers:import', async () => {
     const drv = require('./core/drivers');
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择驱动文件（.json）',
-      filters: [{ name: '驱动 JSON', extensions: ['json'] }],
+      title: i18n.t('选择驱动文件（.json）'),
+      filters: [{ name: i18n.t('驱动 JSON'), extensions: ['json'] }],
       properties: ['openFile'],
     });
     if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
@@ -1995,9 +2031,9 @@ function registerIpc() {
     const overview = await driverOverview();
     const tpl = drv.templateFromHost(overview.host);
     const r = await dialog.showSaveDialog(mainWindow, {
-      title: '导出本机驱动模板',
+      title: i18n.t('导出本机驱动模板'),
       defaultPath: path.join(drv.userDir(store), `${tpl.id}.json`),
-      filters: [{ name: '驱动 JSON', extensions: ['json'] }],
+      filters: [{ name: i18n.t('驱动 JSON'), extensions: ['json'] }],
     });
     if (r.canceled || !r.filePath) return { ok: false, canceled: true };
     fs.mkdirSync(path.dirname(r.filePath), { recursive: true });
@@ -2095,7 +2131,7 @@ function registerIpc() {
             severity: 'warn',
             title: '未启用硬件加速',
             hint: `${accel.note || '将回退软件模拟（能跑但很慢）。'}`
-              + '点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；'
+              + ' 点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；'
               + '失败时会自动改装 AEHD 驱动。',
             fix: 'virtualization',
           });
@@ -2224,10 +2260,10 @@ function registerIpc() {
   ipcMain.handle('app:confirm', async (_e, opts = {}) => {
     const { response } = await dialog.showMessageBox(mainWindow || undefined, {
       type: opts.type || 'question',
-      title: opts.title || '确认',
-      message: opts.message || '',
-      detail: opts.detail || '',
-      buttons: ['取消', opts.okLabel || '确定'],
+      title: i18n.t(opts.title || '确认'),
+      message: i18n.t(opts.message || ''),
+      detail: i18n.t(opts.detail || ''),
+      buttons: [i18n.t('取消'), i18n.t(opts.okLabel || '确定')],
       defaultId: 1,
       cancelId: 0,
       noLink: true,
@@ -2315,15 +2351,15 @@ function registerIpc() {
     const preview = await runtime.cleanup(pass);
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      buttons: ['取消', `清理 ${preview.candidates.length} 项`],
+      buttons: [i18n.t('取消'), i18n.t('清理 {n} 项', { n: preview.candidates.length })],
       defaultId: 0,
       cancelId: 0,
-      title: '确认清理运行时缓存',
-      message: `将释放约 ${(preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0)} MB`,
-      detail: (opts.includeSnapshots
+      title: i18n.t('确认清理运行时缓存'),
+      message: i18n.t('将释放约 {mb} MB', { mb: (preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0) }),
+      detail: i18n.t((opts.includeSnapshots
         ? '会先停止运行时，再删除旧镜像、当前 AVD 的快速启动快照、锁文件和非活动 AVD 的缓存。已安装的应用本身保留（只清快照），'
         : '只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。')
-        + '此操作不可撤销，建议先导出诊断报告。',
+        + '此操作不可撤销，建议先导出诊断报告。'),
     });
     if (response !== 1) return { ...preview, cancelled: true };
     return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots });
@@ -2588,8 +2624,8 @@ function registerIpc() {
 
   ipcMain.handle('provision:importIso', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择 Android-x86 / Bliss OS 系统镜像',
-      filters: [{ name: '系统镜像', extensions: ['iso', 'img'] }],
+      title: i18n.t('选择 Android-x86 / Bliss OS 系统镜像'),
+      filters: [{ name: i18n.t('系统镜像'), extensions: ['iso', 'img'] }],
       properties: ['openFile'],
     });
     if (r.canceled) return { ok: false, canceled: true };
@@ -2602,8 +2638,8 @@ function registerIpc() {
 
   ipcMain.handle('provision:importDisk', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: '选择已安装 Android 的虚拟磁盘',
-      filters: [{ name: '虚拟磁盘', extensions: ['qcow2', 'img', 'vmdk', 'raw'] }],
+      title: i18n.t('选择已安装 Android 的虚拟磁盘'),
+      filters: [{ name: i18n.t('虚拟磁盘'), extensions: ['qcow2', 'img', 'vmdk', 'raw'] }],
       properties: ['openFile'],
     });
     if (r.canceled) return { ok: false, canceled: true };
@@ -2929,6 +2965,16 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store.ensureDirs();
+    /**
+     * 界面语言必须在任何窗口创建之前定下来：preload 会在窗口加载时同步问一次
+     * （ipcRenderer.sendSync('i18n:bootstrap')），拿到的就是这里的值。
+     * auto = 跟随系统：中文系统保持中文，其它语言默认英文。
+     */
+    i18n.setLanguage(i18n.resolveLanguage(
+      store.getSettings().uiLanguage,
+      app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [app.getLocale()],
+    ));
+    ipcMain.on('i18n:bootstrap', (e) => { e.returnValue = { lang: i18n.getLanguage() }; });
     /**
      * 记下「当前是谁在管这台运行时」。
      *

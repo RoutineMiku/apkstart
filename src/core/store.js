@@ -35,6 +35,9 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
+  // 界面语言：auto = 跟随系统（系统中文→中文，其它→英文）；zh / en = 固定。
+  // 老用户升级时若配置里没有这个字段，会迁移成 zh（保持升级前的中文界面）。
+  uiLanguage: 'auto',
   adbPath: '',
   device: '127.0.0.1:5555',
   /**
@@ -269,7 +272,18 @@ const store = {
   STORE_BUILD,
 
   getSettings() {
-    const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    const existing = readJson(SETTINGS_FILE, {});
+    const s = deepMerge(DEFAULT_SETTINGS, existing);
+    /**
+     * 界面语言迁移：设置文件里没有 uiLanguage 的是老用户，保持他们看到的
+     * 中文界面；全新安装（没有 settings.json）才默认 auto，按系统语言选。
+     * 非法值一律回落到中文，避免手改配置把界面搞成空白。
+     */
+    if (existing.uiLanguage === undefined) {
+      s.uiLanguage = fs.existsSync(SETTINGS_FILE) ? 'zh' : 'auto';
+    } else if (!['auto', 'zh', 'en'].includes(s.uiLanguage)) {
+      s.uiLanguage = 'zh';
+    }
     /**
      * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
      * 或者手改出来的任何其它值，一律当 builtin 处理，并把残留的第三方字段删掉。
@@ -313,6 +327,9 @@ const store = {
         // 立刻回写，保证配置文件本身也回到原生；用户其它字段原样保留。
         writeJson(SETTINGS_FILE, {
           ...raw,
+          // 全新安装首次读设置时这里会写盘；把刚算出的 uiLanguage 一起落盘，
+          // 否则第二次读会把「自己刚创建的文件」误判成老用户配置，语言被迁成中文。
+          uiLanguage: s.uiLanguage,
           display: { ...d, windowEmbed: false, windowEmbedMigrated2: true },
         });
       }
