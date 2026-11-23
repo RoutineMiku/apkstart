@@ -1,24 +1,68 @@
 'use strict';
-/* ApkStart 开机动画脚本：接收主进程的进度更新，控制淡出 */
 
 const api = window.apkstartSplash;
-if (!api) { /* preload 未注入时静默退出 */ }
-
+const i18n = window.apkstartI18n;
 const $ = (id) => document.getElementById(id);
+let splashLanguage = 'en';
+const translatedText = new WeakMap();
 
-// 版本号
+function localizeTextNode(node) {
+  const current = node.nodeValue;
+  const previous = translatedText.get(node);
+  const source = previous && current === previous.output ? previous.source : current;
+  const key = source.trim().replace(/\s+/g, ' ');
+  const leading = source.match(/^\s*/)[0];
+  const trailing = source.match(/\s*$/)[0];
+  const output = key && splashLanguage !== 'zh-CN'
+    ? i18n.translate(key, splashLanguage) || i18n.translate(key, 'en') || source
+    : source;
+  const localized = output === source ? source : `${leading}${output}${trailing}`;
+  translatedText.set(node, { source, output: localized });
+  if (localized !== current) node.nodeValue = localized;
+}
+
+function localizeNode(root) {
+  if (root.nodeType === Node.TEXT_NODE) {
+    localizeTextNode(root);
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root !== document.body) return;
+  for (const node of root.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) localizeTextNode(node);
+  }
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    root.querySelectorAll('*').forEach((el) => {
+      for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) localizeTextNode(node);
+      }
+    });
+  }
+}
+
+function applySplashLanguage(language) {
+  splashLanguage = i18n.normalize(language);
+  document.documentElement.lang = splashLanguage;
+  document.documentElement.dir = i18n.direction(splashLanguage);
+  localizeNode(document.body);
+}
+
+const observer = new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    if (mutation.type === 'characterData') localizeTextNode(mutation.target);
+    else mutation.addedNodes.forEach(localizeNode);
+  }
+});
+observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+
+api?.language?.().then(applySplashLanguage).catch(() => applySplashLanguage('en'));
 api?.version?.().then((v) => { if ($('ver')) $('ver').textContent = v || ''; }).catch(() => {});
 
-// 首次安装标记 + 组件是否随包自带
 Promise.all([
   api?.isFirstRun?.().catch(() => false),
   api?.bundled?.().catch(() => false),
 ]).then(([first, bundled]) => {
   if (!first || !$('firstRun')) return;
   $('firstRun').hidden = false;
-  // 内置运行时（完整版安装包 / 微软商店 MSIX 版）：一个字都不该提「下载」。
-  // 用户抱怨的就是「装了 850MB 还在下镜像」，实际那只是把包里的压缩镜像
-  // 展开到用户目录，不需要联网。
   if (bundled) {
     if ($('firstRunTitle')) $('firstRunTitle').textContent = '首次启动 · 本地准备中（无需联网）';
     if ($('firstRunList')) {
@@ -32,7 +76,6 @@ Promise.all([
   }
 }).catch(() => {});
 
-// 进度更新
 api?.onProgress?.((p) => {
   if (!p) return;
   if (p.percent != null && $('progressBar')) {
@@ -43,7 +86,6 @@ api?.onProgress?.((p) => {
   }
 });
 
-// 完成 → 淡出
 api?.onDone?.(() => {
   const splash = $('splash');
   if (splash) {
