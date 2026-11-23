@@ -1,6 +1,7 @@
 'use strict';
 
 const api = window.apkstart;
+const i18n = window.apkstartI18n;
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -31,6 +32,7 @@ const UI_TEXT = {
   '设置项：横屏 / 内存 / 代理 / 快照…': 'Search settings: orientation / memory / proxy / snapshots…',
   '界面语言': 'Interface language',
   '界面语言已更改': 'Interface language changed',
+  '界面已切换为英语。': 'The interface is now in English.',
   '界面已切换为简体中文。': 'The interface is now in Simplified Chinese.',
   '新': 'New',
   '简体中文': 'Simplified Chinese',
@@ -122,6 +124,7 @@ const UI_TEXT = {
   '安卓数据分区（应用与游戏装这里）': 'Android data partition (apps and games are stored here)',
   '立即扩容': 'Expand now',
   '系统语言': 'Android system language',
+  '例如 https://ghfast.top/': 'e.g. https://ghfast.top/',
   '简体中文（推荐）': 'Simplified Chinese (recommended)',
   '繁體中文': 'Traditional Chinese',
   'English（镜像原生）': 'English (image default)',
@@ -444,6 +447,10 @@ const UI_TEXT = {
   '开始体检': 'Run system check',
   '运行时已就绪': 'Runtime ready',
   '运行时未连接': 'Runtime not connected',
+  '运行时未就绪': 'Runtime not ready',
+  '运行时组件尚未部署完成': 'Runtime components have not been fully deployed',
+  '共享目录不可用': 'Shared folder unavailable',
+  '文件互通用的本机目录不存在或没有写权限，安卓里保存的文件同步不过去。': 'The local folder used for file sharing does not exist or is not writable. Files saved in Android cannot be synced.',
   '独立窗口已启用': 'Standalone windows enabled',
   '下午好，欢迎回来': 'Good afternoon, welcome back',
   'ApkStart · 运行时会按需自动准备': 'ApkStart · The runtime is prepared on demand',
@@ -668,6 +675,16 @@ const UI_TEXT = {
 };
 
 const UI_PHRASES = [
+  ['当前数据分区：', 'Current data partition: '],
+  ['快速启动差量盘（实际容量以运行时 /data 为准）', 'Quick-boot overlay (actual capacity depends on runtime /data)'],
+  ['实际文件系统 ', 'Actual filesystem '],
+  ['尚未创建', 'Not created'],
+  ['（自动）', ' (automatic)'],
+  [' · 所在磁盘剩余 ', ' · Free disk space: '],
+  ['。 目标 ', '. Target '],
+  [' GB 还没生效：安卓正在用快速启动差量盘，需要「重置安卓数据」后按新容量重建（会清空已装应用）。', ' GB has not taken effect: Android is using a quick-boot overlay. Reset Android data to rebuild it at the new size (installed apps will be removed).'],
+  ['。游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。', '. If a game reports insufficient storage, increase the size here and select Expand now. In-place expansion preserves installed apps.'],
+  ['游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。', 'If a game reports insufficient storage, increase the size here and select Expand now. In-place expansion preserves installed apps.'],
   ['ApkStart 用', 'ApkStart uses '],
   ['专用 adb 服务端口', 'dedicated ADB server port'],
   ['（你系统里自己的 adb 是 ', '(your system ADB uses port '],
@@ -850,11 +867,29 @@ let usageLoaded = false;
 
 function localizedText(source) {
   const key = source.trim().replace(/\s+/g, ' ');
-  if (uiLanguage !== 'en' || !key) return source;
-  const translated = UI_TEXT[key];
+  if (!key || uiLanguage === 'zh-CN') return source;
+  const localeTranslation = i18n.translate(key, uiLanguage);
   const leading = source.match(/^\s*/)[0];
   const trailing = source.match(/\s*$/)[0];
+  if (localeTranslation) return `${leading}${localeTranslation}${trailing}`;
+  const translated = UI_TEXT[key];
   if (translated) return `${leading}${translated}${trailing}`;
+  const issueCount = key.match(/^(\d+) 个(严重|提示)$/);
+  if (issueCount) {
+    const count = Number(issueCount[1]);
+    const localeCount = i18n.issueCount(count, issueCount[2] === '严重' ? 'severe' : 'notice', uiLanguage);
+    if (localeCount) return `${leading}${localeCount}${trailing}`;
+    const label = issueCount[2] === '严重'
+      ? (count === 1 ? 'critical issue' : 'critical issues')
+      : (count === 1 ? 'notice' : 'notices');
+    return `${leading}${count} ${label}${trailing}`;
+  }
+  const runtimeStatus = key.match(/^运行时未就绪（(.+)）$/);
+  if (runtimeStatus) {
+    const title = i18n.translate('运行时未就绪', uiLanguage) || UI_TEXT['运行时未就绪'];
+    const detail = i18n.translate(runtimeStatus[1], uiLanguage) || UI_TEXT[runtimeStatus[1]] || runtimeStatus[1];
+    return `${leading}${title} (${detail})${trailing}`;
+  }
   const progressPatterns = [
     [/^下载运行时（约 (.+?)，只需一次，(\d+) 线程）…$/, (_m, size, threads) => `Downloading runtime (about ${size}, one-time download, ${threads} threads)…`],
     [/^下载运行时引擎（约 (.+?)，走 Google 官方源）…$/, (_m, size) => `Downloading runtime engine (about ${size}, from Google)…`],
@@ -893,11 +928,17 @@ function localizedText(source) {
 function formatUsageText(usage) {
   latestUsage = usage || null;
   usageLoaded = true;
-  if (!usage) return uiLanguage === 'en' ? 'Usage statistics unavailable' : '统计不可用';
-  if (uiLanguage === 'en') {
-    return `Total ${usage.totalText}${usage.reclaimable
-      ? ` · Reclaimable ${usage.reclaimableText} (${usage.count} ${usage.count === 1 ? 'item' : 'items'})`
-      : ' · Already optimized'}`;
+  if (!usage) return uiLanguage === 'zh-CN'
+    ? '统计不可用'
+    : i18n.translate('统计不可用', uiLanguage) || 'Usage statistics unavailable';
+  if (uiLanguage !== 'zh-CN') {
+    const total = i18n.translate('总计', uiLanguage) || 'Total';
+    const reclaimable = i18n.translate('可回收', uiLanguage) || 'Reclaimable';
+    const items = uiLanguage === 'en' && usage.count === 1 ? 'item' : i18n.translate('项', uiLanguage) || 'items';
+    const optimized = i18n.translate('已是精简状态', uiLanguage) || 'Already optimized';
+    return `${total} ${usage.totalText}${usage.reclaimable
+      ? ` · ${reclaimable} ${usage.reclaimableText} (${usage.count} ${items})`
+      : ` · ${optimized}`}`;
   }
   return `共 ${usage.totalText}${usage.reclaimable
     ? ` · 可回收 ${usage.reclaimableText}（${usage.count} 项）`
@@ -940,8 +981,9 @@ function translateElement(el) {
 let languageObserver = null;
 
 function applyUiLanguage(language) {
-  uiLanguage = language === 'zh-CN' ? 'zh-CN' : 'en';
+  uiLanguage = i18n.normalize(language);
   document.documentElement.lang = uiLanguage;
+  document.documentElement.dir = i18n.direction(uiLanguage);
   if (usageLoaded && $('usageText')) $('usageText').textContent = formatUsageText(latestUsage);
   const scan = (root) => {
     if (root.nodeType === Node.TEXT_NODE) {
@@ -999,6 +1041,14 @@ function relTime(ts) {
     if (d < 86400000) return `${Math.floor(d / 3600000)} hours ago`;
     if (d < 86400000 * 30) return `${Math.floor(d / 86400000)} days ago`;
     return new Date(ts).toLocaleDateString('en-US');
+  }
+  if (uiLanguage !== 'zh-CN') {
+    const relative = new Intl.RelativeTimeFormat(uiLanguage, { numeric: 'auto' });
+    if (d < 60000) return relative.format(0, 'second');
+    if (d < 3600000) return relative.format(-Math.floor(d / 60000), 'minute');
+    if (d < 86400000) return relative.format(-Math.floor(d / 3600000), 'hour');
+    if (d < 86400000 * 30) return relative.format(-Math.floor(d / 86400000), 'day');
+    return new Date(ts).toLocaleDateString(uiLanguage);
   }
   if (d < 60000) return '刚刚';
   if (d < 3600000) return `${Math.floor(d / 60000)} 分钟前`;
@@ -1933,7 +1983,7 @@ function renderDrivers(r) {
   const errors = (r && r.errors) || [];
   const onCount = drivers.filter((d) => d.enabled && d.matched).length;
   if (sum) {
-    if (uiLanguage === 'en') {
+    if (uiLanguage !== 'zh-CN') {
       const accel = host.accel === 'none' ? 'No hardware acceleration' : (host.accel || 'Unknown');
       sum.textContent = `This PC: ${host.platform || 'Unknown'}/${host.arch || 'Unknown'} · ${host.gpuVendor || 'Unknown'} GPU · ${accel}`
         + ` · emulator ${host.emulatorVersion || 'unknown'}; ${drivers.length} drivers, ${onCount} active on this PC.`
@@ -1963,7 +2013,7 @@ function renderDrivers(r) {
     });
     const name = document.createElement('span');
     name.className = 'drv-name';
-    name.textContent = uiLanguage === 'en' && builtinEnglish ? builtinEnglish.name : d.name;
+    name.textContent = uiLanguage !== 'zh-CN' && builtinEnglish ? builtinEnglish.name : d.name;
     head.append(cb, name);
 
     if (d.matched && d.enabled) {
@@ -1986,14 +2036,14 @@ function renderDrivers(r) {
       + (d.author ? ` · ${d.author}` : '')
       + ` · priority ${d.priority}`
       + (d.hits && d.hits.length
-        ? ` · ${uiLanguage === 'en' ? 'Matched: ' : '命中：'}${d.hits.join(' / ')}`
-        : ` · ${uiLanguage === 'en' ? 'Does not match this PC' : '本机不匹配'}`);
+        ? ` · ${uiLanguage !== 'zh-CN' ? 'Matched: ' : '命中：'}${d.hits.join(' / ')}`
+        : ` · ${uiLanguage !== 'zh-CN' ? 'Does not match this PC' : '本机不匹配'}`);
     item.append(meta);
 
     if (d.description) {
       const desc = document.createElement('div');
       desc.className = 'drv-meta';
-      desc.textContent = uiLanguage === 'en' && builtinEnglish
+      desc.textContent = uiLanguage !== 'zh-CN' && builtinEnglish
         ? builtinEnglish.description
         : d.description;
       item.append(desc);
@@ -2025,7 +2075,7 @@ async function refreshDrivers() {
 }
 
 function fillSettings(s) {
-  if ($('setLanguage')) $('setLanguage').value = s.language === 'zh-CN' ? 'zh-CN' : 'en';
+  if ($('setLanguage')) $('setLanguage').value = i18n.normalize(s.language);
   applyUiLanguage(s.language);
   syncBackendFields();
   refreshDrivers().catch(() => {});
@@ -2603,12 +2653,14 @@ function bindSettings() {
 
   if ($('setLanguage')) {
     $('setLanguage').addEventListener('change', async (e) => {
-      const language = e.target.value === 'zh-CN' ? 'zh-CN' : 'en';
+      const language = i18n.normalize(e.target.value);
       state.settings = await api.setSettings({ language });
       applyUiLanguage(language);
       toast({
-        title: language === 'en' ? 'Language changed' : '界面语言已更改',
-        body: language === 'en' ? 'The interface is now in English.' : '界面已切换为简体中文。',
+        title: localizedText('界面语言已更改'),
+        body: localizedText(language === 'en'
+          ? '界面已切换为英语。'
+          : language === 'zh-CN' ? '界面已切换为简体中文。' : '界面语言已切换。'),
         type: 'ok',
       });
     });
@@ -3632,9 +3684,12 @@ function renderEnvCheck(r) {
   if (chip) {
     const errs = issues.filter((i) => i.severity === 'error').length;
     chip.hidden = issues.length === 0;
-    chip.textContent = uiLanguage === 'en'
-      ? (errs ? `${errs} ${errs === 1 ? 'issue' : 'issues'} to fix` : `${issues.length} ${issues.length === 1 ? 'notice' : 'notices'}`)
-      : (errs ? `${errs} 项待修复` : `${issues.length} 项提示`);
+    const countLabel = i18n.issueCount(errs || issues.length, errs ? 'severe' : 'notice', uiLanguage);
+    chip.textContent = uiLanguage === 'zh-CN'
+      ? (errs ? `${errs} 项待修复` : `${issues.length} 项提示`)
+      : uiLanguage === 'en'
+        ? (errs ? `${errs} ${errs === 1 ? 'issue' : 'issues'} to fix` : `${issues.length} ${issues.length === 1 ? 'notice' : 'notices'}`)
+        : countLabel || String(issues.length);
     chip.className = `status-chip${errs ? ' err' : ''}`;
     chip.title = issues.map((i) => i.title).join('；');
   }

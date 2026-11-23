@@ -1,6 +1,7 @@
 'use strict';
 /* 应用窗口标题栏：只有 旋转 / 最小化 / 最大化 / 关闭，其余设置都在 ApkStart 主界面 */
 const api = window.apkstart;
+const i18n = window.apkstartI18n;
 const $ = (id) => document.getElementById(id);
 let uiLanguage = 'en';
 
@@ -24,9 +25,11 @@ const shellObserver = new MutationObserver((mutations) => {
 });
 
 function shellTranslation(source) {
-  if (uiLanguage !== 'en') return source;
+  if (uiLanguage === 'zh-CN') return source;
   const trimmed = source.trim();
-  const translated = SHELL_TEXT[trimmed];
+  const translated = i18n.translate(trimmed, uiLanguage)
+    || i18n.translate(trimmed, 'en')
+    || SHELL_TEXT[trimmed];
   if (translated) return source.replace(trimmed, translated);
   return source
     .replace('正在为《', 'Preparing ')
@@ -83,8 +86,9 @@ function translateShellNode(root) {
 }
 
 function localizeShell(language = uiLanguage) {
-  uiLanguage = language === 'zh-CN' ? 'zh-CN' : 'en';
+  uiLanguage = i18n.normalize(language);
   document.documentElement.lang = uiLanguage;
+  document.documentElement.dir = i18n.direction(uiLanguage);
   translateShellNode(document.body);
   if (!shellObserverStarted) {
     shellObserver.observe(document.body, {

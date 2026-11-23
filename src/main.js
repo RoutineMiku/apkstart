@@ -990,7 +990,7 @@ function openManual(payload = {}) {
 
 function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
-  if (store.getSettings().language === 'en') {
+  if (store.getSettings().language !== 'zh-CN') {
     const englishNotifications = {
       'ApkStart 仍在后台运行': 'ApkStart is still running in the background',
       '点击托盘图标可重新打开；右键托盘可退出。': 'Click the tray icon to reopen it, or right-click the tray to quit.',
@@ -1095,7 +1095,7 @@ function buildTray() {
     return;
   }
   const refresh = () => {
-    const english = store.getSettings().language === 'en';
+    const english = store.getSettings().language !== 'zh-CN';
     const apps = store.getApps().slice(0, 8);
     // 独立窗口模式主界面是隐藏的，托盘就成了唯一随时可达的入口 ——
     // 「关闭当前应用」必须放这里，否则用户根本没法关掉正在跑的应用。
@@ -3007,6 +3007,7 @@ if (!gotLock) {
       splashWin.once('ready-to-show', () => { splashShownAt = Date.now(); splashWin.show(); });
       // IPC：版本号、首次运行标记、关闭
       ipcMain.handle('splash:version', () => app.getVersion());
+      ipcMain.handle('splash:language', () => store.getSettings().language || 'en');
       ipcMain.handle('splash:isFirstRun', () => isFirstRun);
       // 组件是否随包自带：开机动画据此换文案，别对已经内置镜像的用户说「正在下载」
       ipcMain.handle('splash:bundled', () => !!bundledRuntimeDir);
