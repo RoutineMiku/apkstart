@@ -53,3 +53,16 @@ docs: 补充 WHPX 开启说明
 
 - 本项目不分发任何安卓系统镜像、QEMU 二进制或 Google 组件，全部由用户本机按需下载。
 - 请勿在仓库中提交商业 APK、破解工具或任何侵犯第三方版权的内容。
+
+## 多语言 / i18n
+
+界面文案的翻译走「叠加式」方案：代码里的中文保留为源语言和回退，运行时由
+`src/i18n/` 与 `src/ui/i18n.js` 换成目标语言。新增一种语言 = 新增一个
+`src/i18n/locales/<locale>.json`，不动业务代码。
+
+- 说明与流程：[`docs/I18N.md`](docs/I18N.md)
+- 西语译者的操作指南：[`docs/i18n/README-es.md`](docs/i18n/README-es.md)
+- 术语表： [`docs/i18n/GLOSARIO-es.md`](docs/i18n/GLOSARIO-es.md)
+- 覆盖率自检：`npm run i18n:report`
+
+提交信息示例：`feat(i18n): añadir traducción al español`

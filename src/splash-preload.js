@@ -1,6 +1,13 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
 
+// i18n: mismo contrato que preload.js (la ventana de arranque también se traduce).
+try {
+  contextBridge.exposeInMainWorld('apkstartI18n', require('./i18n').rendererBoot());
+} catch (_) {
+  contextBridge.exposeInMainWorld('apkstartI18n', { locale: 'zh-CN', dict: {} });
+}
+
 contextBridge.exposeInMainWorld('apkstartSplash', {
   version: () => ipcRenderer.invoke('splash:version'),
   isFirstRun: () => ipcRenderer.invoke('splash:isFirstRun'),

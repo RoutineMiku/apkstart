@@ -3,6 +3,14 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
+// i18n: idioma activo + diccionario para el overlay del renderer (ui/i18n.js).
+// Si algo falla se expone el idioma de origen y el overlay no hace nada.
+try {
+  contextBridge.exposeInMainWorld('apkstartI18n', require('./i18n').rendererBoot());
+} catch (_) {
+  contextBridge.exposeInMainWorld('apkstartI18n', { locale: 'zh-CN', dict: {} });
+}
+
 contextBridge.exposeInMainWorld('apkstart', {
   info: () => invoke('app:info'),
   listApps: () => invoke('apps:list'),

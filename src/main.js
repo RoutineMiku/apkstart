@@ -14,6 +14,10 @@ const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
 const orientation = require('./core/orientation');
+const i18n = require('./i18n');
+
+// Traducción de diálogos nativos y menús (no-op si el idioma es zh-CN).
+i18n.installMain();
 
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
@@ -970,8 +974,8 @@ function openManual(payload = {}) {
         if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       });
     }
-    manualWindow.setTitle(`ApkStart 使用手册 · ${target.title}`);
-    manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
+    manualWindow.setTitle(`${i18n.t('ApkStart 使用手册')} · ${i18n.t(target.title)}`);
+    manualWindow.loadFile(i18n.manualFile(), { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
       manualWindow.show();

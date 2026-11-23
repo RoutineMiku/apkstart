@@ -1,18 +1,57 @@
 # -*- coding: utf-8 -*-
 """把 docs/USER-MANUAL.md 转成单文件、可打印的 HTML（无外部依赖）。
 只用标准库，便于离线重建：python docs/build-manual-html.py
+
+i18n: `python docs/build-manual-html.py --lang es` 用 docs/USER-MANUAL.es.md
+生成 docs/ApkStart-Manual-ES.html 和 src/ui/manual.es.html。
 """
 import html
 import os
 import re
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SRC = os.path.join(HERE, 'USER-MANUAL.md')
-OUT = os.path.join(HERE, 'ApkStart-用户手册.html')
-# 0.6.2 起手册内嵌进软件：同一份 HTML 也要落到 src/ui，随包分发。
-# 主进程打开的就是这一份，绝不依赖 docs/ 或外部文件。
-APP_OUT = os.path.join(ROOT, 'src', 'ui', 'manual.html')
+
+# 界面文案（手册外壳）。新增语言时在这里加一组即可。
+L10N = {
+    'zh': {
+        'md': 'USER-MANUAL.md',
+        'out': 'ApkStart-用户手册.html',
+        'app_out': 'manual.html',
+        'lang': 'zh-CN',
+        'title': 'ApkStart 产品使用手册与问题解决方案',
+        'index': '目录',
+        'search': '筛选目录（Ctrl+F 全文搜索）',
+        'print': '打印 / 存为 PDF',
+        'font': '"PingFang SC","Microsoft YaHei",',
+        'slug': 'legacy',
+        'suffix': '',
+    },
+    'es': {
+        'md': 'USER-MANUAL.es.md',
+        'out': 'ApkStart-Manual-ES.html',
+        'app_out': 'manual.es.html',
+        'lang': 'es-ES',
+        'title': 'ApkStart — Manual de uso y solución de problemas',
+        'index': 'Índice',
+        'search': 'Filtrar índice (Ctrl+F busca en todo el texto)',
+        'print': 'Imprimir / Guardar como PDF',
+        'font': '',
+        'slug': 'github',
+        'suffix': '.es',
+    },
+}
+
+LANG = 'zh'
+_argv = sys.argv[1:]
+if '--lang' in _argv:
+    LANG = _argv[_argv.index('--lang') + 1]
+T = L10N.get(LANG) or L10N['zh']
+
+SRC = os.path.join(HERE, T['md'])
+OUT = os.path.join(HERE, T['out'])
+APP_OUT = os.path.join(ROOT, 'src', 'ui', T['app_out'])
 
 with open(SRC, encoding='utf-8') as f:
     lines = f.read().split('\n')
@@ -27,7 +66,15 @@ def inline(s):
 
 
 def slug(text, used):
-    base = re.sub(r'[^\w\u4e00-\u9fa5]+', '-', text).strip('-').lower() or 'sec'
+    if T['slug'] == 'github':
+        # Mismo esquema que los anclajes de GitHub: minúsculas, se quita la
+        # puntuación, los espacios pasan a guiones. Así los enlaces escritos a
+        # mano en el Markdown (#mi-seccion) resuelven sin tocar nada.
+        s = text.lower()
+        s = re.sub(r'[^\w\s-]', '', s)
+        base = re.sub(r'\s', '-', s.strip()) or 'sec'
+    else:
+        base = re.sub(r'[^\w\u4e00-\u9fa5]+', '-', text).strip('-').lower() or 'sec'
     s = base
     i = 2
     while s in used:
@@ -37,9 +84,50 @@ def slug(text, used):
     return s
 
 
+NUMBERING = re.compile(r'^\s*\d+(\.\d+)*\.?\s*')
+
+
+def stable_ids():
+    """Anclajes del manual en chino, en orden de título.
+
+    Las traducciones reutilizan estos ids: los enlaces de manual.js y los
+    enlaces internos siguen funcionando en cualquier idioma, y el id no cambia
+    cuando se retoca la traducción de un título.
+    """
+    ids, used_zh = [], set()
+    path = os.path.join(HERE, 'USER-MANUAL.md')
+    if not os.path.exists(path):
+        return ids
+    with open(path, encoding='utf-8') as f:
+        for line in f.read().split('\n'):
+            m = re.match(r'^(#{1,4})\s+(.*)$', line)
+            if not m:
+                continue
+            base = re.sub(r'[^\w\u4e00-\u9fa5]+', '-', m.group(2).strip()).strip('-').lower() or 'sec'
+            s, k = base, 2
+            while s in used_zh:
+                s = base + '-' + str(k)
+                k += 1
+            used_zh.add(s)
+            ids.append(s)
+    return ids
+
+
+def norm_heading(text):
+    """Normaliza un título o el texto de un enlace para emparejarlos."""
+    t = re.sub(r'<[^>]+>', '', text)
+    t = NUMBERING.sub('', t)
+    t = t.lower().replace('«', '').replace('»', '')
+    return re.sub(r'[^\w\s]', '', t).strip()
+
+
 out = []
 toc = []
+heads = {}
+by_number = {}
 used = set()
+STABLE = stable_ids() if LANG != 'zh' else []
+h_idx = 0
 i = 0
 n = len(lines)
 in_code = False
@@ -74,7 +162,16 @@ while i < n:
     if m:
         lvl = len(m.group(1))
         text = m.group(2).strip()
-        anchor = slug(text, used)
+        if LANG != 'zh' and h_idx < len(STABLE):
+            anchor = STABLE[h_idx]
+            used.add(anchor)
+        else:
+            anchor = slug(text, used)
+        h_idx += 1
+        heads.setdefault(norm_heading(text), anchor)
+        num = re.match(r'^(\d+(?:\.\d+)*)\.?\s', text)
+        if num:
+            by_number.setdefault(num.group(1), anchor)
         if lvl in (2, 3):
             toc.append((lvl, anchor, text))
         out.append('<h%d id="%s">%s</h%d>' % (lvl, anchor, inline(text), lvl))
@@ -144,6 +241,29 @@ while i < n:
 
 body = '\n'.join(out)
 
+
+def fix_internal_links(markup):
+    """Reapunta los enlaces internos al anclaje real del título destino.
+
+    Los enlaces escritos a mano en el Markdown (#mi-seccion) pueden no coincidir
+    con el anclaje generado; aquí se emparejan por el texto visible del enlace
+    y, si el texto es solo el número de sección ("6.3"), por ese número.
+    """
+    def repl(m):
+        href, label = m.group(1), m.group(2)
+        if href in used:
+            return m.group(0)
+        target = heads.get(norm_heading(label))
+        if not target and re.match(r'^\d+(\.\d+)*$', label.strip()):
+            target = by_number.get(label.strip())
+        if not target:
+            return m.group(0)
+        return '<a href="#%s">%s</a>' % (target, label)
+    return re.sub(r'<a href="#([^"]+)">([^<]*)</a>', repl, markup)
+
+
+body = fix_internal_links(body) if T['slug'] != 'legacy' else body
+
 toc_html = []
 for lvl, anchor, text in toc:
     cls = 'toc-l2' if lvl == 2 else 'toc-l3'
@@ -151,15 +271,15 @@ for lvl, anchor, text in toc:
 toc_html = '\n'.join(toc_html)
 
 doc = '''<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ApkStart 产品使用手册与问题解决方案</title>
+<title>__TITLE__</title>
 <style>
 :root{--bg:#ffffff;--fg:#1f2328;--mut:#57606a;--line:#d0d7de;--code:#eff1f3;--accent:#0969da;--accent-soft:#ddf4ff;--warn:#9a6700;--warn-bg:#fff8c5;--head:#f6f8fa;--tbl:#f6f8fa}
 *{box-sizing:border-box}
-body{margin:0;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--fg);background:var(--bg)}
+body{margin:0;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",__FONT__sans-serif;color:var(--fg);background:var(--bg)}
 .wrap{display:flex;max-width:1180px;margin:0 auto}
 aside{position:sticky;top:0;height:100vh;overflow:auto;width:280px;flex:0 0 280px;border-right:1px solid var(--line);padding:24px 18px;background:var(--head)}
 aside h2{font-size:15px;margin:0 0 14px;letter-spacing:.5px}
@@ -197,15 +317,15 @@ tbody tr:nth-child(even){background:#fbfcfd}
 </head>
 <body>
 <div class="wrap">
-<aside><h2>目录</h2>
-<input id="tocSearch" type="search" placeholder="筛选目录（Ctrl+F 全文搜索）" autocomplete="off" />
+<aside><h2>__INDEX__</h2>
+<input id="tocSearch" type="search" placeholder="__SEARCH__" autocomplete="off" />
 <div id="tocList">__TOC__</div>
 </aside>
 <main>
 __BODY__
 </main>
 </div>
-<div class="btnbar"><button onclick="window.print()">打印 / 存为 PDF</button></div>
+<div class="btnbar"><button onclick="window.print()">__PRINT__</button></div>
 <script>
 (function () {
   var input = document.getElementById('tocSearch');
@@ -227,8 +347,14 @@ __BODY__
 '''
 
 doc = doc.replace('__TOC__', toc_html).replace('__BODY__', body)
+doc = (doc.replace('__LANG__', T['lang'])
+          .replace('__TITLE__', T['title'])
+          .replace('__FONT__', T['font'])
+          .replace('__INDEX__', T['index'])
+          .replace('__SEARCH__', T['search'])
+          .replace('__PRINT__', T['print']))
 for target in (OUT, APP_OUT):
-    with open(target, 'w', encoding='utf-8') as f:
+    with open(target, 'w', encoding='utf-8', newline='\n') as f:
         f.write(doc)
     print('生成:', target)
     print('大小: %d KB' % (os.path.getsize(target) // 1024))
