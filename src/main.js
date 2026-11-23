@@ -253,7 +253,7 @@ let updateInfo = null;
  * runLaunch() / autoDeploy() 定义在更外层作用域 —— 它们里的
  * `typeof splashDone === 'function'` 永远是 false，于是：
  *   - 进度文字永远不更新（一直显示「正在准备…」）；
- *   - 启动成功后 splash 永远不关闭，480x360 的 alwaysOnTop 窗口就钉在
+ *   - 启动成功后 splash 永远不关闭，alwaysOnTop 窗口就钉在
  *     屏幕中央、压在安卓画面上面。
  * 这就是用户反馈的「打开应用出现多个窗口」：管理窗口/splash/应用窗口同时在场。
  * 提升到模块级之后这些调用才真正生效。
@@ -2986,7 +2986,7 @@ if (!gotLock) {
       const disp = electronScreen.getPrimaryDisplay();
       const sw = disp.workAreaSize.width;
       const sh = disp.workAreaSize.height;
-      const splashW = 480, splashH = 360;
+      const splashW = Math.min(520, sw), splashH = Math.min(500, sh);
       splashWin = new BrowserWindow({
         width: splashW, height: splashH,
         x: Math.round((sw - splashW) / 2),

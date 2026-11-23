@@ -476,14 +476,14 @@ app.whenReady().then(async () => {
   step('上次停留的分类被记住了', remembered === 'diag', `记住了：${remembered}`);
 
   const splash = new BrowserWindow({
-    width: 480, height: 360, show: false,
+    width: 520, height: 500, frame: false, show: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'src', 'splash-preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: false,
     },
   });
   await splash.loadFile(path.join(UI, 'splash.html'));
-  await new Promise((r) => setTimeout(r, 250));
+  await new Promise((r) => setTimeout(r, 1000));
   splash.webContents.send('splash:progress', { message: '正在启动安卓运行时…' });
   await new Promise((r) => setTimeout(r, 100));
   const splashLanguage = await splash.webContents.executeJavaScript(`(() => ({
@@ -498,6 +498,21 @@ app.whenReady().then(async () => {
     splashLanguage.status === 'Iniciando el entorno de Android…' &&
     splashLanguage.firstRunTitle === 'Primer uso · Configuración automática',
     JSON.stringify(splashLanguage));
+  const splashLayout = await splash.webContents.executeJavaScript(`(() => {
+    const top = selector => document.querySelector(selector).getBoundingClientRect();
+    return {
+      logoTop: top('.logo-wrap').top,
+      firstRunBottom: top('.first-run').bottom,
+      footerTop: top('.footer').top,
+      footerBottom: top('.footer').bottom,
+      viewportHeight: document.documentElement.clientHeight,
+    };
+  })()`, true);
+  step('首次启动卡片和页脚完整显示且不重叠',
+    splashLayout.logoTop >= 0 &&
+    splashLayout.firstRunBottom <= splashLayout.footerTop &&
+    splashLayout.footerBottom <= splashLayout.viewportHeight,
+    JSON.stringify(splashLayout));
   splash.close();
 
   console.log('\n[设置页 · 渲染无异常]');
