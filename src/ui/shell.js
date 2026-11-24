@@ -1,7 +1,116 @@
 'use strict';
 /* 应用窗口标题栏：只有 旋转 / 最小化 / 最大化 / 关闭，其余设置都在 ApkStart 主界面 */
 const api = window.apkstart;
+const i18n = window.apkstartI18n;
 const $ = (id) => document.getElementById(id);
+let uiLanguage = 'en';
+
+const SHELL_TEXT = {
+  '应用': 'App',
+  '横屏 / 竖屏（Ctrl+R）': 'Landscape / Portrait (Ctrl+R)',
+  '最小化': 'Minimize',
+  '最大化': 'Maximize',
+  '关闭': 'Close',
+  '正在启动安卓运行时…': 'Starting Android runtime…',
+};
+
+const shellTextState = new WeakMap();
+let shellObserverStarted = false;
+const shellObserver = new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    if (mutation.type === 'characterData') translateShellText(mutation.target);
+    else if (mutation.type === 'attributes') translateShellAttributes(mutation.target);
+    else mutation.addedNodes.forEach(translateShellNode);
+  }
+});
+
+function shellTranslation(source) {
+  if (uiLanguage === 'zh-CN') return source;
+  const trimmed = source.trim();
+  const translated = i18n.translate(trimmed, uiLanguage)
+    || i18n.translate(trimmed, 'en')
+    || SHELL_TEXT[trimmed];
+  if (translated) return source.replace(trimmed, translated);
+  return source
+    .replace('正在为《', 'Preparing ')
+    .replace('》切换到横屏', ' for landscape')
+    .replace('》切换到竖屏', ' for portrait')
+    .replace('（重启安卓环境，约 ', ' (restarting Android, about ')
+    .replace('秒，只需一次）…', ' seconds; this is a one-time step)…')
+    .replace('重启安卓环境', 'Restarting Android');
+}
+
+function translateShellText(node) {
+  if (node.parentElement && node.parentElement.closest('[data-no-localize]')) return;
+  const current = node.nodeValue;
+  const previous = shellTextState.get(node);
+  const source = previous && current === previous.output ? previous.source : current;
+  const output = shellTranslation(source);
+  shellTextState.set(node, { source, output });
+  if (output !== current) node.nodeValue = output;
+}
+
+function translateShellAttributes(el) {
+  if (el.closest && el.closest('[data-no-localize]')) return;
+  const state = shellTextState.get(el) || {};
+  for (const attr of ['title', 'aria-label']) {
+    if (!el.hasAttribute(attr)) continue;
+    const current = el.getAttribute(attr);
+    const previous = state[attr];
+    const source = previous && current === previous.output ? previous.source : current;
+    const output = shellTranslation(source);
+    state[attr] = { source, output };
+    if (output !== current) el.setAttribute(attr, output);
+  }
+  shellTextState.set(el, state);
+}
+
+function translateShellNode(root) {
+  if (root.nodeType === Node.TEXT_NODE) {
+    translateShellText(root);
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root !== document.body) return;
+  for (const node of root.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) translateShellText(node);
+  }
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    translateShellAttributes(root);
+    root.querySelectorAll('*').forEach((el) => {
+      for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) translateShellText(node);
+      }
+      translateShellAttributes(el);
+    });
+  }
+}
+
+function localizeShell(language = uiLanguage) {
+  uiLanguage = i18n.normalize(language);
+  document.documentElement.lang = uiLanguage;
+  document.documentElement.dir = i18n.direction(uiLanguage);
+  translateShellNode(document.body);
+  if (!shellObserverStarted) {
+    shellObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['title', 'aria-label'],
+    });
+    shellObserverStarted = true;
+  }
+}
+
+async function refreshShellLanguage() {
+  const settings = await api.getSettings();
+  localizeShell(settings && settings.language);
+}
+
+window.addEventListener('focus', () => { refreshShellLanguage().catch(() => {}); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshShellLanguage().catch(() => {});
+});
 
 const btn = {
   rotate: $('btnRotate'),
@@ -61,4 +170,4 @@ function applyState(s) {
 }
 
 api.shell.onState(applyState);
-api.shell.state().then(applyState).catch(() => {});
+refreshShellLanguage().then(() => api.shell.state().then(applyState)).catch(() => {});
