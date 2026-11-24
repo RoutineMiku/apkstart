@@ -1,6 +1,7 @@
 'use strict';
 
 const api = window.apkstart;
+const i18n = window.apkstartI18n;
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -12,6 +13,1005 @@ const state = {
   setupBusy: null,
   menuPkg: null,
 };
+
+const UI_TEXT = {
+  '设置': 'Settings',
+  '常用与安装': 'General & Installation',
+  '显示与窗口': 'Display & Windows',
+  '操作与输入': 'Controls & Input',
+  '性能与资源': 'Performance & Resources',
+  '网络与下载': 'Network & Downloads',
+  '诊断与修复': 'Diagnostics & Repair',
+  '集成与文件': 'Integration & Files',
+  '更新与关于': 'Updates & About',
+  '实验室': 'Laboratory',
+  '搜索已安装应用': 'Search installed apps',
+  '安装 APK': 'Install APK',
+  '把 APK 拖进来就能装': 'Drop an APK here to install',
+  '选择 APK 文件': 'Choose APK file',
+  '设置项：横屏 / 内存 / 代理 / 快照…': 'Search settings: orientation / memory / proxy / snapshots…',
+  '界面语言': 'Interface language',
+  '界面语言已更改': 'Interface language changed',
+  '界面已切换为英语。': 'The interface is now in English.',
+  '界面已切换为简体中文。': 'The interface is now in Simplified Chinese.',
+  '新': 'New',
+  '简体中文': 'Simplified Chinese',
+  '自动模式（默认，无需设置）': 'Automatic mode (default, no setup required)',
+  '运行时与环境': 'Runtime & Environment',
+  '应用窗口': 'Application window',
+  '鼠标键位': 'Mouse controls',
+  '性能与资源占用': 'Performance & Resource Usage',
+  '下载与更新源': 'Download & Update Sources',
+  '本机体检 · 自动配置': 'System Check · Auto Configuration',
+  '驱动 · 兼容补丁': 'Drivers · Compatibility Patches',
+  '自动检测 · 智能诊断': 'Automatic Checks · Smart Diagnostics',
+  '安卓系统设置（不用进安卓桌面）': 'Android System Settings (no desktop needed)',
+  '桌面与应用': 'Desktop & Applications',
+  '文件互通': 'File Sharing',
+  '系统集成': 'System Integration',
+  '软件更新': 'Software Updates',
+  '关于': 'About',
+  '你好': 'Hello',
+  '开始使用': 'Get Started',
+  '打开设置': 'Open Settings',
+  '下次启动不再自动弹出': 'Do not show automatically next time',
+  '添加应用': 'Add application',
+  '拖入 APK 即可安装': 'Drop an APK to install',
+  '未连接运行时': 'Runtime not connected',
+  '使用手册（含故障解决方案）': 'User guide and troubleshooting',
+  '安装完成后会自动生成桌面图标，双击即以独立窗口运行，和普通 Windows 软件一样。': 'A desktop shortcut is created after installation. Double-click it to run the app in its own window, just like a Windows application.',
+  '已注册 .apk 关联时，在资源管理器里双击 APK 也会直接装到 ApkStart。': 'When the .apk file association is enabled, double-click an APK in File Explorer to install it in ApkStart.',
+  '正在检查运行时…': 'Checking runtime…',
+  'ApkStart 已就绪': 'ApkStart is ready',
+  '松手开始安装': 'Release to start installation',
+  '支持单个或多个 .apk 文件': 'Supports one or more .apk files',
+  '清除搜索': 'Clear search',
+  '设置分类': 'Settings categories',
+  '常用与安装': 'General & Installation',
+  '运行状态': 'Runtime status',
+  '正在检查…': 'Checking…',
+  '一键完成': 'Set up automatically',
+  '高级：连接已有运行时': 'Advanced: Connect an existing runtime',
+  '全自动：无需选择镜像、无需启用加速、无需调内存': 'Fully automatic: no image selection, acceleration setup, or memory tuning required',
+  '安装 Android 到虚拟磁盘': 'Install Android to a virtual disk',
+  '稍后再说': 'Maybe later',
+  '本机自适应参数': 'Automatic settings for this PC',
+  '内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。': 'Memory, CPU cores, renderer, ports, and acceleration are selected automatically. If startup fails, ApkStart retries with safer settings.',
+  '磁盘总占用（运行时 + 安卓数据 + 缓存）': 'Total disk usage (runtime + Android data + cache)',
+  '正在统计…': 'Calculating…',
+  '清理可回收文件': 'Clean up reclaimable files',
+  '清理旧版本残留': 'Remove leftovers from older versions',
+  '修复网络': 'Repair network',
+  '重置安卓数据': 'Reset Android data',
+  '导出诊断报告': 'Export diagnostic report',
+  '重建快捷方式': 'Rebuild shortcuts',
+  '开机自动启动（默认开启）': 'Start with Windows (enabled by default)',
+  '显示模式': 'Display mode',
+  '自动全屏': 'Automatically use fullscreen',
+  '屏幕方向': 'Screen orientation',
+  '镜像自动旋转': 'Automatic rotation',
+  '平板排版': 'Tablet layout',
+  '当前面板方向': 'Current screen orientation',
+  '窗口承载方式': 'Window mode',
+  '竖屏画面大小': 'Portrait resolution',
+  '小 · 720 × 1280': 'Small · 720 × 1280',
+  '中 · 900 × 1600': 'Medium · 900 × 1600',
+  '大 · 1080 × 1920': 'Large · 1080 × 1920',
+  '超大 · 1440 × 2560': 'Extra large · 1440 × 2560',
+  '鼠标键位': 'Mouse controls',
+  '左键 · 确认 / 点击': 'Left button · Select / click',
+  '右键 · 安卓返回': 'Right button · Android Back',
+  '滚轮 · 滑动': 'Scroll wheel · Swipe',
+  '平滑（推荐）· 合并多次滚动为一次流畅滑动': 'Smooth (recommended) · Combine scroll events into a fluid swipe',
+  '原生 · 交给模拟器逐格处理': 'Native · Let the emulator handle each scroll step',
+  '关闭 · 不拦截滚轮': 'Off · Do not intercept scrolling',
+  '键盘映射（游戏手柄）': 'Keyboard mapping (game controls)',
+  '启用键盘映射': 'Enable keyboard mapping',
+  '性能与资源占用': 'Performance & Resource Usage',
+  '资源策略': 'Resource profile',
+  '省资源 · 2 核 / 让出前台 / 540p（老机器、挂机）': 'Save resources · 2 cores / lower priority / 540p (older PCs, background use)',
+  '均衡 · 一半物理核 / 让出前台 / 720p（推荐）': 'Balanced · Half of physical cores / lower priority / 720p (recommended)',
+  '流畅 · 不限核数 / 与前台同优先级（视频、游戏）': 'Smooth · No CPU limit / foreground priority (video, games)',
+  '显卡偏好（独显 / 核显）': 'GPU preference (discrete / integrated)',
+  '系统默认（推荐 · 让 Windows 决定）': 'System default (recommended · Let Windows decide)',
+  '独显优先（游戏 / 视频更流畅，更耗电）': 'Prefer discrete GPU (smoother games and video, higher power use)',
+  '核显优先（省电、发热低）': 'Prefer integrated GPU (lower power and heat)',
+  '画质（安卓内部渲染分辨率）': 'Graphics quality (Android render resolution)',
+  '自动（按加速状态）': 'Automatic (based on acceleration)',
+  '流畅 · 540 × 960': 'Performance · 540 × 960',
+  '均衡 · 720 × 1280': 'Balanced · 720 × 1280',
+  '高清 · 1080 × 1920': 'High · 1080 × 1920',
+  '安卓数据分区（应用与游戏装这里）': 'Android data partition (apps and games are stored here)',
+  '立即扩容': 'Expand now',
+  '系统语言': 'Android system language',
+  '例如 https://ghfast.top/': 'e.g. https://ghfast.top/',
+  '简体中文（推荐）': 'Simplified Chinese (recommended)',
+  '繁體中文': 'Traditional Chinese',
+  'English（镜像原生）': 'English (image default)',
+  '日本語': 'Japanese',
+  '中文输入法（推荐）': 'Chinese keyboard (recommended)',
+  '高级参数（一般无需修改）': 'Advanced settings (usually no changes needed)',
+  '运行时': 'Runtime',
+  '运行时与环境': 'Runtime & Environment',
+  'ApkStart 自带运行时（QEMU + Android 14，独立运行）': 'Built-in ApkStart runtime (QEMU + Android 14, runs independently)',
+  'adb 路径': 'ADB path',
+  '设备地址': 'Device address',
+  '系统镜像（ISO）': 'System image (ISO)',
+  '内存 (MB，0 = 自动)': 'Memory (MB, 0 = automatic)',
+  'CPU 核心（0 = 自动）': 'CPU cores (0 = automatic)',
+  '空闲回收（分钟，0 = 不回收）': 'Idle shutdown (minutes, 0 = never)',
+  '兼容镜像': 'Compatibility image',
+  '下载兼容镜像': 'Download compatibility image',
+  '启动运行时': 'Start runtime',
+  '停止内置虚拟机': 'Stop built-in virtual machine',
+  '安卓系统设置（不用进安卓桌面）': 'Android system settings (without opening the Android desktop)',
+  '刷新': 'Refresh',
+  '一键流畅优化': 'Optimize performance',
+  '飞行模式': 'Airplane mode',
+  '系统动画': 'System animations',
+  '媒体音量': 'Media volume',
+  '字体大小': 'Font size',
+  '显示大小': 'Display size',
+  '安卓原生设置': 'Android settings',
+  '显示设置': 'Display settings',
+  '声音设置': 'Sound settings',
+  '语言设置': 'Language settings',
+  '应用管理': 'App management',
+  '桌面与应用': 'Desktop & Applications',
+  '安装后自动创建桌面快捷方式': 'Create a desktop shortcut after installation',
+  '同时添加到开始菜单': 'Also add to the Start menu',
+  '快捷方式目录': 'Shortcut folder',
+  '文件互通': 'File sharing',
+  '系统集成': 'System integration',
+  '软件更新': 'Software updates',
+  '关于': 'About',
+  '开始体检': 'Run system check',
+  '应用推荐配置': 'Apply recommended settings',
+  '驱动 · 兼容补丁': 'Drivers · Compatibility patches',
+  '正在读取驱动…': 'Loading drivers…',
+  '导入驱动…': 'Import driver…',
+  '打开驱动目录': 'Open driver folder',
+  '导出本机模板': 'Export local template',
+  '自动检测 · 智能诊断': 'Automatic checks · Smart diagnostics',
+  '启用自动检测（默认开启）': 'Enable automatic checks (on by default)',
+  '检测间隔': 'Check interval',
+  '发现新问题时通知我': 'Notify me when new issues are found',
+  '立即检测': 'Check now',
+  '尚未检测': 'Not checked yet',
+  '常用与安装': 'General & Installation',
+  '更新与关于': 'Updates & About',
+  '返回': 'Back',
+  '正在运行': 'Running',
+  '运行中': 'Running',
+  '打开': 'Open',
+  '切换到前台': 'Bring to front',
+  '应用': 'Application',
+  '暂无应用': 'No applications installed',
+  '立即更新': 'Update now',
+  '开始': 'Start',
+  '取消': 'Cancel',
+  '确定': 'OK',
+  '关闭': 'Close',
+  '完成': 'Done',
+  '已就绪': 'Ready',
+  '未下载': 'Not downloaded',
+  '无': 'None',
+  '自动': 'Automatic',
+  '标准': 'Standard',
+  '大': 'Large',
+  '小': 'Small',
+  '紧凑（省性能）': 'Compact (better performance)',
+  '宽松': 'Spacious',
+  '特大': 'Extra large',
+  '每 1 分钟': 'Every minute',
+  '每 5 分钟': 'Every 5 minutes',
+  '每 10 分钟（推荐）': 'Every 10 minutes (recommended)',
+  '每 30 分钟': 'Every 30 minutes',
+  '每 1 小时': 'Every hour',
+  '运行时未启动': 'Runtime is not running',
+  '未下载': 'Not downloaded',
+  '显示模式': 'Display mode',
+  '竖屏窗口（可自由拉伸，记住每个应用的大小）': 'Portrait window (resizable; remembers each app’s size)',
+  '全屏（铺满屏幕，保持手机比例两侧留黑）': 'Fullscreen (fills the screen while preserving the phone aspect ratio)',
+  '关闭（按上面选的显示模式走）': 'Off (use the display mode selected above)',
+  '打开 · 每次启动应用都自动全屏': 'On · Launch every app in fullscreen',
+  '跟随应用（推荐 · 自动选横竖屏，画面铺满不留黑边）': 'Follow app (recommended · Automatically match orientation to fill the screen)',
+  '强制竖屏（手机比例，适合刷短视频、看小说）': 'Force portrait (phone aspect ratio; ideal for short videos and reading)',
+  '强制横屏（宽屏铺满，适合看剧、玩游戏）': 'Force landscape (wide-screen; ideal for videos and games)',
+  '打开（默认）· 系统设置里显示自动旋转已开启': 'On (default) · Android reports auto-rotate as enabled',
+  '关闭 · 回到旧的锁定行为': 'Off · Restore the previous locked behavior',
+  '打开（推荐 · 逻辑密度 190dpi，sw606dp 走平板排版）': 'On (recommended · 190 dpi logical density enables tablet layouts)',
+  '关闭（镜像默认密度，手机排版）': 'Off (use the image default density and phone layout)',
+  '竖屏面板': 'Portrait display',
+  '横屏面板': 'Landscape display',
+  '原生窗口（默认·推荐）· 模拟器自己开窗口，帧率与缩放最稳': 'Native window (default, recommended) · The emulator opens its own window for smoother rendering and resizing',
+  '嵌入模式 · 安卓画面嵌在 ApkStart 窗口里，标题栏带旋转按钮': 'Embedded mode · Android runs inside the ApkStart window with a rotate button in the title bar',
+  '窗口模式下可拖动边框任意缩放；这里调的是 Android 内部渲染尺寸，越小越省性能。': 'In windowed mode, drag the borders to resize. This controls Android’s render resolution; lower values use fewer resources.',
+  '资源策略': 'Resource profile',
+  '自动模式（默认，无需设置）': 'Automatic mode (default, no setup required)',
+  '界面语言': 'Interface language',
+  '选择 ApkStart 界面语言。更改会立即生效；安卓系统语言请在性能设置中单独配置。': 'Choose the ApkStart interface language. Changes apply immediately. Configure Android’s system language separately in Performance settings.',
+  '平板排版': 'Tablet layout',
+  '更新与关于': 'Updates & About',
+  '集成与文件': 'Integration & Files',
+  '运行时状态': 'Runtime status',
+  '运行时未部署 —— 打开设置 → 运行时，一键完成': 'Runtime not installed — open Settings → Runtime and select Set up automatically',
+  '安卓虚拟机没有网络时（应用里联网页面一直黑屏/转圈），用这个把安卓数据重置掉来修网络。应用清单会保留，点开应用会自动重装': 'If Android has no network connection, reset its data to repair networking. Your app list is kept, and apps are reinstalled when opened.',
+  '清空安卓 /data 用户数据 + 已装应用 + 快速启动快照，还原成刚装好系统的干净状态': 'Clear Android /data, installed apps, and quick-boot snapshots to restore a clean system.',
+  '扫描并清掉旧版本留下的程序目录、失效的卸载项和更新临时文件': 'Find and remove old program folders, stale uninstall entries, and update temporary files.',
+  '搜索设置项：横屏 / 内存 / 代理 / 快照…': 'Search settings: orientation / memory / proxy / snapshots…',
+  '留空则自动在 PATH / Android SDK 中查找': 'Leave blank to search PATH and the Android SDK automatically',
+  'Android-x86 / Bliss OS 的 ISO 或 IMG 路径，留空使用默认位置': 'Path to an Android-x86 / Bliss OS ISO or IMG; leave blank to use the default',
+  '留空 = 桌面': 'Leave blank to use the Desktop',
+  '选择 APK 文件': 'Choose APK file',
+  '获取诊断报告': 'Get diagnostic report',
+  '系统默认': 'System default',
+  '离线': 'Offline',
+  '未知': 'Unknown',
+  '正在引导 Android…': 'Starting Android…',
+  '运行时已就绪': 'Runtime ready',
+  '需要部署': 'Setup required',
+  '引导中': 'Starting',
+  '自动配置': 'Automatic configuration',
+  '缺少': 'Missing',
+  '已就绪': 'Ready',
+  '组件齐全': 'Components installed',
+  '正在准备': 'Preparing',
+  '请稍候': 'Please wait',
+  '检测失败': 'Check failed',
+  '没有发现影响使用的问题。': 'No issues affecting use were found.',
+  '上次检测': 'Last checked',
+  '一切正常': 'Everything is working',
+  '项待处理': 'items need attention',
+  '运行时已就绪 · Android': 'Runtime ready · Android',
+  '硬件加速': 'Hardware acceleration',
+  '软件模拟': 'Software rendering',
+  '自动': 'Automatic',
+  '有': 'Yes',
+  '无': 'No',
+  '全部': 'All',
+  '启用': 'Enable',
+  '关闭': 'Off',
+  '打开': 'On',
+  '已开启': 'Enabled',
+  '已关闭': 'Disabled',
+  '保存': 'Save',
+  '重试': 'Retry',
+  '正在保存…': 'Saving…',
+  '已保存': 'Saved',
+  '失败': 'Failed',
+  '错误': 'Error',
+  '警告': 'Warning',
+  '提示': 'Notice',
+  '教程': 'Guide',
+  '处理': 'Fix',
+  '详情': 'Details',
+  '正在更新…': 'Updating…',
+  '正在连接 GitHub…': 'Connecting to GitHub…',
+  '检查中…': 'Checking…',
+  '已是最新版本': 'You are up to date',
+  '发现新版本': 'New version available',
+  '检查失败': 'Check failed',
+  '打开下载页': 'Open download page',
+  '快捷方式已创建': 'Shortcut created',
+  '正在安装': 'Installing',
+  '安装失败': 'Installation failed',
+  '启动失败': 'Startup failed',
+  '已启动': 'Started',
+  '运行时已就绪': 'Runtime is ready',
+  '已取消': 'Canceled',
+  '已完成': 'Completed',
+  '未知错误': 'Unknown error',
+  '暂无应用': 'No applications installed',
+  '个应用': 'applications',
+  '全屏（铺满屏幕，保持手机比例两侧留黑）': 'Fullscreen (fill the screen while keeping the phone aspect ratio, with black bars on the sides)',
+  '窗口模式下可拖动边框任意缩放；这里调的是 Android 内部渲染尺寸，越小越省性能。': 'In window mode, drag the borders to resize. This controls Android’s render resolution; lower values use fewer resources.',
+  '决定安卓虚拟机吃多少 CPU、画面多细腻。红果/抖音发卡就切「流畅」，只想挂着跑小应用就切「省资源」。改完下一次打开应用生效。': 'Controls Android CPU usage and image quality. Choose Smooth for video or games, or Save resources for lightweight apps running in the background. Changes take effect the next time you open an app.',
+  '打开后，每次点开应用直接铺满屏幕，不用再按 F11。配合下面的「横屏」使用效果最好 —— 横屏面板的宽高比本来就贴合屏幕，全屏不会留黑边。': 'When enabled, apps open fullscreen without pressing F11. This works best with landscape orientation, which fills the screen without black bars.',
+  '全屏只放大窗口，不改变画面比例，切换不重启应用。': 'Fullscreen enlarges the window without changing the aspect ratio or restarting the app.',
+  '平滑模式把一小段时间内的滚动合并成一次滑动手势，避免逐格抽搐，也不会每格都拉起一个 adb 进程。': 'Smooth mode combines nearby scroll events into one swipe, avoiding choppy movement and repeated ADB processes.',
+  '模拟器原生把左键当成手指点击，按住拖动就是滑动，无需额外设置。': 'The emulator maps the left mouse button to a finger tap; click and drag to swipe. No setup is needed.',
+  '模拟器默认把右键也当成一次点击（容易误触）。开启后右键只执行返回，不再触发点击。': 'By default, the emulator treats right-click as a tap, which can cause accidental input. When enabled, right-click only performs Android Back.',
+  '侧键映射需要全局鼠标钩子。钩子只在 ApkStart 应用窗口处于前台时安装，失焦或关闭立即卸载，不会拖慢桌面。': 'Side-button mapping uses a global mouse hook. It is active only while an ApkStart app window is focused and is removed immediately when focus is lost or the window closes.',
+  '以上映射只在应用窗口前台生效；切回桌面或关闭窗口后，鼠标行为完全恢复 Windows 原生。': 'These mappings are active only while an app window is focused. Mouse behavior returns to normal when you switch to the desktop or close the window.',
+  '把键盘按键映射成安卓触屏点击/滑动。适合用键盘玩手游（WASD 移动、J/K 技能等）。': 'Map keyboard keys to Android taps and swipes. Useful for playing mobile games with a keyboard (WASD movement, J/K skills, and more).',
+  '每个应用可以单独配置，右键应用卡片 → 「按键映射」选择预设模板或自定义。': 'Configure each app separately. Right-click its card and choose Key mapping to select a preset or create your own.',
+  '电脑同时有独显和核显时，Windows 有时会把模拟器分到核显，导致画面卡。这里可以明确指定用哪块显卡渲染；仅 Windows 10 1803+ 生效，改动在下次启动安卓时应用。': 'On PCs with both discrete and integrated GPUs, Windows may assign the emulator to the integrated GPU and cause slow rendering. Choose which GPU to use here. Requires Windows 10 version 1803 or later; changes take effect the next time Android starts.',
+  '扩容是就地做的：已装应用与存档都保留，只是下次打开应用会多花十几秒。': 'Expansion is performed in place, preserving installed apps and saves. The next app launch may take a few extra seconds.',
+  '关掉后界面切换明显更快，功能不受影响。': 'Disabling animations makes screen transitions noticeably faster without affecting functionality.',
+  '系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照、日志和锁文件都可回收。日志超过上限会自动滚动，不会无限增长。': 'The system image is shared; app data is stored in a separate layer. Old images, snapshots, logs, and lock files can be reclaimed. Logs rotate automatically when they reach the size limit.',
+  '开机自动启动（默认开启）': 'Start with Windows (enabled by default)',
+  '随 Windows 登录常驻托盘，双击桌面图标秒开应用，无需手动启动。': 'Start in the system tray when you sign in to Windows. Double-click a desktop shortcut to launch an app without opening ApkStart first.',
+  '安卓系统设置、权限弹窗、日期格式的语言。开机时注入到虚拟机，下次重启运行时生效。中文输入法不受此项影响，单独在下面开关。': 'Language used by Android settings, permission dialogs, and date formats. Applied to the virtual machine at startup; takes effect after restarting the runtime. The Chinese keyboard is controlled separately below.',
+  '安卓虚拟机内部的无线网，关掉可省一点 CPU。': 'Wi-Fi inside the Android virtual machine. Turn it off to save some CPU resources.',
+  '彻底断网（含移动数据），需要安静时打开。': 'Disconnect all network access, including mobile data.',
+  '关闭系统动画、放开后台进程上限并把当前应用加入电池白名单，低配电脑体感最明显。': 'Disables system animations, raises the background process limit, and adds the current app to the battery allowlist. Most noticeable on lower-end PCs.',
+  '快捷方式带真实应用图标，双击直接进应用': 'Shortcuts use the app’s icon and launch it directly',
+  'Windows 搜索能搜到应用名，任务栏也按应用分组': 'Find apps by name in Windows Search; taskbar windows are grouped by app',
+  '修改后旧目录里已有的文件会自动搬到新目录；正在运行的文件互通不受影响。': 'Existing files are moved to the new folder automatically. File sharing continues to work during the move.',
+  '两侧目录会持续双向同步；在安卓应用里保存到该目录的文件，会出现在本机共享目录中。': 'Both folders stay in sync. Files saved here by Android apps also appear in the shared folder on this PC.',
+  '双击 APK 直接安装到 ApkStart（仅写入当前用户，无需管理员）': 'Double-click an APK to install it in ApkStart (current user only; no administrator access required)',
+  '设置修改后立即生效': 'Settings take effect immediately',
+  '打开使用手册（含故障解决方案）': 'Open user guide and troubleshooting',
+  '扫码关注公众号': 'Scan to follow our official account',
+  '这里的功能还在实验阶段，行为可能随版本变化。遇到问题可在「诊断与修复 → 导出诊断报告」反馈。': 'These features are experimental and may change. If you encounter a problem, use Diagnostics & Repair → Export diagnostic report to send feedback.',
+  '后台保留应用数': 'Number of apps to keep in the background',
+  '多开模式下，超过这个数量的后台应用会被挂起（保留数据、秒切回），释放内存。': 'In multi-app mode, background apps beyond this limit are suspended to free memory while keeping their data for quick switching.',
+  '1 · 平衡（推荐）': '1 · Balanced (recommended)',
+  '2 · 多开更稳': '2 · More reliable multitasking',
+  '3 · 最多并存': '3 · Keep the most apps open',
+  '0 · 最省内存（只留当前应用）': '0 · Lowest memory use (keep only the current app)',
+  '安装后自动创建桌面快捷方式': 'Create a desktop shortcut after installation',
+  '同时添加到开始菜单': 'Also add to the Start menu',
+  '本机共享目录': 'Shared folder on this PC',
+  '安卓内对应目录': 'Matching folder on Android',
+  '关联 .apk 文件': 'Associate .apk files',
+  '运行时数据目录（系统镜像 · 已装应用 · 快照）': 'Runtime data folder (system image · installed apps · snapshots)',
+  '安卓数据目录（应用、游戏与快速启动快照）': 'Android data folder (apps, games, and quick-boot snapshots)',
+  '卸载 ApkStart': 'Uninstall ApkStart',
+  '一键卸载': 'Uninstall',
+  '检查更新': 'Check for updates',
+  '当前版本': 'Current version',
+  '尚未检查': 'Not checked yet',
+  '语言设置': 'Language settings',
+  '应用管理': 'App management',
+  '常用与安装': 'General & Installation',
+  '更新与关于': 'Updates & About',
+  '本机自适应参数': 'Automatic settings for this PC',
+  'Windows / PATH / Android SDK': 'Windows / PATH / Android SDK',
+  '本机体检 · 自动配置': 'System check · Automatic configuration',
+  '运行时与环境': 'Runtime & Environment',
+  '自动模式（默认，无需设置）': 'Automatic mode (default, no setup required)',
+  '系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照、日志和锁文件都可回收。': 'The system image is shared by all apps, while app data is stored separately. Old images, snapshots, logs, and lock files can be reclaimed.',
+  '右键应用卡片可快速套用预设模板。': 'Right-click an app card to quickly apply a preset.',
+  '自动选择较快的源（推荐）': 'Automatically choose the fastest source (recommended)',
+  '只用 Gitee（国内通常最快）': 'Gitee only (usually fastest in China)',
+  '只用 GitHub': 'GitHub only',
+  '下载线程数（1–16，默认 8）': 'Download connections (1–16, default 8)',
+  'Gitee 更新源（可选）': 'Gitee update source (optional)',
+  'Gitee 只读 token（一般不用填）': 'Gitee read-only token (usually not required)',
+  '开始体检': 'Run system check',
+  '应用推荐配置': 'Apply recommended settings',
+  '启用自动检测（默认开启）': 'Enable automatic checks (on by default)',
+  '发现新问题时通知我': 'Notify me when new issues are found',
+  '导出诊断报告': 'Export diagnostic report',
+  '正在读取驱动…': 'Loading drivers…',
+  '未下载': 'Not downloaded',
+  '当前版本': 'Current version',
+  '更新与下载源': 'Update and download source',
+  '自动尝试公共加速镜像': 'Try public download mirrors automatically',
+  '下载镜像前缀（可选，加速 GitHub）': 'Download mirror prefix (optional; speeds up GitHub downloads)',
+  '检测间隔': 'Check interval',
+  '文件互通': 'File sharing',
+  '系统集成': 'System integration',
+  '安卓系统设置（不用进安卓桌面）': 'Android system settings (no desktop needed)',
+  '运行状态': 'Runtime status',
+  '运行时已就绪 · 应用窗口会按屏幕自动适配': 'Runtime ready · App windows adapt to the screen automatically',
+  '已就绪 · Android': 'Ready · Android',
+  '组件齐全 · 待开机（打开应用时自动拉起）': 'All components installed · Starts automatically when you open an app',
+  '组件齐全，双击任意 APK 或桌面图标即会自动开机': 'All components installed. Double-click an APK or desktop shortcut to start Android.',
+  '还差': 'Still needed:',
+  '；点下面「一键完成」，会在后台一次装好并自动开机': '; select Set up automatically below to install everything and start Android.',
+  '已自动完成': 'Set up automatically',
+  '一切就绪': 'All set',
+  '安装程序运行中 —— 请在虚拟机窗口里完成安装': 'Installer is running — finish installation in the virtual machine window',
+  '运行时待机（安装或打开应用时会自动拉起）': 'Runtime idle (starts automatically when you install or open an app)',
+  '运行时尚未安装 Android 系统 —— 打开设置 → 运行时继续': 'Android is not installed — open Settings → Runtime to continue',
+  '未启用硬件加速：已回退软件模拟（很慢）。点右下角「环境自检 → 修复」开启': 'Hardware acceleration is disabled; software rendering is being used (slow). Select System check → Fix at the bottom right to enable it.',
+  '缺少 Android 14 通用系统镜像 —— 设置 → 运行时里下载（约 1.5GB，只下一次）': 'The Android 14 system image is missing — download it under Settings → Runtime (about 1.5 GB, one-time download).',
+  '运行时引擎未安装 —— 打开设置 → 运行时一键完成': 'The runtime engine is not installed — open Settings → Runtime and select Set up automatically.',
+  '运行时已就绪 —— 安装 APK 或双击桌面图标会自动开机': 'Runtime ready — install an APK or double-click a desktop shortcut to start Android.',
+  '运行时已就绪 · Android': 'Runtime ready · Android',
+  '网络正常': 'Network connected',
+  '虚拟机未联网': 'Virtual machine is offline',
+  '安装中': 'Installing',
+  '待开机': 'Ready to start',
+  '待安装': 'Not installed',
+  '待下载镜像': 'Image download required',
+  '正在检测…': 'Checking…',
+  '尚未检测': 'Not checked yet',
+  '上次检测': 'Last check',
+  '上次启动失败：': 'Last startup failed: ',
+  '上次启动自动诊断：': 'Automatic startup diagnosis: ',
+  '运行时、adb 授权、磁盘、数据分区、快照与设置冲突都检查过了。': 'The runtime, ADB authorization, disk space, data partition, snapshots, and conflicting settings were checked.',
+  '没有发现影响使用的问题。': 'No issues affecting use were found.',
+  '上次检测': 'Last checked',
+  '项待处理': 'items need attention',
+  '一项待处理': '1 item needs attention',
+  '没有发现': 'No issues found',
+  '本机自适应参数': 'Automatic settings for this PC',
+  '全自动：无需选择镜像、无需启用加速、无需调内存': 'Fully automatic: no image selection, acceleration setup, or memory tuning required',
+  '首次使用：打开右上角设置 → 运行时 → 一键完成，再回来安装应用即可。': 'First time here? Open Settings → Runtime → Set up automatically, then return to install apps.',
+  '提示：所有应用共享同一个 Android 运行时，所以第二个应用的启动几乎是瞬时的。': 'Tip: All apps share one Android runtime, so subsequent apps start almost instantly.',
+  'Powered by RoutineMiku': 'Powered by RoutineMiku',
+  '网络正常': 'Network OK',
+  '应用已就绪': 'App is ready',
+  '设置页': 'Settings',
+  '开始使用': 'Get Started',
+  '已安装应用': 'Installed apps',
+  '安卓运行时': 'Android runtime',
+  '就绪': 'Ready',
+  '待命': 'Idle',
+  '支持单个或多个 .apk 文件': 'Supports one or more .apk files',
+  '选择设置项': 'Choose a setting',
+  '运行时状态': 'Runtime status',
+  '一键修复全部': 'Fix all automatically',
+  '重新检查': 'Check again',
+  '修复': 'Fix',
+  '导出': 'Export',
+  '正在检测…': 'Checking…',
+  '一切正常': 'Everything is working',
+  '没有发现影响使用的问题。': 'No issues affecting use were found.',
+  '设置修改后立即生效': 'Changes take effect immediately',
+  '完成': 'Done',
+  '开始体检': 'Run system check',
+  '运行时已就绪': 'Runtime ready',
+  '运行时未连接': 'Runtime not connected',
+  '运行时未就绪': 'Runtime not ready',
+  '运行时组件尚未部署完成': 'Runtime components have not been fully deployed',
+  '共享目录不可用': 'Shared folder unavailable',
+  '文件互通用的本机目录不存在或没有写权限，安卓里保存的文件同步不过去。': 'The local folder used for file sharing does not exist or is not writable. Files saved in Android cannot be synced.',
+  '独立窗口已启用': 'Standalone windows enabled',
+  '下午好，欢迎回来': 'Good afternoon, welcome back',
+  'ApkStart · 运行时会按需自动准备': 'ApkStart · The runtime is prepared on demand',
+  '已装应用': 'Installed apps',
+  '设备 / 端口': 'Device / port',
+  '把 APK 拖进窗口就能安装，装完会自动生成桌面图标': 'Drop an APK into the window to install it. A desktop shortcut is created when installation finishes.',
+  '关窗口只是退出那个应用，安卓环境会留着，下次点开更快': 'Closing a window only exits that app. Android stays running so the next app opens faster.',
+  '已完成 · 点此复查': 'Completed · Click to check again',
+  '环境自检通过，没有发现会影响运行的问题。': 'System check passed. No issues that affect operation were found.',
+  '系统自检通过，没有发现会影响运行的问题。': 'System check passed. No issues that affect operation were found.',
+  '共 8.2 GB · 已是精简状态': '8.2 GB total · Already optimized',
+  '连当前 AVD 的快速启动快照也一起清（会先停运行时，能真正回收几 GB 快照）': 'Also remove quick-boot snapshots for the current AVD (the runtime will stop first; this can reclaim several GB)',
+  '诊断报告用于排障；重建会补齐桌面 + 开始菜单入口': 'Diagnostic reports help with troubleshooting. Rebuild restores desktop and Start menu shortcuts.',
+  '允许 USB 调试吗': 'Allow USB debugging?',
+  '让 Windows 决定': 'Let Windows decide',
+  '自动模式': 'Automatic mode',
+  '运行时会按需自动准备': 'The runtime is prepared on demand',
+  '设备 / 端口': 'Device / port',
+  '已装应用': 'Installed apps',
+  '把 APK 拖进窗口就能安装': 'Drop an APK into the window to install it',
+  '关窗口只是退出那个应用': 'Closing a window only exits that app',
+  '运行时、adb 授权、磁盘、数据分区、快照与设置冲突都检查过了。': 'The runtime, ADB authorization, disk space, data partition, snapshots, and conflicting settings were checked.',
+  '均衡 · 4 核 / 4 GB / 720p': 'Balanced · 4 cores / 4 GB / 720p',
+  '均衡 · 4 核 / 4 GB / 720p': 'Balanced · 4 cores / 4 GB / 720p',
+  '自动：': 'Automatic: ',
+  '把 APK 拖进窗口就能安装，装完会自动生成桌面图标': 'Drop an APK into the window to install it. A desktop shortcut is created when installation finishes.',
+  'ApkStart 用': 'ApkStart uses ',
+  '专用 adb 服务端口 ': 'dedicated ADB server port ',
+  '（你系统里自己的 adb 是 ': '(your system ADB uses ',
+  '），所以命令行里': '), so in the command line',
+  ' 看不到这台安卓设备 —— 这是刻意的隔离。想连的话用': ' you will not see this Android device; this separation is intentional. To connect, use',
+  ' 再执行 adb。': ' before running ADB.',
+  '。注意：别对着 5555 端口手动 ': '. Do not manually run ',
+  '，那会在正在运行的应用上弹出 「允许 USB 调试吗」的系统弹窗。': ', which would show an “Allow USB debugging?” dialog over the running app.',
+  '应用、存档与快照会保留': 'Apps, saves, and snapshots are preserved',
+  '桌面图标被误删或被安全软件拦掉时，点这里按当前设置全部补齐。': 'Use this to restore shortcuts if they were deleted or blocked by security software.',
+  '系统镜像全机共享一份，应用数据用差分层保存；旧镜像、旧快照、日志和锁文件都可回收。日志超过上限会自动滚动，不会无限增长。「重置安卓数据」会真实删除数 GB 用户数据，仅保留系统本身。': 'The system image is shared by all apps; app data is stored separately. Old images, snapshots, logs, and lock files can be reclaimed. Logs rotate automatically at the size limit. Resetting Android data permanently deletes several GB of user data while keeping the system.',
+  '专用 adb 服务端口 5044': 'dedicated ADB server port 5044',
+  '（你系统里自己的 adb 是 5037），所以命令行里': '(your system ADB uses port 5037), so in the command line',
+  '看不到这台安卓设备 —— 这是刻意的隔离。想连的话用': 'this Android device is intentionally isolated. To connect, use',
+  '再执行 adb。 注意：别对着 5555 端口手动': 'before running ADB. Note: do not manually connect to port 5555',
+  '内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。': 'Memory, CPU cores, renderer, ports, and acceleration are selected automatically. If startup fails, ApkStart retries with safer settings.',
+  '随时按': 'Press ',
+  '或右键托盘切换；全屏只放大窗口，不改变画面比例，切换不重启应用。': 'or right-click the tray icon to switch. Fullscreen enlarges the window without changing the aspect ratio or restarting the app.',
+  '虚拟手机面板的真实方向': 'the actual orientation of the virtual device display',
+  '决定的。面板方向和应用自己声明的方向不一致时，': 'determines Android orientation. If it differs from the orientation requested by the app, ',
+  '安卓只会给应用中间一条窄画面、两侧补黑 —— 换窗口大小、改分辨率都填不满。': 'Android displays a narrow image with black bars on the sides. Resizing the window or changing the resolution will not fill them.',
+  '「跟随应用」会在安装 APK 时读出应用的方向，启动时自动把面板换成一致的那个，': 'Follow app reads the app orientation when the APK is installed and automatically matches the display when launching it, ',
+  '所以红果、墨读这类应用会正立且铺满。方向不对时才重启一次运行时（约十几秒），': 'so apps display upright and fill the screen. The runtime restarts only when the orientation needs to change (about 10 seconds), ',
+  '之后再打开同一方向的应用都是秒进。': 'and apps with the same orientation start quickly afterward.',
+  '。注意这不影响画面方向：面板方向和屏幕方向仍由上面的': '. This does not control display orientation, which is still determined by the settings above',
+  '策略 + 忽略应用方向请求决定，不会被传感器带歪。只有个别应用读取这个开关值时才会用到。': 'and is not affected by sensors. This setting is only relevant to apps that read the auto-rotate switch.',
+  '720 宽按 190dpi 算等于 606dp，正好越过 Android 的 600dp 平板断点，': 'At 190 dpi, a 720-pixel width equals 606 dp, just above Android’s 600 dp tablet breakpoint. ',
+  '红果短剧的双列剧集页、设置页的分栏都只在这个排版下出现。关掉会回到手机排版': 'Some apps show their tablet layout only at this size. Turn this off to return to the phone layout',
+  '当前数据分区：尚未创建 · 所在磁盘剩余 未知。游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。': 'Current data partition: not created · Free disk space: unknown. Increase the size here and select Expand now if a game reports insufficient storage. In-place expansion preserves installed apps.',
+  '系统设置、权限弹窗、日期格式的语言。开机时注入到虚拟机，': 'Language used by Android settings, permission dialogs, and date formats. Applied to the virtual machine at startup; ',
+  '。中文输入法不受此项影响，单独在下面开关。': '. The Chinese keyboard is controlled separately below.',
+  '镜像只带英文键盘，勾上会静默安装并启用随包的谷歌拼音输入法， 这样在安卓应用里能直接打中文。关掉则保持系统原生输入法。': 'The image only includes an English keyboard. Enable this option to silently install and enable Google Pinyin so you can type Chinese in Android apps. Turn it off to use the system keyboard.',
+  '当前数据分区：': 'Current data partition: ',
+  '当前数据分区：尚未创建 · 所在磁盘剩余 未知。游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。': 'Current data partition: not created · Free disk space: unknown. Increase the size here and select Expand now if a game reports insufficient storage. In-place expansion preserves installed apps.',
+  '给安卓指定国内公共 DNS（阿里 / 腾讯）。安卓默认走主机的 DNS，主机挂着 VPN 或走公司网时解析会拖到几百毫秒，视频类应用首屏发慢。内网域名访问异常时可关掉。': 'Use public DNS servers in China (Alibaba / Tencent) for Android. The default host DNS can be slow when using a VPN or corporate network, delaying video apps. Turn this off if internal domains stop resolving.',
+  '让应用提示音、视频声音正常播放。仅在你完全不需要声音、想再省一点 CPU 时关闭。': 'Enables app sounds and video audio. Turn this off only if you do not need sound and want to save a little CPU.',
+  '让应用能用电脑的麦克风语音、通话、录音。关掉后应用里查不到录音设备。仅在你担心隐私、完全不需要录音时关闭。': 'Allows Android apps to use your PC microphone for voice input, calls, and recording. Turn this off if you do not need recording or have privacy concerns.',
+  '保留快速启动快照（推荐）': 'Keep quick-boot snapshots (recommended)',
+  '第二次打开应用只要几秒，代价是磁盘上多一份约 2–3 GB 的': 'Subsequent app launches take only a few seconds, at the cost of an extra 2–3 GB ',
+  '。磁盘紧张可以关掉：只影响启动速度，不影响应用与存档。': '. Disable this if disk space is limited; only startup speed is affected, not apps or saves.',
+  '容器细节（高级）': 'Container details (advanced)',
+  '收敛 vCPU 配额并降低进程优先级，CPU 优先让给 Windows 桌面。上面的「资源策略」已经会自动设置这一项。': 'Limits vCPU allocation and lowers process priority so Windows gets CPU first. The Resource profile above already configures this automatically.',
+  '虚拟机优先级': 'Virtual machine priority',
+  '深度裁剪系统后台': 'Trim Android background services',
+  '额外禁用 Play 商店、设置向导、打印服务等后台包，只留打开应用必需的环境。若遇到应用提示缺少 Google Play 服务，关掉此开关会自动恢复。': 'Disables background packages such as Play Store, setup wizard, and print services, keeping only what apps need. Turn this off to restore them if an app requires Google Play services.',
+  '开机预热（推荐）': 'Warm up at startup (recommended)',
+  '启动 ApkStart 后就在后台把安卓环境引导好（窗口全程隐藏，不会看到模拟器）。之后点任何应用只剩一次「打开」，实测从 20 多秒降到几乎不用等。代价是空闲时常驻约 1GB 内存，关掉后第一次打开应用需要冷启动。': 'ApkStart prepares Android in the background after startup (the emulator window stays hidden). Apps then open almost instantly instead of taking 20+ seconds. This uses about 1 GB of memory while idle; if disabled, the first app launch requires a cold boot.',
+  '安卓环境只开机一次并常驻；之后打开应用不再重跑整个系统，只启动该应用并停掉其他应用进程。关掉最后一个窗口会清后台、停放容器，下次点开仍是秒进。': 'Android starts once and stays running. Opening an app starts only that app instead of rebooting the system. Closing the last window cleans up background processes and parks the container.',
+  'ApkStart 只跑自己的运行时：adb / emulator / 系统镜像都由它自己下载和管理， 不探测、不接管、不依赖你电脑上装的任何模拟器（MuMu / 雷电 / 蓝叠 / WSA 都不会被使用）。 这样换机器、别人装没装模拟器、模拟器怎么升级，都不影响这里。': 'ApkStart uses its own runtime and manages its own ADB, emulator, and system image. It does not detect, control, or depend on other emulators installed on your PC (MuMu, LDPlayer, BlueStacks, or WSA).',
+  '由 ApkStart 自己分配（emulator-5554，端口冲突时自动顺延），无需填写。': 'Assigned automatically by ApkStart (emulator-5554; advances if the port is in use). No input is needed.',
+  '本机：/ · 未知 显卡 · 未知 · emulator 未知；驱动 0 个，本机已生效 0 个。': 'This PC: / · Unknown GPU · Unknown · emulator unknown; 0 drivers, 0 active on this PC.',
+  '现在': 'now',
+  '用的物理面板方向，由上面那条策略自动写入。 只有在「强制」模式下它才完全由你决定。': 'is the physical display orientation, set automatically by the policy above. You can choose it directly only in forced-orientation mode.',
+  '原生窗口由模拟器直接渲染和排布，拖拽、缩放、旋转都跟手，不会出现黑边或点击错位， 代价是多一个任务栏图标（横屏用托盘菜单或 Ctrl+Alt+R）。嵌入模式会把模拟器窗口塞进我们的窗口， 观感更统一、自带旋转按钮，但在缩放/旋转/切换应用时容易掉帧并出现黑边。改动在下次打开应用时生效。': 'Native windows are rendered directly by the emulator for smooth resizing and rotation, without black bars or misaligned clicks. The tradeoff is an extra taskbar icon. Embedded mode looks more integrated and includes a rotate button, but may cause dropped frames or black bars. Changes take effect the next time you open an app.',
+  '鼠标侧键 · 返回 / 前进（默认关闭）': 'Mouse side buttons · Back / Forward (off by default)',
+  '把键盘按键映射成安卓触屏点击/滑动。适合用键盘玩手游（WASD 移动、J/K 技能等）。 每个应用可以单独配置，右键应用卡片 → 「按键映射」选择预设模板或自定义。': 'Map keyboard keys to Android taps and swipes. Useful for playing mobile games with a keyboard (WASD movement, J/K skills, and more). Configure each app separately by right-clicking its card and choosing Key mapping.',
+  '当前应用未配置按键映射。右键应用卡片可快速套用预设模板。': 'No key mapping is configured for the current app. Right-click its card to quickly apply a preset.',
+  '游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。': 'If a game reports insufficient storage, increase the size here and select Expand now. In-place expansion preserves installed apps.',
+  '网络加速（推荐）': 'Network acceleration (recommended)',
+  '安卓声音': 'Android audio',
+  '麦克风输入（推荐）': 'Microphone input (recommended)',
+  '本机 未知 内存 / undefined 核；内存最多可分 未知，核心最多 1 个（各留 1/4 内存与 1 核给 Windows）。数据分区上限 0 GB。': 'This PC: unknown memory / undefined cores; up to unknown memory and 1 CPU core available (reserves 1/4 of memory and 1 core for Windows). Data partition limit: 0 GB.',
+  '通用兼容镜像（自动管理）': 'Universal compatibility image (managed automatically)',
+  '现在只有一个 Android 14 通用镜像，x86 与 ARM 应用都能跑，首次遇到 ARM 应用时会自动下载，不需要手动切换。此开关仅用于旧配置兼容。': 'A single Android 14 image supports both x86 and ARM apps. The first time an ARM app is installed, its support files are downloaded automatically. This setting is only for compatibility with older configurations.',
+  '「自动」会同时问 GitHub 与 Gitee 的最新版本，把每个下载地址都真下 256KB 测一次速度，再从最快的那个地址下载；其中一个源不通不影响更新。': 'Automatic mode checks GitHub and Gitee for the latest version, tests each download URL with a 256 KB sample, then downloads from the fastest source. Updates still work if one source is unavailable.',
+  'GitHub 直连太慢时，额外测速 ghfast.top / gh-proxy.com 这两个公开转发服务（只转发公开的发布文件，不涉及账号）。关掉后只用直连和你自己填的前缀。': 'If GitHub is slow, also test the public ghfast.top and gh-proxy.com proxies (they only relay public release files and do not access accounts). When disabled, only direct connections and your own prefix are used.',
+  '填了就只用你填的前缀，不再尝试上面那两个公共镜像；留空则由「自动」逻辑决定。下载器会把它拼在真实地址前面。': 'When set, only this prefix is used instead of the public mirrors above. Leave blank to use automatic selection. The downloader prepends it to the original URL.',
+  '大文件按块并行下载。默认 8 线程已经能跑满大多数家宽；网络稳定时可以试 16。': 'Large files are downloaded in parallel chunks. The default 8 connections are sufficient for most home broadband; try 16 on a stable connection.',
+  '本项目仓库已公开，Gitee 的发行版列表匿名就能读，留空也能用 Gitee 源。 只有在「Gitee 被限流（返回 403/429）」或你想读私有分支时才需要填： gitee.com → 设置 → 私人令牌，只勾「projects」即可，它只用于读取发行版列表， 不会上传任何东西。': 'This repository is public, so Gitee release listings can be read anonymously. A token is only needed if Gitee rate-limits you (403/429) or you need private branches. Create a token under Gitee → Settings → Personal tokens and select only “projects”; it is used only to read release listings and never uploads anything.',
+  '先查一遍这台机器：CPU 虚拟化有没有开、Windows 的虚拟机监控程序平台在不在、 显卡是什么、显存多大、内存和系统版本够不够。能自动改的（内存 / 核心 / 画质 / 渲染后端）直接写进设置， 并把结果固化成一份驱动；必须管理员权限的给按钮；只能在 BIOS 里改的会告诉你怎么改。': 'Checks CPU virtualization, the Windows Hypervisor Platform, GPU and video memory, available RAM, and Windows version. Automatically adjustable settings are applied and saved as a driver. Administrator-only changes get an action button; BIOS changes include instructions.',
+  '有些机器要改启动参数才跑得起来（老显卡 GLES 版本低、没开硬件加速、某版驱动一开硬件渲染就崩）。 驱动就是一份 JSON：声明「匹配哪些机器」+「命中后改哪些启动参数」。你可以自己写、导入、分享。 驱动只改白名单里的启动项，': 'Some PCs need different startup parameters to run (older GPUs with low GLES versions, disabled hardware acceleration, or drivers that crash with hardware rendering). A driver is a JSON file that specifies which PCs it matches and which startup settings to apply. Drivers only modify allowlisted settings; ',
+  '不执行任何代码': 'they do not execute any code',
+  '；匹配不上就不生效。': '; they have no effect when the PC does not match.',
+  '还没有任何驱动。可以点「导出本机模板」做一个，或导入别人做好的 JSON。': 'No drivers yet. Select Export local template to create one or import a JSON file.',
+  '「导出本机模板」会把匹配条件按这台机器填好，改': 'Export local template fills in the match conditions for this PC. Edit ',
+  '里的': ' in ',
+  '就能用。字段说明见仓库里的': ' to use it. See ',
+  '后台定时把这台机器查一遍：安卓运行时有没有起来、adb 授权是否正常、磁盘还剩多少、 数据分区是不是被差量盘挡住、快照有没有坏、设置之间有没有互相打架。 只在发现': 'Periodically checks whether Android is running, ADB is authorized, disk space is available, the data partition is accessible, snapshots are healthy, and settings are compatible. Notifications appear only for ',
+  '新的': 'new ',
+  '的严重问题时弹一次通知，其余都安静地列在下面。': 'serious issues; other results are listed here without notifications.',
+  '关掉后不再定时扫描；随时可以点「立即检测」手动跑一次。': 'When disabled, scheduled scans stop. Select Check now to run one manually at any time.',
+  '只对严重问题弹通知；已知的老问题不重复打扰。': 'Notifications are shown only for serious issues; known issues are not repeated.',
+  '设备连接': 'Device connection',
+  '安卓设备未授权调试': 'Android device has not authorized debugging',
+  '重启运行时后会重新弹出确认框。': 'The confirmation prompt will appear again after restarting the runtime.',
+  '存储': 'Storage',
+  '运行时所在磁盘空间偏紧': 'Low disk space on the runtime drive',
+  '剩余不足 8 GB。': 'Less than 8 GB remaining.',
+  '屏幕方向策略与当前面板方向相反': 'Screen orientation policy conflicts with the current display orientation',
+  '把面板方向改成与策略一致即可。': 'Set the display orientation to match the policy.',
+  '未关联 · 点击开启': 'Not associated · Click to enable',
+  '这里占用空间最大（数 GB）。改到非系统盘可大幅减轻 C 盘压力；修改后需重启软件，已存在的数据不会自动搬移（请手动复制后删除旧目录）。': 'This folder uses the most space (several GB). Move it off the system drive to reduce C: usage. Restart the app after changing it. Existing data is not moved automatically; copy it manually, then remove the old folder.',
+  '真正吃盘的是这一块：数据分区（默认 6 GB，可在上面对大）+ 快速启动快照（约 2–3 GB）。 磁盘紧张时把它指到另一个盘（如 D:），重启软件后生效；旧目录里的': 'This folder uses the most disk space: the data partition (6 GB by default; increase it above) and quick-boot snapshots (about 2–3 GB). If space is low, move it to another drive (such as D:) and restart the app. The existing ',
+  '可整体搬过去再删。': ' can be moved as a whole, then deleted from the old location.',
+  '卸载会取消 .apk 关联并移除程序；便携版请按提示手动删除目录。': 'Uninstalling removes the .apk association and the app. For the portable edition, follow the prompts to delete its folder manually.',
+  '已是最新版本（v0.6.0）': 'You are up to date (v0.6.0)',
+  '从 GitHub（RoutineMiku/apkstart）获取最新版本；轻量版会下载便携包并自动替换程序文件， 运行时、已装应用与快照都不受影响。': 'Get the latest release from GitHub (RoutineMiku/apkstart). The lightweight edition downloads a portable package and replaces the app files; the runtime, installed apps, and snapshots are preserved.',
+  '抖音 · 日常MIKU': 'TikTok · Daily MIKU',
+  '双击即装的 Windows 安卓应用启动器：APK 安装、桌面快捷方式、独立窗口运行、文件双向互通。': 'A Windows Android app launcher: install APKs, create desktop shortcuts, run apps in separate windows, and share files both ways.',
+  '抖音 · @日常MIKU（联系作者）': 'TikTok · @DailyMIKU (contact the author)',
+  'Windows 原生多窗口 · 多开（实验性）': 'Native Windows multi-window · Run multiple apps (experimental)',
+  '开启后打开新应用不再强制关闭上一个：多个应用可同时驻留、随时快速切回（保留登录态，不必重新加载），切回体验接近多窗口。 受限于安卓运行时只有一个模拟器窗口，同一时刻仍只有一个应用画面在前台显示，并非真正的同时并排多窗口。 会明显增加内存占用；关闭则回到「一次只显示一个应用」的稳定模式。': 'When enabled, opening a new app will not close the previous one. Apps stay resident and can be switched quickly without reloading or losing login state. The Android runtime has only one emulator window, so only one app is visible at a time; this is not true side-by-side multitasking. Memory use increases. Turn it off to return to the stable single-app mode.',
+
+  '打开（推荐）· 每次启动应用都自动全屏': 'On (recommended) · Always launch apps fullscreen',
+  '省资源 · 2 核 / 让出前台 / 540p（老机器、挂机）': 'Save resources · 2 cores / lower priority / 540p (older PCs, background use)',
+  '均衡 · 一半物理核 / 让出前台 / 720p（推荐）': 'Balanced · Half of physical cores / lower priority / 720p (recommended)',
+  '流畅 · 不限核数 / 与前台同优先级（视频、游戏）': 'Smooth · No CPU limit / foreground priority (video, games)',
+  '设备地址': 'Device address',
+  '本机共享目录': 'Shared folder on this PC',
+  '安卓内对应目录': 'Matching folder on Android',
+  '系统镜像（ISO）': 'System image (ISO)',
+  '运行时数据目录（系统镜像 · 已装应用 · 快照）': 'Runtime data folder (system image · installed apps · snapshots)',
+  '安卓数据目录（应用、游戏与快速启动快照）': 'Android data folder (apps, games, and quick-boot snapshots)',
+  '卸载 ApkStart': 'Uninstall ApkStart',
+  '关联 .apk 文件': 'Associate .apk files',
+  '更新与下载源': 'Update and download sources',
+  '运行时状态': 'Runtime status',
+  '环境自检': 'System check',
+  '导出诊断报告': 'Export diagnostic report',
+  '启用自动检测（默认开启）': 'Enable automatic checks (on by default)',
+  '发现新问题时通知我': 'Notify me when new issues are found',
+  '自动尝试公共加速镜像': 'Try public download mirrors automatically',
+  '本机体检 · 自动配置': 'System check · Automatic configuration',
+  '一键完成': 'Set up automatically',
+  '高级：连接已有运行时': 'Advanced: Connect an existing runtime',
+  '同时添加到开始菜单': 'Also add to the Start menu',
+  '安装后自动创建桌面快捷方式': 'Create a desktop shortcut after installation',
+  '窗口模式下可拖动边框任意缩放；这里调的是 Android 内部渲染尺寸，越小越省性能。': 'In window mode, drag the borders to resize. This controls Android’s render resolution; lower values use fewer resources.',
+  '安卓的横竖屏是': 'Android orientation is determined by the ',
+  '面板和应用自己声明的方向不一致时，': 'When the display orientation does not match the orientation requested by an app, ',
+  '安卓只会给应用中间一条窄画面、两侧补黑 —— 换窗口大小、改分辨率都填不满。': 'Android shows a narrow image with black bars on the sides. Resizing the window or changing the resolution cannot fill them.',
+  '「跟随应用」会在安装 APK 时读出应用的方向，启动时自动把面板换成一致的那个，': 'Follow app reads the app orientation when the APK is installed and automatically matches the display when launching it, ',
+  '所以红果、墨读这类应用会正立且铺满。方向不对时才重启一次运行时（约十几秒），': 'so apps display upright and fill the screen. The runtime restarts only when the orientation needs to change (about 10 seconds), ',
+  '之后再打开同一方向的应用都是秒进。': 'and apps with the same orientation start quickly afterward.',
+  '安卓里': 'In Android, ',
+  '自动旋转开关默认打开': 'auto-rotate is enabled by default',
+  '。注意这不影响画面方向：面板方向和屏幕方向仍由上面的': '. This does not control the display orientation, which is still determined by the settings above',
+  '策略 + 忽略应用方向请求决定，不会被传感器带歪。只有个别应用读取这个开关值时才会用到。': 'and is not affected by sensors. This setting is only relevant to apps that read the auto-rotate switch.',
+  '720 宽按 190dpi 算等于 606dp，正好越过 Android 的 600dp 平板断点，': 'At 190 dpi, a 720-pixel width equals 606 dp, just above Android’s 600 dp tablet breakpoint. ',
+  '红果短剧的双列剧集页、设置页的分栏都只在这个排版下出现。关掉会回到手机排版': 'Some apps show their tablet layout only at this size. Turn this off to return to the phone layout',
+  '（字更大、信息更少）。切换后下次打开应用生效。': '(larger text and less information). Changes take effect the next time you open an app.',
+  '这是运行时': 'This is the runtime’s ',
+  '用的物理面板方向，由上面那条策略自动写入。': 'physical display orientation, set automatically by the policy above.',
+  '只有在「强制」模式下它才完全由你决定。': 'You can choose it directly only when using a forced orientation.',
+  '原生窗口由模拟器直接渲染和排布，拖拽、缩放、旋转都跟手，不会出现黑边或点击错位，': 'Native windows are rendered directly by the emulator for smooth dragging, resizing, and rotation, without black bars or misaligned clicks. ',
+  '代价是多一个任务栏图标（横屏用托盘菜单或 Ctrl+Alt+R）。嵌入模式会把模拟器窗口塞进我们的窗口，': 'The tradeoff is an extra taskbar icon (use the tray menu or Ctrl+Alt+R for landscape). Embedded mode places the emulator inside the ApkStart window, ',
+  '观感更统一、自带旋转按钮，但在缩放/旋转/切换应用时容易掉帧并出现黑边。改动在下次打开应用时生效。': 'for a more integrated look and a rotate button, but may cause dropped frames or black bars when resizing, rotating, or switching apps. Changes take effect the next time you open an app.',
+  '决定安卓虚拟机吃多少 CPU、画面多细腻。红果/抖音发卡就切「流畅」，只想挂着跑小应用就切「省资源」。改完下一次打开应用生效。': 'Controls Android CPU usage and image quality. Choose Smooth for video or games, or Save resources for lightweight apps running in the background. Changes take effect the next time you open an app.',
+  '游戏模式会让安卓虚拟机保持较高 CPU 优先级并减少宿主侧轮询，输入与画面延迟最低；代价是整机其他程序会变慢。没有应用窗口时容器仍会自动降优先级停放。': 'Game mode gives the Android virtual machine higher CPU priority and reduces host polling for lower input and display latency. Other programs may run more slowly. When no app window is open, the container automatically lowers its priority.',
+  '第二次打开应用只要几秒，代价是磁盘上多一份约 2–3 GB 的 ram.bin。磁盘紧张可以关掉：只影响启动速度，不影响应用与存档。': 'Subsequent launches take only a few seconds, at the cost of an extra 2–3 GB ram.bin file. Disable this if disk space is limited; only startup speed is affected, not apps or saves.',
+  '从 GitHub（RoutineMiku/apkstart）获取最新版本；轻量版会下载便携包并自动替换程序文件，运行时、已装应用与快照都不受影响。': 'Check GitHub (RoutineMiku/apkstart) for the latest version. The lightweight edition downloads a portable package and replaces the app files; your runtime, apps, and snapshots are preserved.',
+  '设置项：横屏 / 内存 / 代理 / 快照…': 'Search settings: orientation / memory / proxy / snapshots…',
+  '搜索设置项：横屏 / 内存 / 代理 / 快照…': 'Search settings: orientation / memory / proxy / snapshots…',
+  '留空 = 桌面': 'Leave blank to use the Desktop',
+  '留空则自动在 PATH / Android SDK 中查找': 'Leave blank to search PATH and the Android SDK automatically',
+  'Android-x86 / Bliss OS 的 ISO 或 IMG 路径，留空使用默认位置': 'Path to an Android-x86 / Bliss OS ISO or IMG; leave blank to use the default',
+  '正在检查…': 'Checking…',
+  '检查中…': 'Checking…',
+  '立即检测': 'Check now',
+  '尚未检查': 'Not checked yet',
+  '检查更新': 'Check for updates',
+  '一键卸载': 'Uninstall',
+  '浏览': 'Browse',
+  '立即同步': 'Sync now',
+  '保存并迁移': 'Save and migrate',
+  '打开': 'Open',
+  '手动设置': 'Manual setup',
+  '已是最新版本': 'You are up to date',
+  '还没有应用': 'No apps yet',
+  '首次使用：打开右上角设置 → 运行时 → 一键完成，再回来安装应用即可。': 'First time here? Open Settings → Runtime → Set up automatically, then return to install apps.',
+  '本机不匹配': 'Does not match this PC',
+  '命中：': 'Matched: ',
+  '已生效': 'Active',
+  '内置示例': 'Built-in example',
+  'AMD 核显 · 改用 swangle 渲染（示例）': 'AMD integrated GPU · Use swangle rendering (example)',
+  '部分 AMD 核显 + 老驱动下，-gpu host 能通过 emulator 自检，但 guest 起起来十几秒后进程直接崩溃（日志里只有 AEHD is operational）。把渲染后端固定成 swangle 可以绕过，代价是帧率略低。': 'With some AMD integrated GPUs and older drivers, -gpu host passes the emulator self-check, but the process crashes seconds after the guest starts (the log only shows “AEHD is operational”). Forcing the swangle renderer can avoid this, at the cost of a slightly lower frame rate.',
+  'Intel 核显 · 软件渲染兜底（示例）': 'Intel integrated GPU · Software rendering fallback (example)',
+  '老款 Intel 核显（HD / UHD 6xx 之前）在部分驱动版本上会出现 GLES 初始化失败或花屏。把渲染后端固定为 software，画面一定能出来。': 'Older Intel integrated GPUs (before HD/UHD 6xx) may fail GLES initialization or show visual artifacts with some driver versions. Forcing the software renderer should ensure the display works.',
+  '没有硬件加速 · 直接走软件模拟（示例）': 'No hardware acceleration · Use software emulation (example)',
+  '软件模拟比硬件加速慢 5~10 倍，能开虚拟化时建议还是去「Windows 功能」里勾上虚拟机平台': 'Software emulation is 5–10 times slower than hardware acceleration. If virtualization is available, enable the Virtual Machine Platform in Windows Features.',
+  '如果画面正常但游戏很卡，可以在设置里把「画质」调成 540×960': 'If the display works but games are slow, lower Graphics quality to 540×960 in Settings.',
+  '确认可用后，把 enabled 改成 true 或删掉这一行，就能自动生效': 'Once confirmed, set enabled to true or remove this line to apply the driver automatically.',
+  '画面能出来但游戏会卡：这类机器更适合玩轻量应用': 'The display should work, but games may be slow. This hardware is better suited to lightweight apps.',
+  '统计不可用': 'Usage statistics unavailable',
+  '自动模式': 'Automatic mode',
+  '（当前系统不支持此设置）': '(This setting is not supported on this system)',
+  '（已生效：': '(Applied: ',
+  '（已选 ': '(Selected ',
+  '，下次启动安卓后生效）': '; takes effect the next time Android starts)',
+  '机器没开「虚拟机监控程序平台」、也不允许装内核驱动时，emulator 走硬件加速会直接失败。这个补丁让 ApkStart 一开始就用软件模拟（-accel off），省掉两轮白等；同时把渲染后端换成 software，避免 GL 初始化失败。': 'If the Windows Hypervisor Platform is disabled and kernel drivers cannot be installed, emulator hardware acceleration fails immediately. This patch starts ApkStart with software emulation (-accel off) to avoid two wasted retries, and switches the renderer to software to prevent GL initialization failures.',
+  '未启用硬件加速': 'Hardware acceleration is disabled',
+  '当前没有硬件加速': 'Hardware acceleration is unavailable',
+  '未安装 emulator点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；失败时会自动改装 AEHD 驱动。': 'The emulator is not installed. Select Fix on the right to enable hardware acceleration (administrator approval and possibly a restart are required); if that fails, the AEHD driver will be installed instead.',
+  '未启用硬件加速：将回退软件模拟（能跑但很慢）。建议安装 AEHD 驱动或开启「虚拟机平台」点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；失败时会自动改装 AEHD 驱动。': 'Hardware acceleration is disabled, so software emulation will be used (it works but is slow). Install the AEHD driver or enable the Virtual Machine Platform. Select Fix on the right to enable it (administrator approval and possibly a restart are required); if that fails, the AEHD driver will be installed instead.',
+  '只能跑纯软件模拟，开机慢到几分钟、画面也容易掉帧。开启「Windows 虚拟机监控程序平台」后重启即可。': 'Only software emulation is available, so startup may take several minutes and the display may stutter. Enable the Windows Hypervisor Platform and restart your PC.',
+};
+
+const UI_PHRASES = [
+  ['当前数据分区：', 'Current data partition: '],
+  ['快速启动差量盘（实际容量以运行时 /data 为准）', 'Quick-boot overlay (actual capacity depends on runtime /data)'],
+  ['实际文件系统 ', 'Actual filesystem '],
+  ['尚未创建', 'Not created'],
+  ['（自动）', ' (automatic)'],
+  [' · 所在磁盘剩余 ', ' · Free disk space: '],
+  ['。 目标 ', '. Target '],
+  [' GB 还没生效：安卓正在用快速启动差量盘，需要「重置安卓数据」后按新容量重建（会清空已装应用）。', ' GB has not taken effect: Android is using a quick-boot overlay. Reset Android data to rebuild it at the new size (installed apps will be removed).'],
+  ['。游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。', '. If a game reports insufficient storage, increase the size here and select Expand now. In-place expansion preserves installed apps.'],
+  ['游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。', 'If a game reports insufficient storage, increase the size here and select Expand now. In-place expansion preserves installed apps.'],
+  ['ApkStart 用', 'ApkStart uses '],
+  ['专用 adb 服务端口', 'dedicated ADB server port'],
+  ['（你系统里自己的 adb 是 ', '(your system ADB uses port '],
+  ['），所以命令行里', '), so in the command line'],
+  ['看不到这台安卓设备 —— 这是刻意的隔离。想连的话用', 'you will not see this Android device; this isolation is intentional. To connect, use'],
+  ['再执行 adb。', ' before running ADB.'],
+  ['注意：别对着 5555 端口手动', 'Note: do not manually connect to port 5555'],
+  ['，那会在正在运行的应用上弹出 「允许 USB 调试吗」的系统弹窗。', '; this opens an “Allow USB debugging?” dialog over the running app.'],
+  ['内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。', 'Memory, CPU cores, renderer, ports, and acceleration are selected automatically. If startup fails, ApkStart retries with safer settings.'],
+  ['自动：', 'Automatic: '],
+  ['GB 内存', ' GB memory'],
+  ['核 · ', ' cores · '],
+  [' 核', ' cores'],
+  [' 渲染', ' rendering'],
+  ['按需快照', 'on-demand snapshots'],
+  ['冷启动', 'cold boot'],
+  ['轻量容器', 'lightweight container'],
+  ['端口 ', 'port '],
+  ['无硬件加速，将回退软件模拟', 'No hardware acceleration; software rendering will be used'],
+  ['本机不匹配', 'Does not match this PC'],
+  ['命中：', 'Matched: '],
+  ['独立窗口已启用', 'standalone windows enabled'],
+  ['缺少 ', 'Missing '],
+  ['还差 ', 'Still needed: '],
+  ['adb 授权', 'ADB authorization'],
+  ['剩余', 'remaining'],
+  ['正在检测：', 'Checking: '],
+  ['正在统计：', 'Calculating: '],
+  ['缺少 ', 'Missing '],
+  ['已就绪 · Android ', 'Ready · Android '],
+  ['运行时已就绪 · Android ', 'Runtime ready · Android '],
+  ['组件齐全 · 待开机', 'All components installed · Ready to start'],
+  ['组件齐全，双击任意 APK 或桌面图标即会自动开机', 'All components installed. Double-click any APK or desktop shortcut to start Android.'],
+  ['无硬件加速，将回退软件模拟', 'No hardware acceleration; software rendering will be used'],
+  ['引擎', 'engine'],
+  ['系统镜像', 'system image'],
+  ['adb 工具链', 'ADB tools'],
+  ['待开机', 'Ready to start'],
+  ['已自动完成', 'Completed automatically'],
+  ['运行时待机', 'Runtime idle'],
+  ['待安装', 'Not installed'],
+  ['待下载镜像', 'Image download required'],
+  ['待机', 'Idle'],
+  ['已安装', 'Installed'],
+  ['未启用', 'Not enabled'],
+  ['未联网', 'Offline'],
+  ['状态', 'Status'],
+  ['网络正常', 'Network connected'],
+  ['一键流畅优化', 'Optimize performance'],
+  ['检测间隔', 'Check interval'],
+  [' 分钟', ' minutes'],
+  [' 小时', ' hours'],
+  ['项待处理', 'items need attention'],
+  [' · 一切正常', ' · Everything is working'],
+  ['正在检测…', 'Checking…'],
+  ['尚未检测', 'Not checked yet'],
+  ['上次检测', 'Last checked'],
+  ['打开下载页', 'Open download page'],
+  ['应用正在独立窗口中运行', 'The app is running in its own window'],
+  ['正在检查运行时', 'Checking the runtime'],
+  ['正在引导 Android', 'Starting Android'],
+  ['选择 APK 文件', 'Choose APK file'],
+  ['把 APK 拖进来就能装', 'Drop an APK here to install'],
+  ['首次使用', 'First time here'],
+  ['立即生效', 'takes effect immediately'],
+  ['系统默认', 'System default'],
+  ['镜像默认', 'image default'],
+  ['应用会自动', 'Apps will automatically'],
+  ['不会影响', 'does not affect'],
+  ['仅用于', 'only used for'],
+  ['仅在', 'only when'],
+  ['功能不受影响', 'does not affect functionality'],
+  ['无须', 'No need to'],
+  ['无需', 'No need to'],
+  ['是否正常', 'is working correctly'],
+  ['下次打开应用生效', 'Takes effect the next time you open an app'],
+  ['下次重启运行时生效', 'Takes effect after the next runtime restart'],
+  ['下次启动安卓运行时后生效', 'Takes effect after the next Android runtime startup'],
+  ['当前应用未配置按键映射', 'No key mapping is configured for the current app'],
+  ['右键应用卡片', 'Right-click an app card'],
+  ['正在检测运行时', 'Checking the runtime'],
+  ['正在检查运行时', 'Checking the runtime'],
+  ['正在读取', 'Loading'],
+  ['正在统计', 'Calculating'],
+  ['正在安装', 'Installing'],
+  ['正在启动', 'Starting'],
+  ['正在引导', 'Starting'],
+  ['运行时已就绪', 'Runtime ready'],
+  ['运行时未启动', 'Runtime is not running'],
+  ['运行时未部署', 'Runtime is not installed'],
+  ['一键完成', 'Set up automatically'],
+  ['自动模式', 'Automatic mode'],
+  ['默认开启', 'enabled by default'],
+  ['默认关闭', 'disabled by default'],
+  ['点击即可', 'Click to'],
+  ['点下面', 'Click below'],
+  ['打开设置', 'Open Settings'],
+  ['设置 →', 'Settings →'],
+  ['下一次打开应用', 'the next time you open an app'],
+  ['下一次启动', 'the next startup'],
+  ['下次启动', 'the next startup'],
+  ['安卓运行时', 'Android runtime'],
+  ['运行时', 'runtime'],
+  ['系统镜像', 'system image'],
+  ['兼容镜像', 'compatibility image'],
+  ['已就绪', 'Ready'],
+  ['未就绪', 'Not ready'],
+  ['正在检测', 'Checking'],
+  ['正在准备', 'Preparing'],
+  ['正在下载', 'Downloading'],
+  ['已安装', 'Installed'],
+  ['未安装', 'Not installed'],
+  ['无需设置', 'no setup required'],
+  ['自动选择', 'selected automatically'],
+  ['自动启动', 'Start automatically'],
+  ['自动重试', 'retry automatically'],
+  ['重启安卓', 'restart Android'],
+  ['重启运行时', 'restart the runtime'],
+  ['打开应用', 'open an app'],
+  ['安装应用', 'install apps'],
+  ['已安装应用', 'installed apps'],
+  ['应用窗口', 'app window'],
+  ['独立窗口', 'standalone window'],
+  ['全屏', 'fullscreen'],
+  ['竖屏', 'portrait'],
+  ['横屏', 'landscape'],
+  ['平板排版', 'tablet layout'],
+  ['手机排版', 'phone layout'],
+  ['硬件加速', 'hardware acceleration'],
+  ['软件模拟', 'software rendering'],
+  ['物理核', 'physical cores'],
+  ['核心数', 'CPU cores'],
+  ['内存', 'memory'],
+  ['渲染分辨率', 'render resolution'],
+  ['端口冲突', 'port conflict'],
+  ['无需手动', 'no manual setup required'],
+  ['请稍候', 'Please wait'],
+  ['稍后再试', 'try again later'],
+  ['请重试', 'Please try again'],
+  ['检查失败', 'Check failed'],
+  ['安装失败', 'Installation failed'],
+  ['启动失败', 'Startup failed'],
+  ['一切正常', 'Everything is working'],
+  ['没有发现', 'No'],
+  ['推荐', 'recommended'],
+  ['已开启', 'enabled'],
+  ['已关闭', 'disabled'],
+];
+
+const UI_TRANSLATION_PHRASES = [
+  ...UI_PHRASES,
+  ...Object.entries(UI_TEXT).filter(([source]) => source.length >= 8),
+].sort((a, b) => b[0].length - a[0].length);
+
+const BUILTIN_DRIVER_EN = {
+  'example-amd-igpu-swangle': {
+    name: 'AMD integrated GPU · Use swangle rendering (example)',
+    description: 'With some AMD integrated GPUs and older drivers, -gpu host passes the emulator self-check, but the process crashes seconds after the guest starts (the log only shows “AEHD is operational”). Forcing the swangle renderer can avoid this, at the cost of a slightly lower frame rate.',
+    notes: [
+      'If the display works but games are slow, lower Graphics quality to 540×960 in Settings.',
+      'Once confirmed, set enabled to true or remove this line to apply the driver automatically.',
+    ],
+  },
+  'example-intel-igpu-software': {
+    name: 'Intel integrated GPU · Software rendering fallback (example)',
+    description: 'Older Intel integrated GPUs (before HD/UHD 6xx) may fail GLES initialization or show visual artifacts with some driver versions. Forcing the software renderer should ensure the display works.',
+    notes: ['The display should work, but games may be slow. This hardware is better suited to lightweight apps.'],
+  },
+  'example-no-hypervisor-tcg': {
+    name: 'No hardware acceleration · Use software emulation (example)',
+    description: 'If the Virtual Machine Platform is disabled and kernel drivers cannot be installed, emulator hardware acceleration fails immediately. This patch starts ApkStart with software emulation (-accel off) to avoid two wasted retries, and switches the renderer to software to prevent GL initialization failures.',
+    notes: ['Software emulation is 5–10 times slower than hardware acceleration. If virtualization is available, enable the Virtual Machine Platform in Windows Features.'],
+  },
+};
+
+let uiLanguage = 'en';
+const translatedText = new WeakMap();
+let latestUsage = null;
+let usageLoaded = false;
+
+function localizedText(source) {
+  const key = source.trim().replace(/\s+/g, ' ');
+  if (!key || uiLanguage === 'zh-CN') return source;
+  const localeTranslation = i18n.translate(key, uiLanguage);
+  const leading = source.match(/^\s*/)[0];
+  const trailing = source.match(/\s*$/)[0];
+  if (localeTranslation) return `${leading}${localeTranslation}${trailing}`;
+  const translated = UI_TEXT[key];
+  if (translated) return `${leading}${translated}${trailing}`;
+  const issueCount = key.match(/^(\d+) 个(严重|提示)$/);
+  if (issueCount) {
+    const count = Number(issueCount[1]);
+    const localeCount = i18n.issueCount(count, issueCount[2] === '严重' ? 'severe' : 'notice', uiLanguage);
+    if (localeCount) return `${leading}${localeCount}${trailing}`;
+    const label = issueCount[2] === '严重'
+      ? (count === 1 ? 'critical issue' : 'critical issues')
+      : (count === 1 ? 'notice' : 'notices');
+    return `${leading}${count} ${label}${trailing}`;
+  }
+  const runtimeStatus = key.match(/^运行时未就绪（(.+)）$/);
+  if (runtimeStatus) {
+    const title = i18n.translate('运行时未就绪', uiLanguage) || UI_TEXT['运行时未就绪'];
+    const detail = i18n.translate(runtimeStatus[1], uiLanguage) || UI_TEXT[runtimeStatus[1]] || runtimeStatus[1];
+    return `${leading}${title} (${detail})${trailing}`;
+  }
+  const progressPatterns = [
+    [/^下载运行时（约 (.+?)，只需一次，(\d+) 线程）…$/, (_m, size, threads) => `Downloading runtime (about ${size}, one-time download, ${threads} threads)…`],
+    [/^下载运行时引擎（约 (.+?)，走 Google 官方源）…$/, (_m, size) => `Downloading runtime engine (about ${size}, from Google)…`],
+    [/^下载 Android platform-tools（约 (.+?)）…$/, (_m, size) => `Downloading Android platform-tools (about ${size})…`],
+    [/^正在从 (.+?) 下载运行时…$/, (_m, sourceName) => `Downloading runtime from ${sourceName}…`],
+    [/^正在挑选最快的下载源（(.+?) · (.+?)）…$/, (_m, sourceName, tag) => `Selecting the fastest download source (${sourceName} · ${tag})…`],
+    [/^下载 adb… (.+)$/, (_m, progress) => `Downloading ADB… ${progress}`],
+    [/^下载运行时引擎 (.+)$/, (_m, progress) => `Downloading runtime engine ${progress}`],
+    [/^下载兼容镜像 (.+)$/, (_m, progress) => `Downloading compatibility image ${progress}`],
+    [/^解压运行时（约 (.+?)）…$/, (_m, duration) => `Extracting runtime (about ${duration})…`],
+    [/^解压 (\d+)\/(\d+)$/, (_m, done, total) => `Extracting ${done}/${total}`],
+    [/^正在准备 adb…$/, () => 'Preparing ADB…'],
+    [/^正在准备 Android 运行时…$/, () => 'Preparing Android runtime…'],
+    [/^正在准备 Android 系统镜像…$/, () => 'Preparing Android system image…'],
+  ];
+  for (const [pattern, render] of progressPatterns) {
+    const match = key.match(pattern);
+    if (match) return `${leading}${render(...match)}${trailing}`;
+  }
+  if (/^下载运行时 /.test(key)) {
+    return `${leading}${key.replace(/^下载运行时 /, 'Downloading runtime ')
+      .replace(' · 剩余约 ', ' · about ')
+      .replace(/ 分钟/g, ' min')}${trailing}`;
+  }
+  const profile = key.match(/^自动：([\d.]+)GB 内存 · (\d+) 核 · (.+?) 渲染 · (硬件加速|软件模拟) · (按需快照|冷启动)( · 轻量容器)? · 端口 (\d+)$/);
+  if (profile) {
+    return `${leading}Automatic: ${profile[1]} GB memory · ${profile[2]} CPU cores · ${profile[3]} rendering · ${profile[4] === '硬件加速' ? 'hardware acceleration' : 'software emulation'} · ${profile[5] === '按需快照' ? 'on-demand snapshots' : 'cold boot'}${profile[6] ? ' · lightweight container' : ''} · port ${profile[7]}${trailing}`;
+  }
+  const phraseOutput = UI_TRANSLATION_PHRASES.reduce(
+    (text, [from, to]) => text.replaceAll(from, to),
+    key,
+  );
+  return `${leading}${/[\u3400-\u9fff]/.test(phraseOutput) ? key : phraseOutput}${trailing}`;
+}
+
+function formatUsageText(usage) {
+  latestUsage = usage || null;
+  usageLoaded = true;
+  if (!usage) return uiLanguage === 'zh-CN'
+    ? '统计不可用'
+    : i18n.translate('统计不可用', uiLanguage) || 'Usage statistics unavailable';
+  if (uiLanguage !== 'zh-CN') {
+    const total = i18n.translate('总计', uiLanguage) || 'Total';
+    const reclaimable = i18n.translate('可回收', uiLanguage) || 'Reclaimable';
+    const items = uiLanguage === 'en' && usage.count === 1 ? 'item' : i18n.translate('项', uiLanguage) || 'items';
+    const optimized = i18n.translate('已是精简状态', uiLanguage) || 'Already optimized';
+    return `${total} ${usage.totalText}${usage.reclaimable
+      ? ` · ${reclaimable} ${usage.reclaimableText} (${usage.count} ${items})`
+      : ` · ${optimized}`}`;
+  }
+  return `共 ${usage.totalText}${usage.reclaimable
+    ? ` · 可回收 ${usage.reclaimableText}（${usage.count} 项）`
+    : ' · 已是精简状态'}`;
+}
+
+function translateTextNode(node) {
+  if (node.parentElement && node.parentElement.closest('[data-no-localize]')) return;
+  const current = node.nodeValue;
+  const previous = translatedText.get(node);
+  const source = previous && current === previous.output ? previous.source : current;
+  const output = localizedText(source);
+  translatedText.set(node, { source, output });
+  if (output !== current) node.nodeValue = output;
+}
+
+const TRANSLATABLE_ATTRIBUTES = ['placeholder', 'title', 'aria-label', 'value'];
+
+function translateElement(el) {
+  if (el.closest && el.closest('[data-no-localize]')) return;
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) translateTextNode(node);
+  }
+  if (el.nodeType === Node.ELEMENT_NODE) {
+    for (const attr of TRANSLATABLE_ATTRIBUTES) {
+      if (!el.hasAttribute(attr)) continue;
+      const current = el.getAttribute(attr);
+      const key = `attr:${attr}`;
+      const previous = translatedText.get(el)?.[key];
+      const source = previous && current === previous.output ? previous.source : current;
+      const output = localizedText(source);
+      const entry = translatedText.get(el) || {};
+      entry[key] = { source, output };
+      translatedText.set(el, entry);
+      if (output !== current) el.setAttribute(attr, output);
+    }
+  }
+}
+
+let languageObserver = null;
+
+function applyUiLanguage(language) {
+  uiLanguage = i18n.normalize(language);
+  document.documentElement.lang = uiLanguage;
+  document.documentElement.dir = i18n.direction(uiLanguage);
+  if (usageLoaded && $('usageText')) $('usageText').textContent = formatUsageText(latestUsage);
+  const scan = (root) => {
+    if (root.nodeType === Node.TEXT_NODE) {
+      translateTextNode(root);
+      return;
+    }
+    if (root.nodeType !== Node.ELEMENT_NODE && root !== document.body) return;
+    translateElement(root);
+    root.querySelectorAll('*').forEach(translateElement);
+  };
+  scan(document.body);
+  if (!languageObserver) {
+    languageObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'characterData') translateTextNode(mutation.target);
+        else if (mutation.type === 'attributes') translateElement(mutation.target);
+        else mutation.addedNodes.forEach(scan);
+      }
+    });
+    languageObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: TRANSLATABLE_ATTRIBUTES,
+    });
+  }
+}
 
 /* ---------------- 工具 ---------------- */
 
@@ -35,6 +1035,21 @@ function fmtSize(bytes) {
 function relTime(ts) {
   if (!ts) return '';
   const d = Date.now() - ts;
+  if (uiLanguage === 'en') {
+    if (d < 60000) return 'Just now';
+    if (d < 3600000) return `${Math.floor(d / 60000)} minutes ago`;
+    if (d < 86400000) return `${Math.floor(d / 3600000)} hours ago`;
+    if (d < 86400000 * 30) return `${Math.floor(d / 86400000)} days ago`;
+    return new Date(ts).toLocaleDateString('en-US');
+  }
+  if (uiLanguage !== 'zh-CN') {
+    const relative = new Intl.RelativeTimeFormat(uiLanguage, { numeric: 'auto' });
+    if (d < 60000) return relative.format(0, 'second');
+    if (d < 3600000) return relative.format(-Math.floor(d / 60000), 'minute');
+    if (d < 86400000) return relative.format(-Math.floor(d / 3600000), 'hour');
+    if (d < 86400000 * 30) return relative.format(-Math.floor(d / 86400000), 'day');
+    return new Date(ts).toLocaleDateString(uiLanguage);
+  }
   if (d < 60000) return '刚刚';
   if (d < 3600000) return `${Math.floor(d / 60000)} 分钟前`;
   if (d < 86400000) return `${Math.floor(d / 3600000)} 小时前`;
@@ -176,7 +1191,7 @@ function renderGrid() {
           ? `<img src="${esc(a.iconUrl)}" alt="" draggable="false" />`
           : `<div class="fallback" style="background:${esc(a.accent || '#9aa6b2')}">${esc(initialOf(a.label))}</div>`}
       </div>
-      <div class="name">${esc(a.label)}</div>
+      <div class="name" data-no-localize>${esc(a.label)}</div>
       <div class="meta">${a.running ? '运行中' : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
       <div class="open-hint">${a.running ? '切换到前台' : '打开'}</div>
     </div>
@@ -421,7 +1436,7 @@ function updateStepProgress(component, p) {
   }
   if (p.message) {
     const d = row.querySelector('[data-desc]');
-    if (d) d.textContent = p.message;
+    if (d) d.textContent = localizedText(p.message);
   }
 }
 
@@ -968,13 +1983,21 @@ function renderDrivers(r) {
   const errors = (r && r.errors) || [];
   const onCount = drivers.filter((d) => d.enabled && d.matched).length;
   if (sum) {
-    const accel = host.accel === 'none' ? '无硬件加速' : (host.accel || '未知');
-    sum.textContent = `本机：${host.platform || ''}/${host.arch || ''} · ${host.gpuVendor || '未知'} 显卡 · ${accel}`
-      + ` · emulator ${host.emulatorVersion || '未知'}；驱动 ${drivers.length} 个，本机已生效 ${onCount} 个。`
-      + (errors.length ? ` ${errors.length} 个文件加载失败（见下）。` : '');
+    if (uiLanguage !== 'zh-CN') {
+      const accel = host.accel === 'none' ? 'No hardware acceleration' : (host.accel || 'Unknown');
+      sum.textContent = `This PC: ${host.platform || 'Unknown'}/${host.arch || 'Unknown'} · ${host.gpuVendor || 'Unknown'} GPU · ${accel}`
+        + ` · emulator ${host.emulatorVersion || 'unknown'}; ${drivers.length} drivers, ${onCount} active on this PC.`
+        + (errors.length ? ` ${errors.length} files failed to load (see below).` : '');
+    } else {
+      const accel = host.accel === 'none' ? '无硬件加速' : (host.accel || '未知');
+      sum.textContent = `本机：${host.platform || ''}/${host.arch || ''} · ${host.gpuVendor || '未知'} 显卡 · ${accel}`
+        + ` · emulator ${host.emulatorVersion || '未知'}；驱动 ${drivers.length} 个，本机已生效 ${onCount} 个。`
+        + (errors.length ? ` ${errors.length} 个文件加载失败（见下）。` : '');
+    }
   }
   list.textContent = '';
   for (const d of drivers) {
+    const builtinEnglish = d.builtin && BUILTIN_DRIVER_EN[d.id];
     const item = document.createElement('div');
     item.className = d.enabled ? 'drv-item on' : 'drv-item';
 
@@ -990,7 +2013,7 @@ function renderDrivers(r) {
     });
     const name = document.createElement('span');
     name.className = 'drv-name';
-    name.textContent = d.name;
+    name.textContent = uiLanguage !== 'zh-CN' && builtinEnglish ? builtinEnglish.name : d.name;
     head.append(cb, name);
 
     if (d.matched && d.enabled) {
@@ -1012,13 +2035,17 @@ function renderDrivers(r) {
     meta.textContent = `v${d.version || '?'}`
       + (d.author ? ` · ${d.author}` : '')
       + ` · priority ${d.priority}`
-      + (d.hits && d.hits.length ? ` · 命中：${d.hits.join(' / ')}` : ' · 本机不匹配');
+      + (d.hits && d.hits.length
+        ? ` · ${uiLanguage !== 'zh-CN' ? 'Matched: ' : '命中：'}${d.hits.join(' / ')}`
+        : ` · ${uiLanguage !== 'zh-CN' ? 'Does not match this PC' : '本机不匹配'}`);
     item.append(meta);
 
     if (d.description) {
       const desc = document.createElement('div');
       desc.className = 'drv-meta';
-      desc.textContent = d.description;
+      desc.textContent = uiLanguage !== 'zh-CN' && builtinEnglish
+        ? builtinEnglish.description
+        : d.description;
       item.append(desc);
     }
     list.append(item);
@@ -1048,6 +2075,8 @@ async function refreshDrivers() {
 }
 
 function fillSettings(s) {
+  if ($('setLanguage')) $('setLanguage').value = i18n.normalize(s.language);
+  applyUiLanguage(s.language);
   syncBackendFields();
   refreshDrivers().catch(() => {});
   $('setAdbPath').value = s.adbPath || '';
@@ -1157,7 +2186,14 @@ function settingsGroups() {
 /** 分组内是否命中搜索词：标题、字段名、说明文字都算 */
 function groupMatches(group, q) {
   if (!q) return true;
-  const text = (group.textContent || '').toLowerCase();
+  const sourceText = [];
+  const walker = document.createTreeWalker(group, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const translation = translatedText.get(node);
+    sourceText.push(translation ? translation.source : node.nodeValue);
+  }
+  const text = `${group.textContent || ''} ${sourceText.join(' ')}`.toLowerCase();
   if (text.includes(q)) return true;
   const title = group.querySelector('.group-title');
   return !!title && title.textContent.toLowerCase().includes(q);
@@ -1464,10 +2500,8 @@ async function openSettings() {
     }).catch(() => {});
   }
   api.runtimeUsage().then((u) => {
-    $('usageText').textContent = u
-      ? `共 ${u.totalText}${u.reclaimable ? ` · 可回收 ${u.reclaimableText}（${u.count} 项）` : ' · 已是精简状态'}`
-      : '统计不可用';
-  }).catch(() => { $('usageText').textContent = '统计不可用'; });
+    $('usageText').textContent = formatUsageText(u);
+  }).catch(() => { $('usageText').textContent = formatUsageText(null); });
 
   $('settingsMask').classList.add('on');
   refreshAndroid();
@@ -1616,6 +2650,21 @@ function bindSettings() {
   const save = async (patch) => {
     state.settings = await api.setSettings(patch);
   };
+
+  if ($('setLanguage')) {
+    $('setLanguage').addEventListener('change', async (e) => {
+      const language = i18n.normalize(e.target.value);
+      state.settings = await api.setSettings({ language });
+      applyUiLanguage(language);
+      toast({
+        title: localizedText('界面语言已更改'),
+        body: localizedText(language === 'en'
+          ? '界面已切换为英语。'
+          : language === 'zh-CN' ? '界面已切换为简体中文。' : '界面语言已切换。'),
+        type: 'ok',
+      });
+    });
+  }
 
   if ($('btnPreflight')) $('btnPreflight').addEventListener('click', () => runPreflight());
   if ($('btnPreflightApply')) {
@@ -1969,7 +3018,7 @@ function bindSettings() {
         type: 'ok',
       });
       const u = await api.runtimeUsage();
-      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+      $('usageText').textContent = formatUsageText(u);
     } catch (e) {
       toast({ title: '清理失败', body: e.message, type: 'error' });
     } finally {
@@ -2016,7 +3065,7 @@ function bindSettings() {
         type: 'ok',
       });
       const u = await api.runtimeUsage();
-      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+      $('usageText').textContent = formatUsageText(u);
     } catch (e) {
       toast({ title: '重置失败', body: e.message, type: 'error' });
     } finally {
@@ -2107,7 +3156,7 @@ function bindSettings() {
         type: 'ok',
       });
       const u = await api.runtimeUsage();
-      $('usageText').textContent = `共 ${u.totalText} · 可回收 ${u.reclaimableText}（${u.count} 项）`;
+      $('usageText').textContent = formatUsageText(u);
     } catch (e) {
       toast({ title: '清理失败', body: e.message, type: 'error' });
     } finally {
@@ -2513,7 +3562,9 @@ async function init() {
   bindUpdate();
   bindAndroid();
   bindWelcome();
+  applyUiLanguage('en');
   state.settings = await api.getSettings();
+  applyUiLanguage(state.settings && state.settings.language);
   await refreshStatus();
   await refreshApps();
   refreshAndroid();
@@ -2633,7 +3684,12 @@ function renderEnvCheck(r) {
   if (chip) {
     const errs = issues.filter((i) => i.severity === 'error').length;
     chip.hidden = issues.length === 0;
-    chip.textContent = errs ? `${errs} 项待修复` : `${issues.length} 项提示`;
+    const countLabel = i18n.issueCount(errs || issues.length, errs ? 'severe' : 'notice', uiLanguage);
+    chip.textContent = uiLanguage === 'zh-CN'
+      ? (errs ? `${errs} 项待修复` : `${issues.length} 项提示`)
+      : uiLanguage === 'en'
+        ? (errs ? `${errs} ${errs === 1 ? 'issue' : 'issues'} to fix` : `${issues.length} ${issues.length === 1 ? 'notice' : 'notices'}`)
+        : countLabel || String(issues.length);
     chip.className = `status-chip${errs ? ' err' : ''}`;
     chip.title = issues.map((i) => i.title).join('；');
   }
