@@ -4,6 +4,7 @@ const catalogs = {
   'zh-CN': require('../locales/zh-CN.json'),
   en: require('../locales/en.json'),
   'pt-BR': require('../locales/pt-BR.json'),
+  ru: require('../locales/ru.json'),
 };
 let locale = 'zh-CN';
 
@@ -11,6 +12,7 @@ function resolveLocale(preference, systemLocale = 'en') {
   if (Object.hasOwn(catalogs, preference)) return preference;
   const system = String(systemLocale).toLowerCase().replace(/_/g, '-');
   if (system === 'pt' || system.startsWith('pt-')) return 'pt-BR';
+  if (system === 'ru' || system.startsWith('ru-')) return 'ru';
   if (system === 'zh' || system.startsWith('zh-')) return 'zh-CN';
   return 'en';
 }

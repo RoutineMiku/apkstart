@@ -27,6 +27,7 @@ electronLanguages:
   - zh-TW
   - en-US
   - pt-BR
+  - ru
 
 # 完整运行时（emulator + platform-tools + 系统镜像），由 build/prepare-runtime.js 生成。
 # 打进包里之后首次启动不再需要任何下载。
