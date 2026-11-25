@@ -1091,6 +1091,7 @@ function fillSettings(s) {
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
+  if ($('setDnsServers')) $('setDnsServers').value = eng.dnsServers || 'cn';
   if ($('setLocale')) $('setLocale').value = eng.locale || 'zh-CN';
   if ($('setChineseIme')) $('setChineseIme').checked = eng.chineseIme !== false;
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
@@ -1701,6 +1702,9 @@ function bindSettings() {
   }
   if ($('setFastDns')) {
     $('setFastDns').addEventListener('change', (e) => save({ engine: { fastDns: e.target.checked } }));
+  }
+  if ($('setDnsServers')) {
+    $('setDnsServers').addEventListener('change', (e) => save({ engine: { dnsServers: e.target.value } }));
   }
   if ($('setLocale')) {
     $('setLocale').addEventListener('change', async (e) => {

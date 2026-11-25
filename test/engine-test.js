@@ -219,6 +219,17 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     assert(/windows_x64/i.test(emuUrl), `emulator 包平台不对: ${emuUrl}`);
   });
 
+  await test('网络加速 DNS：默认国内，可选 Cloudflare / Google，关闭时不传', async () => {
+    const { dnsServersFor, DNS_PRESETS } = require('../src/core/emulator');
+    assert(dnsServersFor({}) === '223.5.5.5,119.29.29.29', '默认应为国内 DNS');
+    assert(dnsServersFor(undefined) === DNS_PRESETS.cn, '没有 engine 设置时应为国内 DNS');
+    assert(dnsServersFor({ dnsServers: 'cloudflare' }) === '1.1.1.1,1.0.0.1', 'cloudflare');
+    assert(dnsServersFor({ dnsServers: 'google' }) === '8.8.8.8,8.8.4.4', 'google');
+    assert(dnsServersFor({ dnsServers: 'bogus' }) === DNS_PRESETS.cn, '未知取值应回落到国内 DNS');
+    assert(dnsServersFor({ dnsServers: 'toString' }) === DNS_PRESETS.cn, '原型属性不能当成预设');
+    assert(dnsServersFor({ fastDns: false, dnsServers: 'cloudflare' }) === '', '关闭网络加速时不传 -dns-server');
+  });
+
   await test('AVD 配置使用 64 位架构（x86_64 不能被截成 x86）', async () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(TMP);
