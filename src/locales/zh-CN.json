@@ -1263,5 +1263,8 @@
   "installer.armDisabledSwitching": "当前运行时未启用 ARM 翻译层，正在自动切换兼容镜像后重试…",
   "provision.accel.whpx": "WHPX 硬件加速已启用",
   "provision.accel.aehd": "AEHD 硬件加速已启用",
-  "provision.accel.aehdNoCheck": "AEHD 硬件加速已启用（emulator-check 缺失，按驱动判定）"
+  "provision.accel.aehdNoCheck": "AEHD 硬件加速已启用（emulator-check 缺失，按驱动判定）",
+  "provision.hv.notWindows": "非 Windows 平台",
+  "provision.hv.present": "虚拟机平台组件存在（可用性由运行时引擎检测）",
+  "provision.hv.missing": "未检测到 Windows Hypervisor Platform 组件：可在「启用或关闭 Windows 功能」中勾选「虚拟机平台」后重启"
 }

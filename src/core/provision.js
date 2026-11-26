@@ -353,7 +353,7 @@ class Provisioner {
 
   async hypervisor() {
     if (this._hypervisor !== null) return this._hypervisor;
-    if (!IS_WIN) { this._hypervisor = { whpx: false, note: '非 Windows 平台' }; return this._hypervisor; }
+    if (!IS_WIN) { this._hypervisor = { whpx: false, note: t('provision.hv.notWindows') }; return this._hypervisor; }
     // 只做毫秒级的文件检查。真正"WHPX 是否可用"由 emulator -accel-check 给出权威答案，
     // 避免在这里拉起 PowerShell（冷启动 1-2 秒）拖慢每次状态轮询。
     const dll = fs.existsSync('C:\\Windows\\System32\\WinHvPlatform.dll');
@@ -362,8 +362,8 @@ class Provisioner {
       dll,
       hypervisorPresent: false,
       note: dll
-        ? '虚拟机平台组件存在（可用性由运行时引擎检测）'
-        : '未检测到 Windows Hypervisor Platform 组件：可在「启用或关闭 Windows 功能」中勾选「虚拟机平台」后重启',
+        ? t('provision.hv.present')
+        : t('provision.hv.missing'),
     };
     return this._hypervisor;
   }

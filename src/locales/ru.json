@@ -1263,5 +1263,8 @@
   "installer.armDisabledSwitching": "The current runtime has no ARM translation layer enabled; switching to the compatibility image automatically and retrying…",
   "provision.accel.whpx": "WHPX hardware acceleration enabled",
   "provision.accel.aehd": "AEHD hardware acceleration enabled",
-  "provision.accel.aehdNoCheck": "AEHD hardware acceleration enabled (emulator-check missing; judged from the driver)"
+  "provision.accel.aehdNoCheck": "AEHD hardware acceleration enabled (emulator-check missing; judged from the driver)",
+  "provision.hv.notWindows": "Not a Windows platform",
+  "provision.hv.present": "Virtual Machine Platform components are present (availability is checked by the runtime engine)",
+  "provision.hv.missing": "Windows Hypervisor Platform components not detected: enable \"Virtual Machine Platform\" in \"Turn Windows features on or off\", then restart"
 }
