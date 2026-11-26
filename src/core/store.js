@@ -35,6 +35,8 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
+  // 界面语言：auto = 跟随 Windows（中文系统用中文，其它用英文）| zh-CN | en-US
+  language: 'auto',
   adbPath: '',
   device: '127.0.0.1:5555',
   /**
@@ -269,7 +271,20 @@ const store = {
   STORE_BUILD,
 
   getSettings() {
-    const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    const rawFile = readJson(SETTINGS_FILE, {});
+    const s = deepMerge(DEFAULT_SETTINGS, rawFile);
+    /**
+     * 英文界面下的默认值：用户没主动设过的项，安卓系统语言跟着用英文、不默认装
+     * 中文输入法。用户在设置里选过的值（已写进 settings.json）原样保留。
+     */
+    try {
+      if (require('../i18n').getLang() === 'en-US') {
+        const re = (rawFile && rawFile.engine) || {};
+        if (re.locale === undefined) s.engine.locale = 'en-US';
+        if (re.chineseIme === undefined) s.engine.chineseIme = false;
+        if (re.chineseImeDefault === undefined) s.engine.chineseImeDefault = false;
+      }
+    } catch (_) { /* ignore */ }
     /**
      * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
      * 或者手改出来的任何其它值，一律当 builtin 处理，并把残留的第三方字段删掉。

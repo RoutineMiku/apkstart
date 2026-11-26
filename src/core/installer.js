@@ -393,7 +393,7 @@ class Installer {
       args,
       iconIcoPath: ico,
       iconPngPath: png,
-      description: `${app.label} — 由 ApkStart 运行`,
+      description: require('../i18n').t(`${app.label} — 由 ApkStart 运行`),
       cwd: this.ctx.cwd,
       // 每个应用一个 AUMID：任务栏上按应用分组，不会全挤到 ApkStart 里
       appUserModelId: `RoutineMiku.ApkStart.${app.package}`.slice(0, 128),

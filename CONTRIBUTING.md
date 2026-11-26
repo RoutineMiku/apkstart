@@ -28,6 +28,9 @@ electron . --smoke test\shot.png
 - 与安卓侧交互一律走 `src/core/adb.js`，不要在各处直接拼 adb 命令。
 - 主进程与渲染进程之间只通过 `preload.js` 暴露的白名单通道通信，保持 `contextIsolation` 开启。
 - 注释与 UI 文案使用中文，标识符使用英文。
+- 界面多语言：UI 文案**照常写中文**，不用改调用点。词典 `src/i18n/en-US.json` 以中文原文为 key，
+  界面显示时自动翻译（见 `src/i18n/index.js`）。新增或改动文案后跑一次
+  `npm run i18n`，再按 `npm run i18n -- --missing` 列出的条目补上英文即可；没补的文案在英文界面里会暂时显示中文，不会出错。
 
 ## 测试约定
 
