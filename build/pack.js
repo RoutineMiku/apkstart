@@ -61,9 +61,13 @@ console.log('复制 Electron 运行时…');
 copy(ELECTRON_DIST, OUT);
 fs.rmSync(path.join(OUT, 'resources', 'default_app.asar'), { force: true });
 
-// 1.1 语言包瘦身：Electron 自带 55 种语言，合计 41MB，我们只用中文界面。
-//     只留 zh-CN / zh-TW / en-US，其余删掉（-39MB，等于整包小 15%）。
-const KEEP_LOCALES = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'pt-BR.pak', 'ru.pak']);
+// 1.1 语言包瘦身：Electron 自带 55 种语言，合计 41MB，只保留界面支持的那些。
+//     与 electron-builder.yml 的 electronLanguages、src/i18n/ 词典保持一致。
+//     es-419/pt-BR 的 Chromium locale 文件名是 es-419.pak / pt-BR.pak。
+const KEEP_LOCALES = new Set([
+  'zh-CN.pak', 'zh-TW.pak', 'en-US.pak',
+  'ru.pak', 'vi.pak', 'es-419.pak', 'pt-BR.pak', 'ja.pak', 'ko.pak',
+]);
 let localeSaved = 0;
 try {
   const locDir = path.join(OUT, 'locales');

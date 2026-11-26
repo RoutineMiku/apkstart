@@ -641,7 +641,7 @@
   "m0721": "Close",
   "settings.language": "Language",
   "settings.systemLanguage": "System language",
-  "settings.languageNote": "Changing language reloads the main window. Existing app windows use the new language the next time they open.",
+  "settings.languageNote": "The interface language changes immediately. Android system language is unchanged.",
   "profile.summary": "Automatic: {0} GB RAM · {1} cores · {2} graphics · {3} · {4}{5} · Port {6}",
   "profile.accelerated": "Hardware acceleration",
   "profile.snapshot": "On-demand snapshots",

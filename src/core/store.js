@@ -35,7 +35,11 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
-  language: 'auto',
+  // 界面语言：auto = 跟随系统；zh / en / ru / vi / es / pt / ja / ko = 固定。
+  // 老用户升级时若配置里没有这个字段，会迁移成 zh（保持升级前的中文界面）。
+  uiLanguage: 'auto',
+  // 首次语言选择引导是否已处理：全新安装为 false，UI 首次打开弹出选择卡后置 true。
+  uiLanguageSelected: true,
   adbPath: '',
   device: '127.0.0.1:5555',
   /**
@@ -121,7 +125,10 @@ const DEFAULT_SETTINGS = {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime
     qemuUrl: '',             // 手动指定 QEMU 安装包地址
     isoUrl: '',              // 手动指定系统镜像地址
-    isoPath: '',             // 系统镜像（ISO）路径
+    isoPath: '',             // 系统镜像（ISO）路径（遗留 QEMU 安装模式）
+    // 自定义系统镜像目录：指向含 system.img + kernel-ranchu 的目录（Android SDK
+    // system-images 结构），优先于内置镜像，配置了就不再联网下载镜像。
+    customSysImgDir: '',
     diskPath: '',            // 安装系统的虚拟磁盘
     diskSizeGB: 24,
     headless: false,         // 不显示虚拟机窗口（仅调试）
@@ -270,7 +277,30 @@ const store = {
   STORE_BUILD,
 
   getSettings() {
-    const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    const existing = readJson(SETTINGS_FILE, {});
+    const s = deepMerge(DEFAULT_SETTINGS, existing);
+    /**
+     * 界面语言迁移：设置文件里没有 uiLanguage 的是老用户，保持他们看到的
+     * 中文界面；全新安装（没有 settings.json）才默认 auto，按系统语言选。
+     * 非法值一律回落到中文，避免手改配置把界面搞成空白。
+     */
+    const VALID_LANGS = ['auto', 'zh', 'en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko'];
+    const freshInstall = !fs.existsSync(SETTINGS_FILE);
+    if (existing.uiLanguage === undefined) {
+      s.uiLanguage = existing.language !== undefined
+        ? (existing.language === 'pt-BR' ? 'pt' : existing.language === 'zh-CN' ? 'zh' : existing.language)
+        : freshInstall ? 'auto' : 'zh';
+    }
+    if (!VALID_LANGS.includes(s.uiLanguage)) {
+      s.uiLanguage = 'zh';
+    }
+    /**
+     * 首次语言选择引导：全新安装且用户还没选过语言时置 false，UI 会在第一次
+     * 打开时弹出语言选择卡。老用户/已选过的保持 true，不重复打扰。
+     */
+    if (existing.uiLanguageSelected === undefined) {
+      s.uiLanguageSelected = freshInstall ? false : true;
+    }
     /**
      * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
      * 或者手改出来的任何其它值，一律当 builtin 处理，并把残留的第三方字段删掉。
@@ -314,6 +344,10 @@ const store = {
         // 立刻回写，保证配置文件本身也回到原生；用户其它字段原样保留。
         writeJson(SETTINGS_FILE, {
           ...raw,
+          // 全新安装首次读设置时这里会写盘；把刚算出的语言字段一起落盘，
+          // 否则第二次读会把「自己刚创建的文件」误判成老用户配置，语言被迁成中文。
+          uiLanguage: s.uiLanguage,
+          uiLanguageSelected: s.uiLanguageSelected,
           display: { ...d, windowEmbed: false, windowEmbedMigrated2: true },
         });
       }
@@ -323,6 +357,9 @@ const store = {
   },
 
   saveSettings(patch) {
+    if (patch && patch.language !== undefined && patch.uiLanguage === undefined) {
+      patch = { ...patch, uiLanguage: patch.language === 'pt-BR' ? 'pt' : patch.language === 'zh-CN' ? 'zh' : patch.language };
+    }
     const next = deepMerge(this.getSettings(), patch);
     // 只改了「资源策略」时，把它翻译成具体的三个开关，避免两套配置各说各话
     if (patch && patch.engine && patch.engine.resourceMode) {

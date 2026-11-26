@@ -641,7 +641,7 @@
   "m0721": "关闭",
   "settings.language": "界面语言",
   "settings.systemLanguage": "跟随系统",
-  "settings.languageNote": "切换语言后主窗口会重新加载；已打开的应用窗口下次打开时生效。",
+  "settings.languageNote": "界面语言立即生效，不会改变 Android 系统语言。",
   "profile.summary": "自动：{0}GB 内存 · {1} 核 · {2} 渲染 · {3} · {4}{5} · 端口 {6}",
   "profile.accelerated": "硬件加速",
   "profile.snapshot": "按需快照",

@@ -5,17 +5,21 @@ const path = require('path');
 const settings = structuredClone(require('../src/core/store').DEFAULT_SETTINGS);
 settings.engine.priorityMode = 'game';
 settings.engine.gpuPreference = 'discrete';
-const { getCatalog } = require('../src/core/i18n');
+const { getCatalog, setLanguage, getLanguage, lookup, t, normalizeLang } = require('../src/core/i18n');
+const langListeners = new Set();
+ipcRenderer.on('i18n:lang', (_event, lang) => { setLanguage(lang); for (const cb of langListeners) cb(lang); });
 const api = {};
 for (const match of fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8').matchAll(/^  (\w+): /gm)) {
   api[match[1]] = async () => ({ ok: true });
 }
 api.getI18n = async () => {
   const locale = await ipcRenderer.invoke('test:language');
-  return { locale, preference: locale, messages: getCatalog(locale) };
+  setLanguage(locale);
+  return { locale, preference: normalizeLang(locale), messages: getCatalog(locale) };
 };
-api.getSettings = async () => ({ ...settings, language: await ipcRenderer.invoke('test:language') });
-api.setSettings = async (patch) => { if (patch.language) await ipcRenderer.invoke('test:setLanguage', patch.language); return { ...settings, ...patch }; };
+api.getSettings = async () => ({ ...settings, uiLanguage: normalizeLang(await ipcRenderer.invoke('test:language')) });
+api.setSettings = async (patch) => { if (patch.uiLanguage) await ipcRenderer.invoke('test:setLanguage', patch.uiLanguage); return { ...settings, ...patch }; };
+api.i18n = { lookup, t, getLanguage, onLanguageChange: (cb) => { langListeners.add(cb); return () => langListeners.delete(cb); } };
 api.listApps = async () => [{ package: 'org.example.app', label: 'Sample app', versionName: '1.0', running: true, installedAt: Date.now() }];
 api.runtimeStatus = async () => ({ adbOk: false, env: {}, phase: 'stopped' });
 api.startupInfo = async () => ({ smoke: true, version: '0.4.2-i18n.1' });

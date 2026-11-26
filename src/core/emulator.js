@@ -123,10 +123,18 @@ class EmulatorEngine {
     return { emulatorExe, sysImgDir: img.dir, sysImgOk: img.ok, root: emulatorExe ? path.dirname(path.dirname(emulatorExe)) : p.root };
   }
 
-  /** 选镜像：有通用镜像（API 34 Play）就用它，不再让用户切「兼容模式」 */
+  /** 选镜像：用户自定义镜像 > 通用镜像（API 34 Play）> 任意内置镜像 */
   imageChoice() {
+    // 自定义镜像最高优先：playImageInfo 会把它顶上来，这里识别 custom 标记，
+    // 避免把它误显示成「Google Play 兼容镜像」。abi 跟随目录推断，缺省 x86_64。
     const play = this.provisioner.playImageInfo();
+    if (play.ok && play.custom) {
+      return { compat: false, custom: true, api: play.api, tag: play.tag, dir: play.dir, abi: play.abi || 'x86_64' };
+    }
     const base = this.provisioner.systemImageInfo();
+    if (base.ok && base.custom) {
+      return { compat: false, custom: true, api: base.api, tag: base.tag, dir: base.dir, abi: base.abi || 'x86_64' };
+    }
     if (play.ok) {
       return { compat: true, api: play.api, tag: play.tag, dir: play.dir, abi: 'x86_64' };
     }
@@ -408,7 +416,7 @@ class EmulatorEngine {
     const choice = this.imageChoice();
     const tag = choice.tag;
     const api = choice.api;
-    const tagDisplay = choice.compat ? 'Google Play (ARM 兼容)' : 'AOSP';
+    const tagDisplay = choice.custom ? '自定义镜像' : (choice.compat ? 'Google Play (ARM 兼容)' : 'AOSP');
 
     fs.writeFileSync(
       path.join(home, `${AVD_NAME}.ini`),

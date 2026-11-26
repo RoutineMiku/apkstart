@@ -23,7 +23,18 @@ window.i18n = {
   },
 };
 
-window.i18n.ready = (window.apkstart || window.apkstartSplash).getI18n().then((config) => {
+const i18nApi = window.apkstart || window.apkstartSplash;
+async function loadCatalog() {
+  const config = await i18nApi.getI18n();
   Object.assign(window.i18n, config);
   window.i18n.apply();
-});
+}
+window.i18n.ready = loadCatalog();
+if (i18nApi.i18n && typeof i18nApi.i18n.onLanguageChange === 'function') {
+  i18nApi.i18n.onLanguageChange(() => {
+    window.i18n.ready = loadCatalog().then(() => {
+      window.dispatchEvent(new Event('apkstart:language'));
+    });
+    window.i18n.ready.catch(console.error);
+  });
+}

@@ -953,7 +953,46 @@ class Provisioner {
    * 「用户还没下镜像」，去网上拉一套 1.5GB 的 —— 这正是「明明装完带了镜像，
    * 结果还在下载」的根因。返回值里的 compressed 标记表示「还需要展开一次」。
    */
+  /**
+   * 校验一个目录是否是合法的自定义系统镜像目录。
+   * 需包含 system.img 与 kernel-ranchu/kernel（Android SDK system-images 结构）。
+   */
+  validateSysImgDir(dir) {
+    dir = String(dir || '').trim();
+    if (!dir) return { ok: false, note: '目录为空' };
+    try {
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return { ok: false, note: '目录不存在' };
+      const systemImg = path.join(dir, 'system.img');
+      const size = fileSize(systemImg);
+      const kernelOk = fs.existsSync(path.join(dir, 'kernel-ranchu')) || fs.existsSync(path.join(dir, 'kernel'));
+      if (size <= MIN_SIZE.sysimg || !kernelOk) {
+        return { ok: false, size, note: '目录里需要同时有 system.img 和 kernel-ranchu' };
+      }
+      const m = /system-images[\\/]android-(\d+)[\\/]([^\\/]+)[\\/]([^\\/]+)/.exec(dir.replace(/\//g, '\\'));
+      return {
+        ok: true, dir, size, compressed: false, custom: true,
+        api: m ? Number(m[1]) : DEFAULT_SYSIMG.api,
+        tag: m ? m[2] : DEFAULT_SYSIMG.tag,
+        abi: m ? m[3] : DEFAULT_SYSIMG.abi,
+      };
+    } catch (e) { return { ok: false, note: e.message }; }
+  }
+
+  /**
+   * 用户自定义系统镜像目录（设置 → 运行时 → 自定义系统镜像）。
+   * 返回 null 表示未配置；返回对象含 ok 标记（ok:false 表示配置了但无效）。
+   */
+  customImageInfo() {
+    let dir = '';
+    try { dir = String((store.getSettings().runtime || {}).customSysImgDir || '').trim(); } catch (_) { return null; }
+    if (!dir) return null;
+    return this.validateSysImgDir(dir);
+  }
+
   systemImageInfo() {
+    // 自定义镜像优先：配置了就绝不再联网下载内置镜像。
+    const custom = this.customImageInfo();
+    if (custom && custom.ok) return custom;
     const p = this.paths();
     const roots = [p.sysImgRoot, path.join(this.root, 'system-images'), path.join(this.appRoot, 'engine', 'system-images')];
     // 先在默认位置（API34 Play）找，再退到「随便哪套镜像」。
@@ -1142,6 +1181,10 @@ class Provisioner {
 
   /** ARM 兼容镜像（Google Play 版）是否已就位 */
   playImageInfo() {
+    // 自定义镜像优先于内置 Play 镜像：否则 imageChoice() 会因 play.ok 为真
+    // 而选中内置兼容镜像，忽略用户指定的镜像。
+    const custom = this.customImageInfo();
+    if (custom && custom.ok) return custom;
     const p = this.paths();
     const rel = `android-${PLAY_SYSIMG.api}/${PLAY_SYSIMG.tag}/${PLAY_SYSIMG.abi}`;
     // 两个位置都看：展开目标（可写的数据目录）与包内原始位置。

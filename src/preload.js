@@ -1,7 +1,22 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const appI18n = require('./core/i18n');
 
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
+
+// 语言在窗口创建时由主进程同步给出；之后切语言走 i18n:lang 广播，
+// 不重载窗口、不打断正在运行的应用。
+try {
+  const boot = ipcRenderer.sendSync('i18n:bootstrap');
+  appI18n.setLanguage((boot && boot.lang) || 'zh');
+} catch (_) { /* 非 Electron 环境下按中文 */ }
+const langListeners = new Set();
+ipcRenderer.on('i18n:lang', (_e, next) => {
+  appI18n.setLanguage(next);
+  for (const cb of [...langListeners]) {
+    try { cb(next); } catch (_) { /* 单个监听器失败不影响其它窗口 */ }
+  }
+});
 
 contextBridge.exposeInMainWorld('apkstart', {
   info: () => invoke('app:info'),
@@ -92,6 +107,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   createDisk: (gb) => invoke('provision:createDisk', gb),
   importIso: () => invoke('provision:importIso'),
   importDisk: () => invoke('provision:importDisk'),
+  pickSysImgDir: () => invoke('provision:pickSysImgDir'),
 
   selfCheck: () => invoke('doctor:selfCheck'),
   clearLocks: () => invoke('app:clearLocks'),
@@ -161,6 +177,18 @@ contextBridge.exposeInMainWorld('apkstart', {
   },
 
   pathForFile: (file) => webUtils.getPathForFile(file),
+
+  // 渲染层本地化：词典以中文原文为 key，只影响显示，不参与逻辑
+  i18n: {
+    getLanguage: () => appI18n.getLanguage(),
+    t: (text, vars) => appI18n.t(text, vars),
+    lookup: (text) => appI18n.lookup(text),
+    // 冒烟测试用：把界面里没译到的中文打到渲染进程控制台
+    collect: process.env.APKSTART_I18N_COLLECT === '1',
+    onLanguageChange: (cb) => {
+      if (typeof cb === 'function') langListeners.add(cb);
+    },
+  },
 
   on: (channel, cb) => {
     const allowed = [

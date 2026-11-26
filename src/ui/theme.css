@@ -422,3 +422,29 @@ html, body {
 }
 .welcome-actions .btn { flex: 1; height: 40px; border-radius: 12px; font-size: 13.5px; }
 .welcome-actions .btn.ghost { flex: 0 0 auto; padding: 0 16px; }
+
+/* ---------------- 首次语言选择卡 ---------------- */
+.lang-mask[hidden] { display: none; }
+.lang-mask {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 18, 14, .55);
+  backdrop-filter: blur(6px);
+}
+.lang-card { max-width: 460px; width: calc(100% - 40px); }
+.lang-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px;
+  padding: 6px 22px 12px;
+}
+.lang-opt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 10px 13px; min-height: 54px;
+  border: 1px solid rgba(127, 140, 141, .28);
+  border-radius: 12px; background: rgba(127, 140, 141, .07);
+  color: inherit; cursor: pointer; text-align: left;
+  transition: border-color .15s ease, background .15s ease, transform .1s ease;
+}
+.lang-opt:hover { background: rgba(18, 184, 134, .10); transform: translateY(-1px); }
+.lang-opt.active { border-color: var(--brand); background: rgba(18, 184, 134, .16); }
+.lang-name { font-size: 14px; font-weight: 600; }
+.lang-code { font-size: 11.5px; opacity: .6; }

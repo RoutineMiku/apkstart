@@ -3,7 +3,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { getCatalog } = require('../src/core/i18n');
+const { getCatalog, resolveLocale, normalizeLang } = require('../src/core/i18n');
 const sourceRoot = process.env.APKSTART_UI_SOURCE || path.join(__dirname, '../src');
 let locale = 'pt-BR';
 let bundled = false;
@@ -11,7 +11,7 @@ const manualRequests = [];
 ipcMain.handle('test:manual', (_event, payload) => { manualRequests.push(payload); return { ok: true }; });
 ipcMain.handle('test:language', () => locale);
 ipcMain.handle('test:bundled', () => bundled);
-ipcMain.handle('test:setLanguage', (_event, value) => { locale = value; });
+ipcMain.handle('test:setLanguage', (event, value) => { locale = resolveLocale(value); event.sender.send('i18n:lang', normalizeLang(value)); });
 const out = path.join(__dirname, 'out', 'i18n');
 fs.mkdirSync(out, { recursive: true });
 app.setPath('userData', path.join(out, 'profile'));
@@ -19,22 +19,23 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ width: 1120, height: 800, show: true, webPreferences: { preload: path.join(__dirname, 'i18n-ui-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   const errors = [];
+  let loads = 0;
+  win.webContents.on('did-finish-load', () => { loads += 1; });
   win.webContents.on('console-message', (_event, level, message) => { if (level === 3) errors.push(message); });
   const waitReady = () => win.webContents.executeJavaScript(`new Promise((resolve, reject) => { let tries = 0; const tick = () => { if (window.i18n && document.documentElement.lang === '${locale}' && document.querySelector('.card')) resolve(true); else if (++tries > 100) reject(new Error('UI did not initialize')); else setTimeout(tick, 50); }; tick(); })`);
   try {
     await win.loadFile(path.join(sourceRoot, 'ui/index.html'));
-    for (const next of ['pt-BR', 'en', 'ru', 'zh-CN', 'pt-BR']) {
+    for (const next of ['pt-BR', 'en', 'ru', 'zh-CN', 'vi', 'es', 'ja', 'ko', 'pt-BR']) {
       if (locale !== next) {
-        const loaded = new Promise(resolve => win.webContents.once('did-finish-load', resolve));
-        await win.webContents.executeJavaScript(`document.getElementById('setLanguage').value = '${next}'; document.getElementById('setLanguage').dispatchEvent(new Event('change')); true;`);
-        await loaded;
+        await win.webContents.executeJavaScript(`document.getElementById('setUiLanguage').value = '${normalizeLang(next)}'; document.getElementById('setUiLanguage').dispatchEvent(new Event('change')); true;`);
+        await new Promise(resolve => setTimeout(resolve, 250));
       }
       await waitReady();
       await win.webContents.executeJavaScript('openSettings()');
       await win.webContents.executeJavaScript("switchSettingsCat('basic')");
-      const result = await win.webContents.executeJavaScript(`({lang: document.documentElement.lang, language: document.getElementById('setLanguage').value, title: document.querySelector('.modal-head h2').textContent, horizontalOverflow: document.querySelector('.modal-body').scrollWidth > document.querySelector('.modal-body').clientWidth, untranslated: [...document.querySelectorAll('[data-i18n]')].filter(el => el.textContent === el.dataset.i18n).length })`);
+      const result = await win.webContents.executeJavaScript(`({lang: document.documentElement.lang, language: document.getElementById('setUiLanguage').value, title: document.querySelector('.modal-head h2').textContent, horizontalOverflow: document.querySelector('.modal-body').scrollWidth > document.querySelector('.modal-body').clientWidth, untranslated: [...document.querySelectorAll('[data-i18n]')].filter(el => el.textContent === el.dataset.i18n).length })`);
       assert.equal(result.lang, next);
-      assert.equal(result.language, next);
+      assert.equal(result.language, normalizeLang(next));
       assert.equal(result.title, getCatalog(next).m0390);
       assert.equal(result.untranslated, 0);
       const priority = await win.webContents.executeJavaScript(`({ value: document.getElementById('setPriorityMode').value, label: document.querySelector('#setPriorityMode option[value="game"]').textContent, note: document.querySelector('[data-i18n="settings.gamePriorityNote"]').textContent })`);
@@ -102,8 +103,9 @@ app.whenReady().then(async () => {
       await new Promise(r => setTimeout(r, 300));
       fs.writeFileSync(path.join(out, `${next}-performance.png`), (await win.webContents.capturePage()).toPNG());
     }
+    assert.equal(loads, 1, 'Changing language must not reload the window');
     await win.webContents.executeJavaScript("closeSettings(); launchApp('org.example.app')");
-    const toast = await win.webContents.executeJavaScript("document.querySelector('.t-title-text').textContent");
+    const toast = await win.webContents.executeJavaScript("[...document.querySelectorAll('.t-title-text')].at(-1).textContent");
     assert.equal(toast, getCatalog('pt-BR').m0097);
     const splash = new BrowserWindow({ width: 480, height: 360, show: false, webPreferences: {
       preload: path.join(__dirname, 'i18n-ui-preload.js'), contextIsolation: true,

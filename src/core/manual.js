@@ -1,5 +1,5 @@
 'use strict';
-const { t } = require('./i18n');
+const { t, getCatalog } = require('./i18n');
 /**
  * 内置手册的「故障 → 教程章节」映射（纯函数，不依赖 electron / fs）
  *
@@ -65,9 +65,33 @@ const ISSUE_MAP = Object.freeze({
   vcRedist: 'dll',
 });
 
+// Launch errors do not always include Android error codes. Identify the known
+// catalog template in any supported catalog instead of matching translated words.
+const LOCALIZED_ERROR_TOPICS = {
+  'adb.launch.antiEmulator': 'arm',
+  'adb.launch.translationCrash': 'arm',
+  'adb.launch.missingNativeLib': 'arm',
+  'engine.adbUnauthorized.title': 'adb',
+  'engine.adbUnauthorized.hint': 'adb',
+};
+function topicForLocalizedError(text) {
+  for (const locale of ['zh-CN', 'en', 'pt-BR', 'ru']) {
+    const catalog = getCatalog(locale);
+    for (const [key, topic] of Object.entries(LOCALIZED_ERROR_TOPICS)) {
+      const pattern = catalog[key].split(/\{\d+\}/g)
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('[\\s\\S]*?');
+      if (new RegExp('^' + pattern + '$').test(text)) return topic;
+    }
+  }
+  return null;
+}
+
 /** 兜底：用标题/详情里的关键字再判一次，覆盖 doctor:selfCheck 的旧 code */
 function topicByText(text) {
   const s = String(text || '');
+  const localized = topicForLocalizedError(s);
+  if (localized) return localized;
   if (ARM_RE.test(s)) return 'arm';
   if (ADB_RE.test(s)) return 'adb';
   if (SOUND_RE.test(s)) return 'sound';
@@ -98,6 +122,8 @@ function topicForIssue(issue) {
 function topicForError(text) {
   const s = String(text || '');
   if (!s.trim()) return TOPICS.overview;
+  const localized = topicForLocalizedError(s);
+  if (localized) return TOPICS[localized];
   if (ARM_RE.test(s)) return TOPICS.arm;
   if (ADB_RE.test(s)) return TOPICS.adb;
   if (SOUND_RE.test(s)) return TOPICS.sound;

@@ -219,8 +219,15 @@ function manifest() {
   </Dependencies>
 
   <Resources>
+    <!-- 与 src/i18n/ 词典、electron-builder.yml 的 electronLanguages 保持一致 -->
     <Resource Language="zh-CN" />
     <Resource Language="en-US" />
+    <Resource Language="ru" />
+    <Resource Language="vi" />
+    <Resource Language="es-419" />
+    <Resource Language="pt-BR" />
+    <Resource Language="ja" />
+    <Resource Language="ko" />
   </Resources>
 
   <Capabilities>
@@ -347,8 +354,11 @@ function stagePackage() {
     console.error('     —— 这一步会去 CDN 拉工具集，没网时只会解一半，最后 Win-unpacked 是残的。\n');
     process.exit(1);
   }
-  const work = path.join(OUT_DIR, '.stage');
-  fs.rmSync(work, { recursive: true, force: true });
+  let work = path.join(OUT_DIR, '.stage');
+  // 清理旧 stage：受管环境里 rmSync 可能被安全垫片拦（批量删除要确认），
+  // 这时不硬删，改用带时间戳的新目录，保证打包不被中间目录卡住。
+  try { fs.rmSync(work, { recursive: true, force: true }); }
+  catch (_) { work = path.join(OUT_DIR, '.stage-' + Date.now()); }
   const appDir = path.join(work, 'app');
   fs.mkdirSync(appDir, { recursive: true });
   console.log(`复制应用载荷（来源 ${appSrc}）…`);

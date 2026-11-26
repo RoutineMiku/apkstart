@@ -1,5 +1,5 @@
 'use strict';
-const { t, resolveLocale, getCatalog, setLocale } = require('./core/i18n');
+const { t, resolveLocale, getCatalog } = require('./core/i18n');
 /**
  * ApkStart 主进程
  * 职责：窗口 / 托盘 / 单实例 / 命令行分发（双击 apk、桌面快捷方式启动）/ IPC
@@ -15,6 +15,7 @@ const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
 const orientation = require('./core/orientation');
+const i18n = require('./core/i18n');
 
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
@@ -232,6 +233,7 @@ const ICON_PNG = loadBrandIcon().toPNG();
 
 let mainWindow = null;
 let tray = null;
+let trayTimer = null;
 let runtime = null;
 // 「哪些窗口算我们的」由 whenReady 里赋值（见 agentScope）。放模块级是因为
 // runLaunch / 预热定时器都早于那段代码定义，闭包里的 const 在它们的作用域外看不到。
@@ -972,7 +974,7 @@ function openManual(payload = {}) {
       });
     }
     manualWindow.setTitle(t('v062.m0007', [target.title]));
-    let manualFile = path.join(__dirname, 'ui', manual.fileForLocale(resolveLocale(store.getSettings().language, app.getLocale())));
+    let manualFile = path.join(__dirname, 'ui', manual.fileForLocale(resolveLocale(i18n.getLanguage())));
     if (!fs.existsSync(manualFile)) manualFile = path.join(__dirname, 'ui', 'manual.html');
     manualWindow.loadFile(manualFile, { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
@@ -995,7 +997,7 @@ function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
   try {
     const { Notification } = require('electron');
-    if (Notification.isSupported()) new Notification({ title, body, icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
+    if (Notification.isSupported()) new Notification({ title: i18n.t(title), body: i18n.t(body), icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
   } catch (_) { /* ignore */ }
 }
 
@@ -1083,14 +1085,37 @@ function scheduleAutodebug() {
 // ---------------- 托盘 ----------------
 
 function buildTray() {
+  // 切语言时会重建托盘：先销毁旧图标并停掉它的刷新定时器，
+  // 否则任务栏里会堆出两个图标、旧定时器还会往已销毁的对象上写菜单。
+  if (tray) {
+    try { tray.destroy(); } catch (_) { /* ignore */ }
+    tray = null;
+  }
+  if (trayTimer) {
+    clearInterval(trayTimer);
+    trayTimer = null;
+  }
   const icon = loadTrayIcon();
   try {
     tray = new Tray(icon);
   } catch (_) {
     return;
   }
+  let lastTrayFingerprint = '';
   const refresh = () => {
     const apps = store.getApps().slice(0, 8);
+    // 托盘每 5 秒刷一次，但绝大多数时候状态没变。先算指纹，没变化就不重建菜单，
+    // 避免每 5 秒白造一个 Menu 对象（含一堆闭包）带来的 CPU/内存抖动。
+    const fingerprint = JSON.stringify([
+      apps.map((a) => [a.package, a.label]),
+      currentAppPkg, runtime && runtime.activeApps ? runtime.activeApps.slice() : [],
+      updateInfo && updateInfo.hasUpdate ? updateInfo.tag : '',
+      i18n.getLanguage(),
+      displaySettings().mode,
+      wantLandscapeFor(currentAppPkg),
+    ]);
+    if (fingerprint === lastTrayFingerprint && tray.getContextMenu) return;
+    lastTrayFingerprint = fingerprint;
     // 独立窗口模式主界面是隐藏的，托盘就成了唯一随时可达的入口 ——
     // 「关闭当前应用」必须放这里，否则用户根本没法关掉正在跑的应用。
     // 判断「有没有应用在跑」要同时看 currentAppPkg 和 runtime.activeApps：
@@ -1174,7 +1199,8 @@ function buildTray() {
   tray.on('click', () => showWindow());
   tray.on('double-click', () => showWindow());
   refresh();
-  setInterval(refresh, 5000).unref?.();
+  trayTimer = setInterval(refresh, 5000);
+  trayTimer.unref?.();
 }
 
 // ---------------- 核心动作 ----------------
@@ -1203,7 +1229,7 @@ async function runInstall(filePath) {
     notify(t('m0404'), t('m0405', [result.app.label, result.app.shortcutPath ? t('m0406') : '']));
     return result;
   } catch (e) {
-    send('install:error', { message: e.message, file: filePath });
+    send('install:error', { message: e.message, file: filePath, abiRetried: !!e.abiRetried });
     if (e.needsSetup) send('ui:navigate', 'setup');
     // 同一条错误 8 秒内只弹一次系统通知：连续重试时不会在右下角刷屏
     const now = Date.now();
@@ -1767,9 +1793,17 @@ function registerIpc() {
   ipcMain.handle('settings:set', (_e, rawPatch) => {
     const patch = sanitizeResourcePatch(rawPatch);
     const next = store.saveSettings(patch);
-    if (patch && patch.language !== undefined) {
-      setLocale(resolveLocale(next.language, app.getLocale()));
-      tray?.setToolTip(t('m0399'));
+    // 界面语言变了：主进程词典 + 托盘菜单 + 所有已打开窗口即时切换。
+    // 不重载窗口，正在运行的应用和未保存的界面状态都不受影响。
+    if (patch && (patch.uiLanguage !== undefined || patch.language !== undefined)) {
+      i18n.setLanguage(i18n.resolveLanguage(
+        next.uiLanguage,
+        app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [app.getLocale()],
+      ));
+      buildTray();
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('i18n:lang', i18n.getLanguage());
+      }
     }
     if (patch && patch.autoStart !== undefined) applyAutoStart();
     if (patch && patch.display && appWin && appWin.isOpen) {
@@ -2594,6 +2628,20 @@ function registerIpc() {
     }
   });
 
+  // 选择并校验自定义系统镜像目录（Android SDK system-images 结构）
+  ipcMain.handle('provision:pickSysImgDir', async () => {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: i18n.t('选择自定义系统镜像目录'),
+      properties: ['openDirectory'],
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    try {
+      return runtime.provisioner.validateSysImgDir(r.filePaths[0]);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('provision:importIso', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: t('m0461'),
@@ -2936,13 +2984,22 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
-    setLocale(resolveLocale(store.getSettings().language, app.getLocale()));
   ipcMain.handle('i18n:get', () => ({
-    locale: resolveLocale(store.getSettings().language, app.getLocale()),
-    preference: store.getSettings().language,
-    messages: getCatalog(resolveLocale(store.getSettings().language, app.getLocale())),
+    locale: resolveLocale(i18n.getLanguage()),
+    preference: store.getSettings().uiLanguage,
+    messages: getCatalog(resolveLocale(i18n.getLanguage())),
   }));
     store.ensureDirs();
+    /**
+     * 界面语言必须在任何窗口创建之前定下来：preload 会在窗口加载时同步问一次
+     * （ipcRenderer.sendSync('i18n:bootstrap')），拿到的就是这里的值。
+     * auto = 跟随系统：中文系统保持中文，其它语言默认英文。
+     */
+    i18n.setLanguage(i18n.resolveLanguage(
+      store.getSettings().uiLanguage,
+      app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [app.getLocale()],
+    ));
+    ipcMain.on('i18n:bootstrap', (e) => { e.returnValue = { lang: i18n.getLanguage() }; });
     /**
      * 记下「当前是谁在管这台运行时」。
      *

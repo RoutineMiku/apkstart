@@ -1,6 +1,6 @@
 # ApkStart
 
-[Interface translations / Traduções da interface](docs/I18N.md) · 简体中文 / English / Português (Brasil)
+[Interface translations / Traduções da interface](docs/I18N.md) · 简体中文 / English / Português (Brasil) / Русский / Tiếng Việt / Español / 日本語 / 한국어
 
 <p align="center"><img src="docs/images/logo.png" alt="ApkStart Logo" width="160" /></p>
 
@@ -10,6 +10,9 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6.svg)](#)
 
 **Windows 上的安卓应用运行器 —— 让安卓应用像 Windows 原生软件一样被安装和使用。**
+
+> **English UI / 英文界面**：Settings → **Interface Language** → **English**. The UI switches immediately; the built-in manual is still Chinese-only for now.
+
 注：本项目为早期版本，作者自娱自乐产物，所有修改都是作者下班和休息日在处理，开源免费，不插广告，暂时也不是很好用，没有找过营销号推广，无妄之灾。
 
 - 🖱️ **双击 .apk 即安装**：注册 .apk 文件关联后，在资源管理器里双击 APK，自动解析 → 安装 → 生成桌面图标，全程无需打开任何模拟器界面。

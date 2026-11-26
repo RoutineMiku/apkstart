@@ -21,13 +21,18 @@ files:
   - "!node_modules/@napi-rs/lzma/*.ts"
   - "!node_modules/@napi-rs/lzma/browser-entry.*"
 
-# 只保留中英文界面语言（Electron locales 从 41MB 降到 ~3MB）
+# 只保留界面支持的语言（Electron locales 从 41MB 降到 ~10MB）
+# 与 src/i18n/ 下的词典、build/pack.js 的 KEEP_LOCALES 保持一致。
 electronLanguages:
   - zh-CN
   - zh-TW
   - en-US
-  - pt-BR
   - ru
+  - vi
+  - es-419
+  - pt-BR
+  - ja
+  - ko
 
 # 完整运行时（emulator + platform-tools + 系统镜像），由 build/prepare-runtime.js 生成。
 # 打进包里之后首次启动不再需要任何下载。
@@ -71,6 +76,12 @@ appx:
   languages:
     - zh-CN
     - en-US
+    - ru
+    - vi
+    - es-419
+    - pt-BR
+    - ja
+    - ko
   minVersion: 10.0.19041.0
   maxVersionTested: 10.0.22621.0
 

@@ -202,9 +202,22 @@ test('manual file follows the UI locale and main.js uses it with a zh fallback',
   assert(manual.fileForLocale('zh-CN') === 'manual.html', 'zh-CN should use manual.html');
   for (const l of ['en', 'pt-BR']) assert(manual.fileForLocale(l) === 'manual.en.html', `${l} should use manual.en.html`);
   const main = fs.readFileSync(path.join(ROOT, 'src', 'main.js'), 'utf8');
-  assert(/manual\.fileForLocale\(resolveLocale\(store\.getSettings\(\)\.language, app\.getLocale\(\)\)\)/.test(main),
+  assert(/manual\.fileForLocale\(resolveLocale\(i18n\.getLanguage\(\)\)\)/.test(main),
     'main.js does not pick the manual file from the resolved locale');
   assert(/existsSync\(manualFile\)[\s\S]{0,80}'manual\.html'/.test(main), 'main.js lacks the manual.html fallback');
+});
+
+test('localized launch errors keep ARM and ADB tutorial routing', () => {
+  const { getCatalog, format } = require('../src/core/i18n');
+  for (const locale of ['zh-CN', 'en', 'pt-BR', 'ru']) {
+    const catalog = getCatalog(locale);
+    for (const key of ['adb.launch.antiEmulator', 'adb.launch.translationCrash', 'adb.launch.missingNativeLib']) {
+      const error = format(catalog[key], ['org.example.app']);
+      assert(manual.topicForError(error).id === 'arm', locale + '/' + key);
+      assert(manual.topicForIssue({ code: 'runtime.bootFailed', detail: error }).id === 'arm', locale + '/issue');
+    }
+    assert(manual.topicForError(catalog['engine.adbUnauthorized.hint']).id === 'adb', locale + '/adb');
+  }
 });
 
 console.log(`\n内置手册测试：${passed} 通过，${failed} 失败\n`);

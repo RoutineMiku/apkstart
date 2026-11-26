@@ -2175,6 +2175,52 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('用户自定义系统镜像目录必须优先于内置镜像，且不再触发下载', () => {
+    const fs2 = require('fs');
+    const os2 = require('os');
+    const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'custom-img-'));
+    const oldAppData = process.env.APPDATA;
+    process.env.APPDATA = path.join(tmp, 'appdata');
+    const sparse = (file, size) => {
+      fs2.mkdirSync(path.dirname(file), { recursive: true });
+      fs2.writeFileSync(file, '');
+      fs2.truncateSync(file, size);
+    };
+    try {
+      const store = require('../src/core/store');
+      const { Provisioner } = require('../src/core/provision');
+      const customDir = path.join(tmp, 'my-images', 'system-images', 'android-34', 'google_apis', 'x86_64');
+      sparse(path.join(customDir, 'system.img'), 320 * 1024 * 1024);
+      fs2.writeFileSync(path.join(customDir, 'kernel-ranchu'), 'x');
+
+      // 未配置时走内置逻辑（没有内置镜像 → 不 ok）
+      store.saveSettings({ runtime: { customSysImgDir: '', dir: path.join(tmp, 'empty-rt') } });
+      const p0 = new Provisioner(path.join(tmp, 'empty-app'));
+      assert(p0.customImageInfo() === null, '未配置自定义目录应返回 null');
+
+      // 配置后：三个入口都应识别自定义镜像
+      store.saveSettings({ runtime: { customSysImgDir: customDir } });
+      const p = new Provisioner(path.join(tmp, 'empty-app'));
+      const c = p.customImageInfo();
+      assert(c && c.ok === true && c.custom === true, '自定义镜像应识别为有效');
+      assert(c.api === 34 && c.tag === 'google_apis' && c.abi === 'x86_64', '应从目录名推断 api/tag/abi');
+      const sys = p.systemImageInfo();
+      const play = p.playImageInfo();
+      assert(sys.ok && sys.custom && path.normalize(sys.dir) === path.normalize(customDir), 'systemImageInfo 应优先自定义');
+      assert(play.ok && play.custom && path.normalize(play.dir) === path.normalize(customDir), 'playImageInfo 也应优先自定义，避免覆盖');
+
+      // 校验函数：无效目录（缺 kernel）应明确失败
+      const bad = path.join(tmp, 'bad');
+      sparse(path.join(bad, 'system.img'), 320 * 1024 * 1024);
+      const v = p.validateSysImgDir(bad);
+      assert(v.ok === false && /kernel/.test(v.note), '缺 kernel 的目录应判无效并说明原因');
+      assert(p.validateSysImgDir(path.join(tmp, 'not-exist')).ok === false, '不存在的目录应判无效');
+    } finally {
+      if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData;
+      fs2.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {
@@ -2918,6 +2964,81 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const ui = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
     const f = ui.slice(ui.indexOf('function friendlyInstallErrorText'), ui.indexOf('function friendlyInstallErrorText') + 900);
     assert(!/NO_MATCHING_ABIS/i.test(f) || /正在|已切换到/.test(f.slice(f.indexOf('NO_MATCHING_ABIS'), f.indexOf('NO_MATCHING_ABIS') + 320)), '失败横幅文案要说清状态，不能只说「正在重试」');
+  });
+
+  console.log('\n[多语言 / 自定义镜像 / 内存优化]');
+  await test('多语言：8 语种词典齐全，UI 语言选择卡与下拉都覆盖', () => {
+    const root = path.join(__dirname, '..');
+    const i18n = require('../src/core/i18n');
+    const langs = ['en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko'];
+    for (const l of langs) {
+      const f = path.join(root, 'src', 'i18n', l + '.json');
+      assert(fs.existsSync(f), '缺 ' + l + ' 词典');
+      const dict = JSON.parse(fs.readFileSync(f, 'utf8'));
+      assert(Object.keys(dict).length >= 30, l + ' 词条太少');
+    }
+    const codes = i18n.LANGUAGES.map((x) => x.code);
+    assert(['auto','zh','en','ru','vi','es','pt','ja','ko'].every((c) => codes.includes(c)), '语言清单不全');
+    const html = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+    assert(/id="langMask"/.test(html), '首次语言选择卡缺失');
+    assert(/id="langGrid"/.test(html), '语言选项网格缺失');
+    const app = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+    assert(/maybeShowLanguagePicker/.test(app) && /uiLanguageSelected/.test(app), '首次语言选择引导逻辑缺失');
+  });
+
+  await test('首次语言选择：全新安装需引导，老用户不打扰，选完不再弹', () => {
+    const fs2 = require('fs');
+    const os2 = require('os');
+    const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'lang-first-'));
+    const oldAppData = process.env.APPDATA;
+    process.env.APPDATA = path.join(tmp, 'appdata');
+    const storePath = require.resolve('../src/core/store');
+    delete require.cache[storePath];
+    try {
+      const store = require('../src/core/store');
+      // 全新安装：没有 settings.json → uiLanguageSelected=false，需要弹语言卡
+      const fresh = store.getSettings();
+      assert(fresh.uiLanguageSelected === false, '全新安装应标记「需选语言」');
+      assert(fresh.uiLanguage === 'auto', '全新安装语言应为 auto');
+      // 用户选完保存：置 true
+      store.saveSettings({ uiLanguage: 'ja', uiLanguageSelected: true });
+      delete require.cache[storePath];
+      const after = require('../src/core/store').getSettings();
+      assert(after.uiLanguageSelected === true, '选完应标记已处理，不再弹');
+      assert(after.uiLanguage === 'ja', '选中的语言应持久化');
+      // 模拟老用户：配置文件存在但没有 uiLanguageSelected / uiLanguage → 中文、不弹
+      const settingsFile = path.join(store.DATA_DIR, 'settings.json');
+      fs2.writeFileSync(settingsFile, JSON.stringify({ adbPath: 'x' }), 'utf8');
+      delete require.cache[storePath];
+      const legacy = require('../src/core/store').getSettings();
+      assert(legacy.uiLanguage === 'zh', '老用户应保持中文');
+      assert(legacy.uiLanguageSelected === true, '老用户不应被语言卡打扰');
+      // Preserve preferences saved by the earlier i18n test builds.
+      for (const [language, expected] of [['pt-BR', 'pt'], ['zh-CN', 'zh'], ['en', 'en'], ['ru', 'ru'], ['invalid', 'zh']]) {
+        fs2.writeFileSync(settingsFile, JSON.stringify({ language }), 'utf8');
+        assert(store.getSettings().uiLanguage === expected, 'legacy language: ' + language);
+      }
+      fs2.writeFileSync(settingsFile, JSON.stringify({ language: 'pt-BR' }), 'utf8');
+      store.saveSettings({ uiLanguage: 'en' });
+      assert(store.getSettings().uiLanguage === 'en', 'the current setting must override the legacy setting');
+
+    } finally {
+      delete require.cache[storePath];
+      if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData;
+      fs2.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  await test('内存优化：窗口隐藏时暂停轮询，托盘菜单按指纹变化才重建', () => {
+    const root = path.join(__dirname, '..');
+    const app = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+    assert(/document\.hidden/.test(app), '轮询应感知窗口可见性');
+    assert(/visibilitychange/.test(app), '应监听可见性变化以恢复轮询');
+    assert(/clearInterval\(t\)/.test(app), '隐藏时应清理定时器，而不是空转');
+    const main = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const tray = main.slice(main.indexOf('const refresh = () =>'), main.indexOf('const refresh = () =>') + 1200);
+    assert(/lastTrayFingerprint/.test(tray), '托盘应有状态指纹，避免每 5 秒无条件重建菜单');
+    assert(/fingerprint === lastTrayFingerprint/.test(tray), '指纹没变应跳过重建');
   });
 
   console.log(results.join('\n'));
