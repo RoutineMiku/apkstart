@@ -1366,5 +1366,20 @@
   "download.noAddress": "No download address available",
   "download.slowSource": "This source is too slow ({0} KB/s); switching source",
   "appwin.rotateLandscape": "Switching to landscape (restarting the Android runtime, about 30-60 seconds)…",
-  "appwin.rotatePortrait": "Switching back to portrait (restarting the Android runtime, about 30-60 seconds)…"
+  "appwin.rotatePortrait": "Switching back to portrait (restarting the Android runtime, about 30-60 seconds)…",
+  "manual.topic.overview": "User manual · Contents",
+  "manual.topic.accel": "Hardware acceleration not enabled / slow boot",
+  "manual.topic.install": "Install failed (INSTALL_FAILED_*)",
+  "manual.topic.arm": "ARM translation layer / ARM apps will not install",
+  "manual.topic.adb": "adb unauthorized (Allow USB debugging)",
+  "manual.topic.startup": "Will not open / window with a spinning button",
+  "manual.topic.other": "Other startup problems: quick reference",
+  "manual.topic.sound": "No sound / very quiet sound",
+  "manual.topic.dll": "Store version fails to start / 0xC0000135 (DLL load failure)",
+  "manual.topic.mic": "Apps cannot use the microphone / no voice calls or recording",
+  "manual.topic.gpu": "Discrete / integrated GPU rendering (graphics preference)",
+  "manual.topic.diagnose": "Built-in manual and automatic tutorials",
+  "manual.topic.settings": "Settings page navigation",
+  "manual.topic.storage": "Data and directories",
+  "manual.topic.network": "Automatic checks and network repair"
 }

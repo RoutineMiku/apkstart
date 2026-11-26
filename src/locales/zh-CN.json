@@ -1366,5 +1366,20 @@
   "download.noAddress": "没有可用的下载地址",
   "download.slowSource": "该源速度过低（{0} KB/s），换源重试",
   "appwin.rotateLandscape": "正在切换到横屏（重启安卓运行时，约 30-60 秒）…",
-  "appwin.rotatePortrait": "正在切回竖屏（重启安卓运行时，约 30-60 秒）…"
+  "appwin.rotatePortrait": "正在切回竖屏（重启安卓运行时，约 30-60 秒）…",
+  "manual.topic.overview": "使用手册 · 目录",
+  "manual.topic.accel": "未启用硬件加速 / 开机很慢",
+  "manual.topic.install": "安装失败（INSTALL_FAILED_*）",
+  "manual.topic.arm": "ARM 转译层 / ARM 应用装不上",
+  "manual.topic.adb": "adb 未授权（允许 USB 调试）",
+  "manual.topic.startup": "打不开 / 带旋转按钮的窗口",
+  "manual.topic.other": "其它启动类问题速查表",
+  "manual.topic.sound": "应用没有声音 / 声音很小",
+  "manual.topic.dll": "商店版启动失败 / 0xC0000135（DLL 加载失败）",
+  "manual.topic.mic": "应用用不到麦克风 / 无法语音通话录音",
+  "manual.topic.gpu": "独显 / 核显渲染（显卡偏好）",
+  "manual.topic.diagnose": "内置手册与自动教程",
+  "manual.topic.settings": "设置页导航",
+  "manual.topic.storage": "数据与目录说明",
+  "manual.topic.network": "自动检测与网络修复"
 }

@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('./i18n');
 /**
  * 内置手册的「故障 → 教程章节」映射（纯函数，不依赖 electron / fs）
  *
@@ -123,7 +124,7 @@ function resolve(payload) {
   return {
     id: topic.id,
     anchor: topic.anchor,
-    title: topic.title,
+    title: t('manual.topic.' + topic.id),
     reason: String(p.reason || ''),
   };
 }
