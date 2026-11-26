@@ -8,6 +8,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const zhMessages = require('../src/locales/zh-CN.json');
 
 let passed = 0;
 let failed = 0;
@@ -160,8 +161,10 @@ test('安装失败与修复失败都会自动打开对应教程', () => {
 
 test('诊断条目带教程按钮', () => {
   const js = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'app.js'), 'utf8');
-  assert(/class="dbg-help"/.test(js), '自动检测条目缺少教程按钮');
-  assert(/class="ec-help"/.test(js), '自检条目缺少教程按钮');
+  assert(js.includes("tr('v062.m0045'") && /class="dbg-help"/.test(zhMessages['v062.m0045']),
+    '自动检测条目缺少教程按钮');
+  assert(js.includes("tr('v062.m0063'") && /class="ec-help"/.test(zhMessages['v062.m0063']),
+    '自检条目缺少教程按钮');
 });
 
 test('0xC0000135 不再被一刀切成杀毒删 DLL / 缺 VC++', () => {
@@ -169,7 +172,52 @@ test('0xC0000135 不再被一刀切成杀毒删 DLL / 缺 VC++', () => {
   const emu = fs.readFileSync(path.join(ROOT, 'src', 'core', 'emulator.js'), 'utf8');
   assert(!/title: '运行时组件被杀毒软件删除或缺少 VC\+\+ 运行库'/.test(doctor), 'doctor 仍在静态归因杀毒/VC++');
   assert(!/缺少 DLL（VC\+\+ 运行库 \/ 运行时组件被杀毒删除）/.test(emu), 'emulator 退出码描述仍在一刀切');
-  assert(/原因待查/.test(emu) && /具体原因待定位/.test(doctor), '应标明原因待定位');
+  const zh = fs.readFileSync(path.join(ROOT, 'src', 'locales', 'zh-CN.json'), 'utf8');
+  assert(/原因待查/.test(JSON.parse(zh)['emulator.exit.dllLoad']) && /具体原因待定位/.test(zh), '应标明原因待定位');
+});
+
+console.log('\n[内置手册 · 英文版]');
+const htmlEn = fs.readFileSync(path.join(ROOT, 'src/ui/manual.en.html'), 'utf8');
+const idsOf = (s) => [...s.matchAll(/\sid="([^"]*)"/g)].map((m) => m[1]);
+const tagsOf = (s) => [...s.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[0].toLowerCase());
+
+test('English manual has the same ids, in the same order, as the Chinese manual', () => {
+  assert(JSON.stringify(idsOf(htmlEn)) === JSON.stringify(idsOf(html)), 'id lists differ');
+  for (const topic of Object.values(manual.TOPICS)) {
+    assert(htmlEn.includes(`id="${topic.anchor}"`), `${topic.id} anchor ${topic.anchor} missing in manual.en.html`);
+  }
+});
+
+test('English manual has the same tag sequence as the Chinese manual', () => {
+  assert(JSON.stringify(tagsOf(htmlEn)) === JSON.stringify(tagsOf(html)), 'tag sequences differ');
+});
+
+test('English manual has no Han characters or CJK punctuation outside id/href anchor slugs', () => {
+  const text = htmlEn.replace(/\sid="[^"]*"/g, ' id=""').replace(/\shref="#[^"]*"/g, ' href="#"');
+  assert(!/[㐀-䶿一-鿿豈-﫿]/.test(text), 'Han characters found');
+  assert(!/[　-〿＀-￯]/.test(text), 'CJK or full-width punctuation found');
+});
+
+test('manual file follows the UI locale and main.js uses it with a zh fallback', () => {
+  assert(manual.fileForLocale('zh-CN') === 'manual.html', 'zh-CN should use manual.html');
+  for (const l of ['en', 'pt-BR']) assert(manual.fileForLocale(l) === 'manual.en.html', `${l} should use manual.en.html`);
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main.js'), 'utf8');
+  assert(/manual\.fileForLocale\(resolveLocale\(i18n\.getLanguage\(\)\)\)/.test(main),
+    'main.js does not pick the manual file from the resolved locale');
+  assert(/existsSync\(manualFile\)[\s\S]{0,80}'manual\.html'/.test(main), 'main.js lacks the manual.html fallback');
+});
+
+test('localized launch errors keep ARM and ADB tutorial routing', () => {
+  const { getCatalog, format } = require('../src/core/i18n');
+  for (const locale of ['zh-CN', 'en', 'pt-BR', 'ru']) {
+    const catalog = getCatalog(locale);
+    for (const key of ['adb.launch.antiEmulator', 'adb.launch.translationCrash', 'adb.launch.missingNativeLib']) {
+      const error = format(catalog[key], ['org.example.app']);
+      assert(manual.topicForError(error).id === 'arm', locale + '/' + key);
+      assert(manual.topicForIssue({ code: 'runtime.bootFailed', detail: error }).id === 'arm', locale + '/issue');
+    }
+    assert(manual.topicForError(catalog['engine.adbUnauthorized.hint']).id === 'adb', locale + '/adb');
+  }
 });
 
 console.log(`\n内置手册测试：${passed} 通过，${failed} 失败\n`);

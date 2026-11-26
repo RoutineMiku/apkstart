@@ -13,6 +13,7 @@
 const { app, ipcMain, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { getCatalog } = require('../src/core/i18n');
 
 const LANG = (process.env.APKSTART_LANG === 'en' || process.argv.includes('--en')) ? 'en' : 'zh';
 // 英文冒烟时默认打开漏翻收集；preload 在渲染进程启动时读这个变量
@@ -53,6 +54,8 @@ const DEBUG_ISSUES = [
 ];
 
 const OVERRIDES = {
+  'gpu:status': () => ({ supported: true, mode: 'auto', applied: 'auto' }),
+  'i18n:get': () => ({ locale: LANG === 'en' ? 'en' : 'zh-CN', preference: LANG, messages: getCatalog(LANG) }),
   'settings:get': () => SETTINGS,
   'settings:set': () => SETTINGS,
   'app:info': () => ({ version: '0.6.0', isDev: true, dataDir: 'C:\\data', runtimeDir: 'C:\\data\\runtime' }),
@@ -225,7 +228,7 @@ app.whenReady().then(async () => {
   step('「诊断与修复」下能看到本机体检、驱动与自动检测', diag.visible.includes('diag') && diag.visible.length === 3, `可见：${diag.visible.join(',')}`);
   step('自动检测结果按分类分组渲染', diag.groups >= 3 && diag.items === 3, `${diag.groups} 组 / ${diag.items} 项`);
   step('每条问题都有「处理」按钮', diag.fixBtns === 3, `${diag.fixBtns} 个按钮`);
-  step('状态行显示上次检测时间', LANG === 'en' ? /Last checked/.test(diag.text) : /上次检测/.test(diag.text), diag.text);
+  step('状态行显示上次检测时间', LANG === 'en' ? /Last check(?:ed)?/i.test(diag.text) : /上次检测/.test(diag.text), diag.text);
 
   // 滚到自动检测面板再截图（等合成器跟上，避免拍到上一帧）
   await evalJs(`document.getElementById('autodebugGroup').scrollIntoView({ block: 'start' })`);

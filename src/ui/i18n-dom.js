@@ -33,7 +33,7 @@
   function skipped(el) {
     for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
       if (SKIP_TAGS.has(n.tagName)) return true;
-      if (n.hasAttribute && n.hasAttribute('data-i18n-skip')) return true;
+      if (n.hasAttribute && (n.hasAttribute('data-i18n-skip') || n.hasAttribute('data-i18n'))) return true;
     }
     return false;
   }
@@ -66,7 +66,7 @@
     if (src === undefined) {
       src = value;
       textOrigin.set(node, src);
-    } else if (textApplied.has(node) && value !== textApplied.get(node) && value !== src) {
+    } else if (value !== textApplied.get(node) && value !== src) {
       // 运行时用新的中文文案覆盖了这个节点：把新文案当作原文重新翻译
       src = value;
       textOrigin.set(node, src);
@@ -90,7 +90,7 @@
   }
 
   function translateAttr(el, name) {
-    if (!el || el.nodeType !== 1 || !el.hasAttribute(name)) return;
+    if (!el || el.nodeType !== 1 || !el.hasAttribute(name) || el.hasAttribute('data-i18n-' + name)) return;
     if (skipped(el)) return;
     const value = el.getAttribute(name);
     if (!value || !value.trim()) return;
@@ -104,7 +104,7 @@
     if (src === undefined) {
       src = value;
       originMap.set(name, src);
-    } else if (appliedMap.has(name) && value !== appliedMap.get(name) && value !== src) {
+    } else if (value !== appliedMap.get(name) && value !== src) {
       src = value;
       originMap.set(name, src);
     }

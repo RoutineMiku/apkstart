@@ -11,13 +11,23 @@
 ; 用户装完发现桌面上什么都没有。这里用 NSIS 原生的 CreateShortcut 再写一次：
 ; $DESKTOP 走 SHGetFolderPath，能正确跟随桌面的重定向路径；写成幂等操作，
 ; 和 electron-builder 的重复执行也只是覆盖同一个 .lnk。
+LangString ApkStartCreateShortcuts 2052 "正在创建桌面快捷方式…"
+LangString ApkStartCreateShortcuts 1033 "Creating desktop shortcuts…"
+LangString ApkStartCreateShortcuts 1046 "Criando atalhos na área de trabalho…"
+LangString ApkStartShortcutDescription 2052 "ApkStart — 在电脑上直接运行安卓应用"
+LangString ApkStartShortcutDescription 1033 "ApkStart — Run Android apps on your PC"
+LangString ApkStartShortcutDescription 1046 "ApkStart — Execute apps Android no seu computador"
+LangString un.ApkStartStopProcesses 2052 "正在结束 ApkStart 残留进程…"
+LangString un.ApkStartStopProcesses 1033 "Stopping remaining ApkStart processes…"
+LangString un.ApkStartStopProcesses 1046 "Encerrando os processos restantes do ApkStart…"
+
 !macro customInstall
-  DetailPrint "正在创建桌面快捷方式…"
+  DetailPrint "$(ApkStartCreateShortcuts)"
   CreateShortcut "$DESKTOP\ApkStart.lnk" "$INSTDIR\ApkStart.exe" "" "$INSTDIR\ApkStart.exe" 0 \
-    SW_SHOWNORMAL "" "ApkStart — 在电脑上直接运行安卓应用"
+    SW_SHOWNORMAL "" "$(ApkStartShortcutDescription)"
   CreateDirectory "$SMPROGRAMS\ApkStart"
   CreateShortcut "$SMPROGRAMS\ApkStart\ApkStart.lnk" "$INSTDIR\ApkStart.exe" "" "$INSTDIR\ApkStart.exe" 0 \
-    SW_SHOWNORMAL "" "ApkStart — 在电脑上直接运行安卓应用"
+    SW_SHOWNORMAL "" "$(ApkStartShortcutDescription)"
 !macroend
 
 !macro customUnInstall
@@ -26,7 +36,7 @@
   Delete "$SMPROGRAMS\ApkStart\ApkStart.lnk"
   RMDir "$SMPROGRAMS\ApkStart"
 
-  DetailPrint "正在结束 ApkStart 残留进程…"
+  DetailPrint "$(un.ApkStartStopProcesses)"
   ; /F 强杀 /T 连带子进程。进程不存在时 taskkill 返回 128，忽略即可。
   nsExec::Exec 'taskkill.exe /F /T /IM ApkStart.exe'
   nsExec::Exec 'taskkill.exe /F /T /IM qemu-system-x86_64.exe'

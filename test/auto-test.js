@@ -6,6 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zhMessages = require('../src/locales/zh-CN.json');
 
 const TMP = path.join(os.tmpdir(), `apkstart-auto-test-${Date.now()}`);
 process.env.APPDATA = TMP;
@@ -89,6 +90,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(v[v.length - 1].memoryMB <= 2048, '最后一档应降到最小内存');
     const keys = v.map((x) => `${x.gpu}|${x.accel}|${x.wipe}|${x.memoryMB}|${x.snapshot !== false}`);
     assert(new Set(keys).size === keys.length, '重试方案不应重复');
+    // 方案名要随界面语言走（开机日志和失败摘要都会把它显示给用户），且两种语言都不能是空的
+    const i18n = require('../src/core/i18n');
+    const labelsOf = (lang) => { i18n.setLocale(lang); try { return doctor.planVariants(p).map((x) => x.label); } finally { i18n.setLocale('zh-CN'); } };
+    const zhLabels = labelsOf('zh-CN');
+    const enLabels = labelsOf('en');
+    assert(zhLabels.every((l) => /[\u3400-\u9fff]/.test(l)), `简体中文方案名应保持中文：${zhLabels}`);
+    assert(enLabels.length === zhLabels.length && enLabels.every((l) => l && !/[\u3400-\u9fff]/.test(l)), `英文方案名不应含中文：${enLabels}`);
+    assert(zhLabels.some((l) => l.includes('硬件加速')) && enLabels.some((l) => /hardware acceleration/.test(l)), '第一档应标明硬件加速');
+    assert(zhLabels.some((l) => l.includes('保守冷启动')) && enLabels.some((l) => /cold start/i.test(l)), '最后一档应标明冷启动');
   });
 
   await test('镜像换盘不算换镜像：sysdir 换了目录不该清用户数据', () => {
@@ -2035,6 +2045,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(s.blockedReason('github') === null, '没出错的源不应被熔断');
     // 熔断期内的请求应被直接跳过（不再打网络）
     assert(/暂时跳过/.test(reason), `跳过原因要能看懂，实际：${reason}`);
+    // 英文界面下同样要能看懂（且不能残留中文）
+    const i18n = require('../src/core/i18n');
+    i18n.setLocale('en');
+    const reasonEn = s.blockedReason('gitee');
+    i18n.setLocale('zh-CN');
+    assert(/temporarily skipped/i.test(reasonEn) && !/[\u3400-\u9fff]/.test(reasonEn), `英文跳过原因要能看懂，实际：${reasonEn}`);
     s.reset();
     assert(s.blockedReason('gitee') === null, 'reset 后熔断应解除');
   });
@@ -2473,7 +2489,9 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       '要能预判「这次会重启」');
     assert(/if \(this\.detachedMode && !this\._showWhileWaiting\) return;/.test(appwin),
       'ready-to-show 只在 showWhileWaiting 时才显示壳窗口');
-    assert(/正在为《[\s\S]{0,40}切换到/.test(mainJs), '提示文案要说清为什么慢');
+    assert(mainJs.includes("t('v058.m0000'") && /重启安卓环境/.test(zhMessages['v058.m0000']),
+      '提示文案要说清为什么慢');
+
     // 真正开始换向重启时，pre-attach 可能已经把壳窗口收起来了 —— 必须再亮一次，
     // 否则重启那 40 秒桌面全空（用户以为程序退出了）。
     assert(/appWin\.showWaiting\(/.test(mainJs), '重启换向前要重新亮出等待窗口');
@@ -2500,12 +2518,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 冷启动都误报；而以前的补救建议是「重置安卓数据」（会删掉已装应用）。
     assert(/checkNetwork\('', \{ waitMs: \d+, interval: \d+ \}\)/.test(emuJs),
       '开机后的网络体检要给等待窗口，不能查一次就下结论');
-    const boot = emuJs.slice(emuJs.indexOf('运行时就绪'));
+    const boot = emuJs.slice(emuJs.indexOf('emulator.boot.ready'));
     const warn = boot.slice(0, 4000);
     // 只看代码行：上面解释「以前这里建议重置数据」的注释不算
     const warnCode = warn.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    assert(!/重置安卓数据/.test(warnCode), '这条提示不能建议「重置安卓数据」（会丢已装应用）');
-    assert(/暂时没连上网/.test(warnCode), '要改成不吓人、不误导的说法');
+    assert(/emulator\.boot\.noNetwork/.test(warnCode), '开机后的网络体检要有提示');
+    // 提示文案已移到语言包：以简体中文原文为准检查
+    const warnText = require('../src/core/i18n').getCatalog('zh-CN')['emulator.boot.noNetwork'];
+    assert(!/重置安卓数据/.test(warnCode + warnText), '这条提示不能建议「重置安卓数据」（会丢已装应用）');
+    assert(/暂时没连上网/.test(warnText), '要改成不吓人、不误导的说法');
   });
 
   await test('开机时那个控制台黑窗要用高频通道压掉', () => {
@@ -2592,8 +2613,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 3) 商店（MSIX）版：拿不到提权就退回「手动引导」，而不是弹一个注定失败的 UAC
     assert(/if \(store\.STORE_BUILD\) \{[\s\S]{0,900}manual: true/.test(handlerBody),
       '商店版失败时要返回 manual 交给 UI 引导');
-    assert(/商店版无法自行提权/.test(mainJs), '商店版文案要说明为什么不能自动开');
-    assert(/虚拟机监控程序平台/.test(mainJs), '要明确写出「Windows 虚拟机监控程序平台」');
+    assert(mainJs.includes("t('v058.m0007')") && /商店版无法自行提权/.test(zhMessages['v058.m0007']),
+      '商店版文案要说明为什么不能自动开');
+    assert(mainJs.includes("t('v058.m0008')") && /虚拟机监控程序平台/.test(zhMessages['v058.m0008']),
+      '要明确写出「Windows 虚拟机监控程序平台」');
     // 4) 开启成功后必须清掉加速缓存，否则界面还显示旧结论
     assert(/const whpx = await enableWhpxFeatures\(\);\s*\n\s*runtime\.provisioner\.invalidateEnvCache/.test(mainJs),
       '开启后要 invalidateEnvCache');
@@ -2606,7 +2629,8 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/openWindowsFeatures: \(\) => invoke\('provision:openWindowsFeatures'\)/.test(preloadJs),
       'preload 要暴露 openWindowsFeatures');
     // 8) 软件模拟下第一次启动要弹一次系统通知（设置里的自检项用户很可能没看到）
-    assert(/let accelWarned = false;/.test(mainJs) && /正在以软件模拟运行/.test(mainJs),
+    assert(/let accelWarned = false;/.test(mainJs) && mainJs.includes("t('v058.m0020')")
+      && /正在以软件模拟运行/.test(zhMessages['v058.m0020']),
       '软件模拟要提醒一次');
   });
 
@@ -2989,6 +3013,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       const legacy = require('../src/core/store').getSettings();
       assert(legacy.uiLanguage === 'zh', '老用户应保持中文');
       assert(legacy.uiLanguageSelected === true, '老用户不应被语言卡打扰');
+      // Preserve preferences saved by the earlier i18n test builds.
+      for (const [language, expected] of [['pt-BR', 'pt'], ['zh-CN', 'zh'], ['en', 'en'], ['ru', 'ru'], ['invalid', 'zh']]) {
+        fs2.writeFileSync(settingsFile, JSON.stringify({ language }), 'utf8');
+        assert(store.getSettings().uiLanguage === expected, 'legacy language: ' + language);
+      }
+      fs2.writeFileSync(settingsFile, JSON.stringify({ language: 'pt-BR' }), 'utf8');
+      store.saveSettings({ uiLanguage: 'en' });
+      assert(store.getSettings().uiLanguage === 'en', 'the current setting must override the legacy setting');
+
     } finally {
       delete require.cache[storePath];
       if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData;

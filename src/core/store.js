@@ -287,8 +287,11 @@ const store = {
     const VALID_LANGS = ['auto', 'zh', 'en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko'];
     const freshInstall = !fs.existsSync(SETTINGS_FILE);
     if (existing.uiLanguage === undefined) {
-      s.uiLanguage = freshInstall ? 'auto' : 'zh';
-    } else if (!VALID_LANGS.includes(s.uiLanguage)) {
+      s.uiLanguage = existing.language !== undefined
+        ? (existing.language === 'pt-BR' ? 'pt' : existing.language === 'zh-CN' ? 'zh' : existing.language)
+        : freshInstall ? 'auto' : 'zh';
+    }
+    if (!VALID_LANGS.includes(s.uiLanguage)) {
       s.uiLanguage = 'zh';
     }
     /**
@@ -354,6 +357,9 @@ const store = {
   },
 
   saveSettings(patch) {
+    if (patch && patch.language !== undefined && patch.uiLanguage === undefined) {
+      patch = { ...patch, uiLanguage: patch.language === 'pt-BR' ? 'pt' : patch.language === 'zh-CN' ? 'zh' : patch.language };
+    }
     const next = deepMerge(this.getSettings(), patch);
     // 只改了「资源策略」时，把它翻译成具体的三个开关，避免两套配置各说各话
     if (patch && patch.engine && patch.engine.resourceMode) {

@@ -16,6 +16,12 @@
  * 语言来源优先级：APKSTART_LANG / --lang= 环境覆盖（冒烟测试用）> settings.uiLanguage
  * > 系统首选语言（zh* → 中文，其它按系统语言匹配，匹配不到 → 英文）。
  */
+const catalogs = {
+  'zh-CN': require('../locales/zh-CN.json'),
+  en: require('../locales/en.json'),
+  'pt-BR': require('../locales/pt-BR.json'),
+  ru: require('../locales/ru.json'),
+};
 const EN = require('../i18n/en.json');
 
 // 其余语种词典：缺失时降级为空对象，保证某个语种文件损坏也不会拖垮启动。
@@ -48,6 +54,14 @@ const LANGUAGES = [
 
 const CJK_RE = /[\u4e00-\u9fff]/;
 
+// Catalog IDs remain supported for existing UI and runtime messages. New
+// source-text translations use the same active language and upstream dictionary.
+for (const [locale, code] of [['en', 'en'], ['pt-BR', 'pt'], ['ru', 'ru']]) {
+  DICTS[code] = { ...DICTS[code] };
+  for (const [key, source] of Object.entries(catalogs['zh-CN'])) {
+    if (/[\u4e00-\u9fff]/.test(source)) DICTS[code][source] = catalogs[locale][key];
+  }
+}
 let lang = 'zh';
 let dict = {};
 let patterns = null;
@@ -245,11 +259,12 @@ function lookup(text, depth = 0) {
  * 中文模式或没有译文时原样返回。
  */
 function t(text, vars) {
-  if (lang === 'zh' || !dict || !Object.keys(dict).length) return text;
+  if (Object.hasOwn(catalogs['zh-CN'], text)) {
+    return format(getCatalog(getLanguage())[text], vars);
+  }
   const raw = String(text == null ? '' : text);
   if (!raw) return raw;
-  let out = lookup(raw);
-  if (out === undefined) return raw;
+  let out = lookup(raw) ?? raw;
   if (vars && typeof vars === 'object') {
     out = out.replace(/\{([^{}]+)\}/g, (m, k) => {
       const key = String(k).trim();
@@ -274,3 +289,23 @@ module.exports = {
   // 测试用：清掉按语言缓存的骨架正则
   _reset() { patterns = null; literalKeys = null; patternCache.clear(); },
 };
+
+function resolveLocale(preference, systemLocale = 'en') {
+  const code = normalizeLang(preference) || pickSystemLang(systemLocale);
+  return code === 'zh' ? 'zh-CN' : code === 'pt' ? 'pt-BR' : code;
+}
+function format(message, values = []) {
+  return message.replace(/\{(\d+)\}/g, (match, index) => (
+    index < values.length ? String(values[index]) : match
+  ));
+}
+function getCatalog(locale) {
+  const resolved = resolveLocale(locale);
+  if (catalogs[resolved]) return catalogs[resolved];
+  const sourceDict = DICTS[normalizeLang(resolved)] || {};
+  return Object.fromEntries(Object.entries(catalogs['zh-CN']).map(([key, source]) => (
+    [key, sourceDict[source] || catalogs.en[key]]
+  )));
+}
+function setLocale(locale) { setLanguage(locale); }
+Object.assign(module.exports, { resolveLocale, format, getCatalog, setLocale });
