@@ -48,6 +48,23 @@ function describeExitCode(code) {
   }
 }
 
+/**
+ * 「网络加速」可选的公共 DNS。cn 是原来的默认值（阿里 / 腾讯），国内最快；
+ * 在国外或挂海外 VPN 时，国内 DNS 反而更慢，可以改用 Cloudflare / Google。
+ */
+const DNS_PRESETS = {
+  cn: '223.5.5.5,119.29.29.29',
+  cloudflare: '1.1.1.1,1.0.0.1',
+  google: '8.8.8.8,8.8.4.4',
+};
+
+/** 按设置给出 -dns-server 的值；关闭网络加速时返回空串（沿用主机 DNS）。未知取值回落到 cn。 */
+function dnsServersFor(engine) {
+  if (engine && engine.fastDns === false) return '';
+  const key = engine && engine.dnsServers;
+  return Object.prototype.hasOwnProperty.call(DNS_PRESETS, key) ? DNS_PRESETS[key] : DNS_PRESETS.cn;
+}
+
 class EmulatorEngine {
   constructor(appRoot) {
     this.appRoot = appRoot;
@@ -696,10 +713,10 @@ class EmulatorEngine {
     if (locale) args.push('-change-locale', locale);
     // DNS：安卓默认用 10.0.2.3（转发到主机 DNS）。主机走 VPN / 公司网 / 某些运营商
     // 时，一次解析能拖到几百毫秒，表现为「页面转圈半天才开始加载」。给一份国内公共
-    // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景）。
-    if (this.settings?.engine?.fastDns !== false) {
-      args.push('-dns-server', '223.5.5.5,119.29.29.29');
-    }
+    // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景），
+    // 也可以换成 Cloudflare / Google（在国外或用海外 VPN 时更快），见 DNS_PRESETS。
+    const dns = dnsServersFor(this.settings?.engine);
+    if (dns) args.push('-dns-server', dns);
     if (lcd) args.push('-skin', `${lcd.w}x${lcd.h}`);
     if (headless) {
       args.push('-no-window');
@@ -1704,4 +1721,4 @@ class EmulatorEngine {
   }
 }
 
-module.exports = { EmulatorEngine, AVD_NAME, SNAPSHOT_NAME };
+module.exports = { EmulatorEngine, AVD_NAME, SNAPSHOT_NAME, DNS_PRESETS, dnsServersFor };

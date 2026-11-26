@@ -87,6 +87,8 @@ const DEFAULT_SETTINGS = {
     // 网络加速：给模拟器指定国内公共 DNS。安卓默认的 10.0.2.3 要走主机 DNS，
     // VPN / 公司网 / 某些运营商下解析会拖到几百毫秒，视频类应用首屏会明显发卡。
     fastDns: true,
+    // 网络加速使用的 DNS：cn（阿里 / 腾讯，默认）| cloudflare | google，见 emulator.js DNS_PRESETS。
+    dnsServers: 'cn',
     // 系统语言：开机时由 emulator -prop 注入（guest 里 setprop 会被 SELinux 拒绝）。
     // 默认简体中文。设成 en-US 或 off 就回到镜像原生英文。
     locale: 'zh-CN',
