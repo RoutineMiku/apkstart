@@ -197,7 +197,7 @@ app.whenReady().then(async () => {
   const customImg = await evalJs(`(() => ({ has: !!document.getElementById('setCustomSysImgDir'), pick: !!document.getElementById('btnPickSysImgDir') }))()`);
   step('性能页有自定义系统镜像目录输入框与选择按钮', customImg.has && customImg.pick, `input=${customImg.has} btn=${customImg.pick}`);
   const uiLangs = await evalJs(`(() => { const s = document.getElementById('setUiLanguage'); return s ? Array.from(s.options).map(o => o.value) : []; })()`);
-  step('界面语言下拉含全部 8 语种 + 自动', ['auto','zh','en','ru','vi','es','pt','ja','ko'].every((v) => uiLangs.includes(v)), uiLangs.join(','));
+  step('界面语言下拉含全部 9 语种 + 自动', ['auto','zh','en','ru','vi','es','pt','ja','ko','it'].every((v) => uiLangs.includes(v)), uiLangs.join(','));
 
   // 点「实验室」，看多开开关
   await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="lab"]').click()`);

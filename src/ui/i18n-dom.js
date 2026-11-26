@@ -159,7 +159,7 @@
     walk(document.body);
   }
 
-  const HTML_LANG = { zh: 'zh-CN', en: 'en', ru: 'ru', vi: 'vi', es: 'es', pt: 'pt-BR', ja: 'ja', ko: 'ko' };
+  const HTML_LANG = { zh: 'zh-CN', en: 'en', ru: 'ru', vi: 'vi', es: 'es', pt: 'pt-BR', ja: 'ja', ko: 'ko', it: 'it' };
   function setHtmlLang() {
     const lang = api.getLanguage ? api.getLanguage() : 'zh';
     document.documentElement.lang = HTML_LANG[lang] || 'zh-CN';

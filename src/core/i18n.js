@@ -11,7 +11,7 @@
  *   动态拼出来的字符串也能命中。
  *
  * 支持的语言：zh(中文) / en(English) / ru(Русский) / vi(Tiếng Việt) / es(Español) /
- *             pt(Português) / ja(日本語) / ko(한국어)。可继续在 src/i18n/ 下加词典。
+ *             pt(Português) / ja(日本語) / ko(한국어) / it(Italiano)。可继续在 src/i18n/ 下加词典。
  *
  * 语言来源优先级：APKSTART_LANG / --lang= 环境覆盖（冒烟测试用）> settings.uiLanguage
  * > 系统首选语言（zh* → 中文，其它按系统语言匹配，匹配不到 → 英文）。
@@ -31,6 +31,7 @@ const DICTS = {
   pt: loadDict('pt'),
   ja: loadDict('ja'),
   ko: loadDict('ko'),
+  it: loadDict('it'),
 };
 
 /** 支持的语言清单（供设置界面下拉与首次选择引导使用）。 */
@@ -44,6 +45,7 @@ const LANGUAGES = [
   { code: 'pt', label: 'Português' },
   { code: 'ja', label: '日本語' },
   { code: 'ko', label: '한국어' },
+  { code: 'it', label: 'Italiano' },
 ];
 
 const CJK_RE = /[\u4e00-\u9fff]/;
@@ -65,6 +67,7 @@ function normalizeLang(loc) {
   if (s === 'pt' || s.startsWith('pt-')) return 'pt';
   if (s === 'ja' || s.startsWith('ja-')) return 'ja';
   if (s === 'ko' || s.startsWith('ko-')) return 'ko';
+  if (s === 'it' || s.startsWith('it-')) return 'it';
   return '';
 }
 
