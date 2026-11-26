@@ -1047,7 +1047,7 @@ async function runAutodebug({ force = false } = {}) {
       // 只有「新的 error」才提醒：warn/info 留给设置页自己看，不打断用户。
       const fresh = added.filter((i) => i.severity === 'error');
       if (fresh.length) {
-        const text = fresh.map((i) => i.title).join('；');
+        const text = fresh.map((i) => i.title).join(t('list.sep'));
         send('toast', { type: 'error', message: t('v062.m0008', [text]) });
         notify(t('v062.m0009'), t('v062.m0010', [text]));
         appLog(`autodebug new issues: ${fresh.map((i) => i.code).join(',')}`);
@@ -1891,7 +1891,7 @@ function registerIpc() {
     let driverError = '';
     try {
       const v = drv.validateDriver(report.driver);
-      if (!v.ok) throw new Error(v.errors.join('；'));
+      if (!v.ok) throw new Error(v.errors.join(t('list.sep')));
       const dir = drv.userDir(store);
       fs.mkdirSync(dir, { recursive: true });
       driverFile = path.join(dir, `${v.driver.id}.json`);
@@ -3223,7 +3223,7 @@ if (!gotLock) {
     installer.ensureShortcuts().then((fixed) => {
       if (fixed && fixed.length) {
         windowctl.refreshShell().catch(() => {});
-        notify(t('m0470'), fixed.join('、'));
+        notify(t('m0470'), fixed.join(t('list.sepComma')));
       }
     }).catch(() => {});
 

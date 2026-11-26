@@ -1018,7 +1018,7 @@ function renderDrivers(r) {
   for (const e of errors) {
     const err = document.createElement('div');
     err.className = 'drv-err';
-    err.textContent = `${String(e.file || '').split(/[\\/]/).pop()}：${(e.errors || []).join('；')}`;
+    err.textContent = tr('drivers.fileErrors', [String(e.file || '').split(/[\\/]/).pop(), (e.errors || []).join(tr('list.sep'))]);
     list.append(err);
   }
   if (!drivers.length && !errors.length) {
@@ -1631,7 +1631,7 @@ function bindSettings() {
       const r = await api.driversImport().catch(() => null);
       if (!r || r.canceled) return;
       if (!r.ok) {
-        toast({ type: 'error', title: tr('m0311'), body: (r.errors || []).slice(0, 3).join('；') });
+        toast({ type: 'error', title: tr('m0311'), body: (r.errors || []).slice(0, 3).join(tr('list.sep')) });
         return;
       }
       toast({ type: 'ok', title: tr('v058.m0109'), body: `${r.driver.name} v${r.driver.version}` });
@@ -2616,7 +2616,7 @@ function renderEnvCheck(r) {
     chip.hidden = issues.length === 0;
     chip.textContent = errs ? tr('m0344', [errs]) : tr('m0345', [issues.length]);
     chip.className = `status-chip${errs ? ' err' : ''}`;
-    chip.title = issues.map((i) => i.title).join('；');
+    chip.title = issues.map((i) => i.title).join(tr('list.sep'));
   }
 
   if (!issues.length) {

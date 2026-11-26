@@ -418,52 +418,51 @@ const RULES = [
     // 与 CPU、内存、镜像都无关（同机换 -gpu software 往往就能过）。
     // 必须排在 GPU_INIT 前面：崩溃日志里通常也带着渲染初始化信息，先判崩溃更准。
     re: /emulator exit 3221225477|exit code 3221225477|0xC0000005|STATUS_ACCESS_VIOLATION/i,
-    title: '渲染后端崩溃（0xC0000005 访问冲突）',
-    hint: '已自动改用更保守的渲染后端重试，并记住这个后端下次不再先试。'
-      + '若反复出现，请更新显卡驱动；或在设置 → 性能与资源里把画质调低、关闭远程桌面/虚拟机显卡直通后再试。',
+    get title() { return t('doctor.rule.ACCESS_VIOLATION.title'); },
+    get hint() { return t('doctor.rule.ACCESS_VIOLATION.hint'); },
   },
   {
     code: 'GPU_INIT',
     // 只匹配「失败」语境：正常日志里也会出现 Vulkan/EGL/ANGLE 字样，不能误判为致命错误
     re: /Failed to initialize GL emulation|Could not initialize (OpenGL|emulated framebuffer)|Failed to create .*GLES|EGL_(BAD|NOT_INITIALIZED|CONTEXT_LOST)|Failed to (load|initialize) .*vulkan|vulkan.*(failed|error)|ANGLE.*(fail|error)/i,
-    title: '显卡渲染后端初始化失败',
-    hint: '已自动切换软件渲染重试。若仍失败，请更新显卡驱动，或关闭远程桌面/虚拟机显卡直通后再试。',
+    get title() { return t('doctor.rule.GPU_INIT.title'); },
+    get hint() { return t('doctor.rule.GPU_INIT.hint'); },
   },
   {
     code: 'GPU_MODE',
     re: /Unknown option|invalid .*-gpu|Unrecognized .*gpu|Unsupported gpu/i,
-    title: '当前运行时不接受该 GPU 模式',
-    hint: '已自动按运行时版本挑选可用的 GPU 模式重试（老版本用 swiftshader_indirect，新版本用 software）。',
+    get title() { return t('doctor.rule.GPU_MODE.title'); },
+    get hint() { return t('doctor.rule.GPU_MODE.hint'); },
   },
   {
     code: 'ACCEL',
     re: /x86_64 emulation currently requires hardware acceleration|acceleration.*not (installed|available|supported)|WHPX.*(not|failed)|AEHD.*(not|failed)|ERROR_ACCESS_DENIED|加速.*不可用/i,
-    title: '硬件加速不可用',
-    hint: '已自动回退软件模拟（首次启动会明显变慢）。想要流畅可用，请在「Windows 功能」勾选「虚拟机平台」，或安装 AEHD 驱动后重启。',
+    get title() { return t('doctor.rule.ACCEL.title'); },
+    get hint() { return t('doctor.rule.ACCEL.hint'); },
   },
   {
     code: 'MEMORY',
     re: /Cannot allocate memory|not enough memory|commit charge|Failed to allocate|out of memory|内存不足/i,
-    title: '内存分配失败',
-    hint: '已自动下调分配给 Android 的内存与核心数。请关闭占内存的程序后重试。',
+    get title() { return t('doctor.rule.MEMORY.title'); },
+    get hint() { return t('doctor.rule.MEMORY.hint'); },
   },
   {
     code: 'PORT_BUSY',
     re: /port.*(in use|busy)|Address already in use|bind.*failed|Failed to (setup|bind) .*console/i,
-    title: '模拟器端口被占用',
-    hint: '已自动换用空闲端口。若反复出现，请退出夜神/MuMu/蓝叠等模拟器，或重启电脑。',
+    get title() { return t('doctor.rule.PORT_BUSY.title'); },
+    get hint() { return t('doctor.rule.PORT_BUSY.hint'); },
   },
   {
     code: 'AVD_LOCK',
     re: /already running|lock file|\.lock|AVD is in use|emulator is running/i,
-    title: '上次运行残留了锁文件',
-    hint: '已自动清理 AVD 锁文件并重新拉起。',
+    get title() { return t('doctor.rule.AVD_LOCK.title'); },
+    get hint() { return t('doctor.rule.AVD_LOCK.hint'); },
   },
   {
     code: 'IMAGE',
     re: /system\.img.*(missing|not found|corrupt)|kernel-ranchu.*(missing|not found)|invalid magic|Failed to open .*\.img|APEX.*(fail|error|loop)|boot loop|verity.*fail/i,
-    title: '系统镜像缺失或损坏 / 与旧用户数据不兼容',
-    hint: '已自动用干净的用户数据重新开机。若仍失败，请在「运行时」里删除镜像后重新下载。',
+    get title() { return t('doctor.rule.IMAGE.title'); },
+    get hint() { return t('doctor.rule.IMAGE.hint'); },
   },
   {
     code: 'DLL',
@@ -473,43 +472,41 @@ const RULES = [
     // VC++ 运行库确实缺失、杀毒隔离了运行时文件，三种都可能。原来一律断言
     // 「杀毒删了 / 缺 VC++」是照退出码静态猜的，会误导用户重装无用。
     // 真实缺哪个 DLL 要看 WER 的 FaultingModuleName；这里如实列为「待定位」。
-    title: '运行时依赖 DLL 加载失败（具体原因待定位）',
-    hint: '常见原因：商店版从只读目录启动子进程的路径限制、VC++ 运行库缺失、杀毒隔离了运行时文件。'
-      + '请打开内置手册 6.8 按步骤定位；不要只凭这一条就重装运行库。',
+    get title() { return t('doctor.rule.DLL.title'); },
+    get hint() { return t('doctor.rule.DLL.hint'); },
   },
   {
     code: 'DISK_FULL',
     re: /No space left|disk full|not enough space|磁盘空间不足/i,
-    title: '磁盘空间不足，无法启动安卓',
-    hint: '请把运行时目录（设置 → 系统集成 → 运行时数据目录）改到空间充足的盘，'
-      + '或在设置里关掉「保留快速启动快照」/ 调小数据分区。安卓数据不会被自动清除。',
+    get title() { return t('doctor.rule.DISK_FULL.title'); },
+    get hint() { return t('doctor.rule.DISK_FULL.hint'); },
   },
   {
     code: 'NON_ASCII',
     re: /Unicode|non-ASCII|路径.*(无效|找不到)|cannot find the path/i,
-    title: '安装路径含中文或特殊字符',
-    hint: '已自动改用 Windows 短路径。若仍失败，请把 ApkStart 移到纯英文目录（如 C:\\ApkStart）。',
+    get title() { return t('doctor.rule.NON_ASCII.title'); },
+    get hint() { return t('doctor.rule.NON_ASCII.hint'); },
   },
   {
     // 上次被强制结束后 AVD 目录会留下 hardware-qemu.ini.lock / multiinstance.lock，
     // 模拟器一律拒绝启动，报出来的却是容易被误读成 CPU 问题的话。必须排在 CPU 规则前。
     code: 'AVD_LOCK',
     re: /Running multiple emulators with the same AVD|AVD .*is already running|hardware-qemu\.ini\.lock/i,
-    title: '上一次运行没有正常退出，残留了锁文件',
-    hint: 'ApkStart 会自动清掉残留锁并重试；若反复出现，请检查是否有别的模拟器正在用同一套运行时。',
+    get title() { return t('doctor.rule.AVD_LOCK_UNCLEAN.title'); },
+    get hint() { return t('doctor.rule.AVD_LOCK_UNCLEAN.hint'); },
   },
   {
     code: 'CPU_FEATURE',
     re: /host doesn't support requested feature|CPUID.*not supported|unsupported CPU|missing.*(AVX|SSE4|xsave)/i,
-    title: 'CPU 缺少运行时要求的指令集',
-    hint: '这类提示在部分老 CPU 上只是警告、仍能开机；若确实起不来，请把「运行时」里的引擎更新到较旧兼容版本，或换一台支持 VT-x/AVX 的电脑。',
+    get title() { return t('doctor.rule.CPU_FEATURE.title'); },
+    get hint() { return t('doctor.rule.CPU_FEATURE.hint'); },
   },
 
   {
     code: 'SNAPSHOT',
     re: /snapshot|Quick Boot|ram\.img|Saving state/i,
-    title: '快速启动快照损坏',
-    hint: '已自动丢弃旧快照走冷启动；下一次正常退出会重新生成快照。',
+    get title() { return t('doctor.rule.SNAPSHOT.title'); },
+    get hint() { return t('doctor.rule.SNAPSHOT.hint'); },
   },
 ];
 
@@ -521,8 +518,8 @@ function diagnose(lines) {
   }
   return {
     code: 'UNKNOWN',
-    title: '运行时未能完成开机',
-    hint: '已自动按多种参数组合重试。可点「导出诊断报告」把日志发给作者定位。',
+    title: t('doctor.unknown.title'),
+    hint: t('doctor.unknown.hint'),
   };
 }
 
@@ -543,24 +540,24 @@ function writeReport({ dataDir, profile, logLines = [], extra = {} }) {
   const file = path.join(dir, `diagnostic-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`);
   const d = diagnose(logLines);
   const body = [
-    'ApkStart 诊断报告',
-    `生成时间：${new Date().toLocaleString()}`,
+    t('doctor.report.title'),
+    t('doctor.report.generated', [new Date().toLocaleString()]),
     '',
-    '== 本机 ==',
+    t('doctor.report.host'),
     JSON.stringify(hostInfo(), null, 2),
     '',
-    '== 自动配置 ==',
+    t('doctor.report.profile'),
     JSON.stringify(profile || {}, null, 2),
     describeProfile(profile || chooseProfile()),
     '',
-    '== 诊断 ==',
-    `${d.code}：${d.title}`,
+    t('doctor.report.diagnosis'),
+    t('doctor.report.finding', [d.code, d.title]),
     d.hint,
     '',
-    '== 附加信息 ==',
+    t('doctor.report.extra'),
     JSON.stringify(extra, null, 2),
     '',
-    '== 运行时日志（末尾 300 行）==',
+    t('doctor.report.log'),
     ...(Array.isArray(logLines) ? logLines.slice(-300) : String(logLines || '').split('\n')),
   ].join('\n');
   fs.writeFileSync(file, body, 'utf8');

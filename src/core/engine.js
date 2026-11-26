@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { AdbClient, isUnauthorizedError } = require('./adb');
 const store = require('./store');
+const { t } = require('./i18n');
 const { Provisioner } = require('./provision');
 const { EmulatorEngine } = require('./emulator');
 const doctor = require('./doctor');
@@ -220,7 +221,7 @@ class Runtime {
 
     if (!env.adb.ok) {
       result.needsSetup = 'adb';
-      result.error = '缺少 adb：点击「一键部署」自动下载';
+      result.error = t('engine.adbMissing');
       return result;
     }
 
@@ -358,15 +359,12 @@ class Runtime {
       let authHealed = false;  // 本次 start() 是否已因「未授权」作废旧快照冷启动过
       const diagUnauthorized = () => ({
         code: 'ADB_UNAUTHORIZED',
-        title: '安卓调试授权未完成（需要点一次「允许」）',
+        title: t('engine.adbUnauthorized.title'),
         // 旧文案让人去删 %USERPROFILE%\.android\adbkey —— 实测那是**反向操作**：
         // 换了新密钥后，系统里已存的旧公钥仍然生效，两者对不上，反而永远授权不了
         // （Android 只在 adb_keys 不存在时才写入新公钥）。正确做法是在模拟器窗口里
         // 点一次「允许」，或者清空安卓数据让系统重建授权表。
-        hint: '模拟器停在「允许 USB 调试？」对话框。请在那个模拟器窗口里点「允许」——'
-          + '勾选「一律允许使用这台计算机进行调试」再点，之后就不会再问。'
-          + '若窗口点不动或一直不出现：设置 → 运行时 → 清空安卓数据后重试'
-          + '（会清掉已装应用，重新安装即可，不会影响 APK 文件）。',
+        hint: t('engine.adbUnauthorized.hint'),
       });
       const probe = async ({ serial }) => {
         if (!this.emulator.running()) return 'fatal';
@@ -431,7 +429,7 @@ class Runtime {
       if (!st || st.ok === false) {
         return {
           ok: false,
-          error: (st && st.error) || '安卓运行时未能启动',
+          error: (st && st.error) || t('engine.runtimeStartFailed'),
           needsSpace: !!(st && st.needsSpace),
           attempts: (st && st.attempts) || [],
           diagnosis: this.emulator.lastDiagnosis,
@@ -570,7 +568,7 @@ class Runtime {
     if (!linked) {
       return {
         ok: false,
-        error: '虚拟机已启动，但 adb 未能连接：请在虚拟机里开启「开发者选项 → ADB over network」后重试',
+        error: t('engine.adbConnectFailed'),
       };
     }
     const ready = await this.waitAndroidReady(client, Math.max(60000, timeout / 2), onLog);
@@ -578,8 +576,8 @@ class Runtime {
       return {
         ok: false,
         error: ready.stage === 'kernel'
-          ? 'Android 内核未完成引导，请查看运行时日志（可能镜像损坏或加速未生效）'
-          : 'Android 已引导但系统服务未就绪（可能停在首次开机设置界面，请在虚拟机窗口里完成向导）',
+          ? t('engine.bootKernel')
+          : t('engine.bootServices'),
       };
     }
     await this.prepare(client);
@@ -1071,8 +1069,8 @@ class Runtime {
         ok: false,
         needsSetup: env.emulator.ok ? 'sysimg' : 'provision',
         error: env.emulator.ok
-          ? '还差系统镜像：点「下载系统镜像」即可'
-          : '运行时组件尚未部署完成',
+          ? t('engine.needSysimg')
+          : t('engine.needProvision'),
         env,
       };
     }
@@ -1548,7 +1546,7 @@ class Runtime {
       if (!this.vmRunning) {
         const boot0 = await this.ensure({ onLog });
         if (!boot0 || !boot0.ok) {
-          return { ok: false, error: (boot0 && boot0.error) || '虚拟机没能启动', boot: false };
+          return { ok: false, error: (boot0 && boot0.error) || t('engine.vmStartFailed'), boot: false };
         }
       }
       this._wifiRepairTried = true;
@@ -1569,7 +1567,7 @@ class Runtime {
       this.emulator.forceColdBootOnNextStart();
       const boot = await this.ensure({ onLog });
       if (!boot || !boot.ok) {
-        return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false };
+        return { ok: false, error: (boot && boot.error) || t('engine.vmStartFailed'), boot: false };
       }
       let network = await this.waitForNetwork({ onLog, timeoutMs: 90000 });
       if (network && network.ok) {
@@ -1585,7 +1583,7 @@ class Runtime {
       this.emulator.forceWipeOnNextStart();
       const boot2 = await this.ensure({ onLog });
       if (!boot2 || !boot2.ok) {
-        return { ok: false, error: (boot2 && boot2.error) || '虚拟机没能启动', boot: false, wiped: true };
+        return { ok: false, error: (boot2 && boot2.error) || t('engine.vmStartFailed'), boot: false, wiped: true };
       }
       network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
       if (network && network.ok) {
