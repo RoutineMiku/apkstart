@@ -16,6 +16,7 @@
  */
 const path = require('path');
 const { sha256File } = require('./download');
+const { t } = require('./i18n');
 
 const APP_DIR = 'resources/app';
 const MANIFEST_RE = /-manifest\.json$/i;
@@ -29,12 +30,12 @@ function norm(p) {
 /** 清单格式校验。宁可判为「不可用」退回完整包，也不要拿一份残缺清单去覆盖文件。 */
 function parseManifest(text) {
   let m;
-  try { m = JSON.parse(text); } catch (_) { throw new Error('增量清单不是合法 JSON'); }
-  if (!m || m.schema !== 1) throw new Error('增量清单版本不支持');
-  if (!m.version || !m.electronVersion) throw new Error('增量清单缺少版本信息');
+  try { m = JSON.parse(text); } catch (_) { throw new Error(t('incremental.manifestInvalidJson')); }
+  if (!m || m.schema !== 1) throw new Error(t('incremental.manifestSchema'));
+  if (!m.version || !m.electronVersion) throw new Error(t('incremental.manifestNoVersion'));
   if (!m.app || !m.app.asset || !m.app.sha256 || !m.app.files
       || typeof m.app.files !== 'object' || !Object.keys(m.app.files).length) {
-    throw new Error('增量清单缺少代码包信息');
+    throw new Error(t('incremental.manifestNoApp'));
   }
   return m;
 }

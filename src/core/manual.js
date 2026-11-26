@@ -1,4 +1,5 @@
 'use strict';
+const { t } = require('./i18n');
 /**
  * 内置手册的「故障 → 教程章节」映射（纯函数，不依赖 electron / fs）
  *
@@ -29,7 +30,7 @@ const TOPICS = Object.freeze({
 });
 
 // 反模拟 / 安全校验导致的启动退出也归到 6.3：该章节末尾已说明这类应用属于限制。
-const ARM_RE = /NO_MATCHING_ABIS|DoBadTrampoline|libndk_translation|UnsatisfiedLinkError|arm64-v8a|armeabi-v7a|ARM 翻译层|ARM 转译层|反模拟|反仿真|反调试|anti[-_ ]?emulat|emulator.?detect|safetynet|play.?integrity/i;
+const ARM_RE = /NO_MATCHING_ABIS|DoBadTrampoline|libndk_translation|UnsatisfiedLinkError|arm64-v8a|armeabi-v7a|ARM 翻译层|ARM translation layer|ARM 转译层|反模拟|反仿真|反调试|anti[-_ ]?emulat|emulator.?detect|safetynet|play.?integrity/i;
 const ADB_RE = /ADB_UNAUTHORIZED|unauthorized|允许 USB 调试|调试授权/i;
 const SOUND_RE = /audio|AUDIO|sound|声音|音量|静音|Audiosrv/i;
 // 0xC0000135 / DLL 加载失败： Decimal 3221225781 也要认，诊断里两种写法都出现
@@ -101,7 +102,7 @@ function topicForError(text) {
   if (ADB_RE.test(s)) return TOPICS.adb;
   if (SOUND_RE.test(s)) return TOPICS.sound;
   if (DLL_RE.test(s)) return TOPICS.dll;
-  if (/INSTALL_|PARSE_FAILED|安装失败|签名|安装包/.test(s)) return TOPICS.install;
+  if (/INSTALL_|PARSE_FAILED|安装失败|Install failed|签名|安装包/.test(s)) return TOPICS.install;
   if (/attach failed|emu:0|device not found|旋转窗口/.test(s)) return TOPICS.startup;
   return topicByText(s) === 'overview' ? TOPICS.install : TOPICS[topicByText(s)];
 }
@@ -123,9 +124,14 @@ function resolve(payload) {
   return {
     id: topic.id,
     anchor: topic.anchor,
-    title: topic.title,
+    title: t('manual.topic.' + topic.id),
     reason: String(p.reason || ''),
   };
 }
 
-module.exports = { TOPICS, ISSUE_MAP, topicForIssue, topicForError, topicByText, resolve };
+/** 手册文件：简体中文用 manual.html，其余界面语言（含 pt-BR）用英文版 manual.en.html */
+function fileForLocale(locale) {
+  return locale === 'zh-CN' ? 'manual.html' : 'manual.en.html';
+}
+
+module.exports = { TOPICS, ISSUE_MAP, topicForIssue, topicForError, topicByText, resolve, fileForLocale };

@@ -506,7 +506,7 @@ function friendlyInstallErrorText(msg) {
   // 只有真正失败才走到这里：切换镜像是「进行中」的进度提示（install:progress），
   // 绝不能在红色失败横幅里再说「正在重试」——那会让用户以为还在处理，其实是真的失败了。
   if (/NO_MATCHING_ABIS/i.test(s)) {
-    return /已切换到.*仍然安装失败|abiRetried/i.test(s)
+    return /已切换到.*仍然安装失败|Switched to the Android 14.*still failed to install|abiRetried/i.test(s)
       ? tr('v062.m0016', [s])
       : tr('v062.m0017', [s]);
   }
@@ -1018,7 +1018,7 @@ function renderDrivers(r) {
   for (const e of errors) {
     const err = document.createElement('div');
     err.className = 'drv-err';
-    err.textContent = `${String(e.file || '').split(/[\\/]/).pop()}：${(e.errors || []).join('；')}`;
+    err.textContent = tr('drivers.fileErrors', [String(e.file || '').split(/[\\/]/).pop(), (e.errors || []).join(tr('list.sep'))]);
     list.append(err);
   }
   if (!drivers.length && !errors.length) {
@@ -1631,7 +1631,7 @@ function bindSettings() {
       const r = await api.driversImport().catch(() => null);
       if (!r || r.canceled) return;
       if (!r.ok) {
-        toast({ type: 'error', title: tr('m0311'), body: (r.errors || []).slice(0, 3).join('；') });
+        toast({ type: 'error', title: tr('m0311'), body: (r.errors || []).slice(0, 3).join(tr('list.sep')) });
         return;
       }
       toast({ type: 'ok', title: tr('v058.m0109'), body: `${r.driver.name} v${r.driver.version}` });
@@ -2616,7 +2616,7 @@ function renderEnvCheck(r) {
     chip.hidden = issues.length === 0;
     chip.textContent = errs ? tr('m0344', [errs]) : tr('m0345', [issues.length]);
     chip.className = `status-chip${errs ? ' err' : ''}`;
-    chip.title = issues.map((i) => i.title).join('；');
+    chip.title = issues.map((i) => i.title).join(tr('list.sep'));
   }
 
   if (!issues.length) {

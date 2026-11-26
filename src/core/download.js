@@ -9,6 +9,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
+const { t } = require('./i18n');
 
 const UA = 'ApkStart/0.2 (Windows; +https://github.com/apkstart)';
 
@@ -29,7 +30,7 @@ function validRange(res, start, end, total) {
 
 function openStream(url, { method = 'GET', headers = {}, redirects = 0 } = {}) {
   return new Promise((resolve, reject) => {
-    if (redirects > 6) return reject(new Error('重定向次数过多'));
+    if (redirects > 6) return reject(new Error(t('download.tooManyRedirects')));
     const u = new URL(url);
     const mod = u.protocol === 'http:' ? http : https;
     const req = mod.request(url, {
@@ -45,7 +46,7 @@ function openStream(url, { method = 'GET', headers = {}, redirects = 0 } = {}) {
       resolve(res);
     });
     req.on('error', reject);
-    req.on('timeout', () => { req.destroy(new Error('连接超时')); });
+    req.on('timeout', () => { req.destroy(new Error(t('download.timeout'))); });
     req.end();
   });
 }
@@ -122,13 +123,13 @@ async function download(url, dest, opt = {}) {
         discardPartial(dest);
         continue;
       }
-      throw new Error('无法验证续传文件，服务器返回 HTTP 416');
+      throw new Error(t('download.resume416'));
     }
     if (res.statusCode !== 200 && res.statusCode !== 206) {
       res.resume();
       if (attempt <= retries) { await new Promise((r) => setTimeout(r, 1500)); continue; }
       discardPartial(dest);   // 重试耗尽：别把坏文件留给下次续传
-      throw new Error(`下载失败 HTTP ${res.statusCode}: ${url}`);
+      throw new Error(t('download.httpFailed', [res.statusCode, url]));
     }
 
     if (res.statusCode === 206) {
@@ -136,7 +137,7 @@ async function download(url, dest, opt = {}) {
       if (!m || !validRange(res, existing, Number(m[2]), Number(m[3])) || Number(m[2]) !== Number(m[3]) - 1) {
         res.resume();
         discardPartial(dest);
-        throw new Error('服务器返回了不匹配的续传范围');
+        throw new Error(t('download.resumeRangeMismatch'));
       }
     }
 
@@ -175,12 +176,12 @@ async function download(url, dest, opt = {}) {
           if (idle) clearTimeout(idle);
           idle = setTimeout(() => {
             res.destroy();
-            finish(new Error('连接停滞（长时间无数据）'));
+            finish(new Error(t('download.stalled')));
           }, idleMs);
         };
         kick();
 
-        const onAbort = () => { res.destroy(new Error('已取消')); };
+        const onAbort = () => { res.destroy(new Error(t('download.cancelled'))); };
         if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
         res.on('data', (c) => {
@@ -203,7 +204,7 @@ async function download(url, dest, opt = {}) {
         ws.on('finish', () => finish());
         ws.on('error', (e) => finish(e));
         res.on('error', (e) => finish(e));
-        res.on('close', () => { if (!res.complete) finish(new Error('连接被中断')); });
+        res.on('close', () => { if (!res.complete) finish(new Error(t('download.interrupted'))); });
       });
     } catch (e) {
       // 中断 / 超时 / 写盘失败：半截文件留着只会让下次续传继续失败
@@ -222,7 +223,7 @@ async function download(url, dest, opt = {}) {
     const actual = await sha256File(dest);
     if (actual.toLowerCase() !== expectSha256.toLowerCase()) {
       discardPartial(dest);
-      throw new Error(`校验失败：期望 ${expectSha256.slice(0, 12)}… 实际 ${actual.slice(0, 12)}…`);
+      throw new Error(t('download.checksumMismatch', [expectSha256.slice(0, 12), actual.slice(0, 12)]));
     }
   }
   return { file: dest, size: fs.statSync(dest).size };
@@ -309,11 +310,11 @@ async function downloadParallel(url, dest, opt = {}) {
     const res = await openStream(url, { headers: { Range: `bytes=${c.pos}-${c.end}` } });
     if (res.statusCode !== 206) {
       res.resume();
-      throw new Error(`分块请求被拒绝 HTTP ${res.statusCode}`);
+      throw new Error(t('download.chunkRequestRejected', [res.statusCode]));
     }
     if (!validRange(res, c.pos, c.end, total)) {
       res.resume();
-      throw new Error('服务器返回了不匹配的分块范围');
+      throw new Error(t('download.chunkRangeMismatch'));
     }
     await new Promise((resolve, reject) => {
       // 必须自己兜住「promise 永远不 settle」：res.destroy(err) 在某些情况下只发
@@ -325,17 +326,17 @@ async function downloadParallel(url, dest, opt = {}) {
         clearTimeout(idle);
         if (err) reject(err); else resolve();
       };
-      let idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
+      let idle = setTimeout(() => { res.destroy(); finish(new Error(t('download.stalled'))); }, idleMs);
       const kick = () => {
         clearTimeout(idle);
-        idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
+        idle = setTimeout(() => { res.destroy(); finish(new Error(t('download.stalled'))); }, idleMs);
       };
       res.on('data', (buf) => {
         // 服务器可能返回超出请求分块范围的数据，多出来的字节会写穿到别的分块，
         // 拼出一个静默损坏的包。宁可判失败换源，不能让它落盘。
         if (buf.length > c.end - c.pos + 1) {
           res.destroy();
-          return finish(new Error('分块响应超出请求范围'));
+          return finish(new Error(t('download.chunkOverflow')));
         }
         try {
           fs.writeSync(fd, buf, 0, buf.length, c.pos);
@@ -350,7 +351,7 @@ async function downloadParallel(url, dest, opt = {}) {
       });
       res.on('end', () => finish());
       res.on('error', (e) => finish(e));
-      res.on('close', () => finish(new Error('连接被中断')));
+      res.on('close', () => finish(new Error(t('download.interrupted'))));
     });
     return c.pos > c.end;
   };
@@ -362,10 +363,10 @@ async function downloadParallel(url, dest, opt = {}) {
           // eslint-disable-next-line no-await-in-loop
           const ok = await fetchChunk(c);
           if (ok) return;
-          throw new Error('分块未完整返回');
+          throw new Error(t('download.chunkIncomplete'));
         } catch (e) {
           c.tries += 1;
-          if (c.tries >= retries) throw new Error(`分块下载失败（${c.start}-${c.end}）：${e.message}`);
+          if (c.tries >= retries) throw new Error(t('download.chunkDownloadFailed', [c.start, c.end, e.message]));
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r) => setTimeout(r, 800 * c.tries));
         }
@@ -382,7 +383,7 @@ async function downloadParallel(url, dest, opt = {}) {
   onProgress({ got: size, total: size, percent: 100, speed: 0, eta: 0 });
   if (size !== total) {
     discardPartial(dest);
-    throw new Error(`下载不完整：${size}/${total} 字节`);
+    throw new Error(t('download.incomplete', [size, total]));
   }
   return { file: dest, size, parallel: n };
 }
@@ -401,7 +402,7 @@ async function downloadAny(urls, dest, opt = {}) {
       discardPartial(dest);
     }
   }
-  throw new Error(`所有下载源均失败：\n${errors.join('\n')}`);
+  throw new Error(t('download.allSourcesFailed', [errors.join('\n')]));
 }
 
 /**
@@ -427,7 +428,7 @@ async function downloadMulti(urls, dest, opt = {}) {
   const idleMs = Number(opt.idleMs) > 0 ? Number(opt.idleMs) : 20000;
 
   const list = [...new Set((urls || []).filter(Boolean))];
-  if (!list.length) throw new Error('没有可用的下载地址');
+  if (!list.length) throw new Error(t('download.noAddress'));
   if (list.length === 1) return downloadParallel(list[0], dest, opt);
 
   // 1) 并行探测：总大小 + 是否支持 Range
@@ -533,11 +534,11 @@ async function downloadMulti(urls, dest, opt = {}) {
     const res = await openStream(url, { headers: { Range: `bytes=${c.pos}-${c.end}` } });
     if (res.statusCode !== 206) {
       res.resume();
-      throw new Error(`分块被拒绝 HTTP ${res.statusCode}`);
+      throw new Error(t('download.chunkRejected', [res.statusCode]));
     }
     if (!validRange(res, c.pos, c.end, total)) {
       res.resume();
-      throw new Error('服务器返回了不匹配的分块范围');
+      throw new Error(t('download.chunkRangeMismatch'));
     }
     const startPos = c.pos;
     const startedAt = Date.now();
@@ -556,16 +557,16 @@ async function downloadMulti(urls, dest, opt = {}) {
         clearTimeout(idle);
         if (err) reject(err); else resolve();
       };
-      let idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
+      let idle = setTimeout(() => { res.destroy(); finish(new Error(t('download.stalled'))); }, idleMs);
       const kick = () => {
         clearTimeout(idle);
-        idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（无数据超时）')); }, idleMs);
+        idle = setTimeout(() => { res.destroy(); finish(new Error(t('download.stalledNoData'))); }, idleMs);
       };
       res.on('data', (buf) => {
         // 同上：拒绝超出请求范围的字节，避免静默写坏分块
         if (buf.length > c.end - c.pos + 1) {
           res.destroy();
-          return finish(new Error('分块响应超出请求范围'));
+          return finish(new Error(t('download.chunkOverflow')));
         }
         try {
           fs.writeSync(fd, buf, 0, buf.length, c.pos);
@@ -586,13 +587,13 @@ async function downloadMulti(urls, dest, opt = {}) {
             c.rotates = (c.rotates || 0) + 1;
             // 这里不推进 c.src：换源统一由下面的 catch 做，否则一次失败会跳两个源
             res.destroy();
-            finish(new Error(`该源速度过低（${(bps / 1024).toFixed(0)} KB/s），换源重试`));
+            finish(new Error(t('download.slowSource', [(bps / 1024).toFixed(0)])));
           }
         }
       });
       res.on('end', () => finish());
       res.on('error', (e) => finish(e));
-      res.on('close', () => finish(new Error('连接被中断')));
+      res.on('close', () => finish(new Error(t('download.interrupted'))));
     });
     return c.pos > c.end;
   };
@@ -607,7 +608,7 @@ async function downloadMulti(urls, dest, opt = {}) {
             saveMeta();
             return;
           }
-          throw new Error('分块未完整返回');
+          throw new Error(t('download.chunkIncomplete'));
         } catch (e) {
           c.tries += 1;
           if (c.tries >= retries) {
@@ -615,7 +616,7 @@ async function downloadMulti(urls, dest, opt = {}) {
             // 拼不出正确字节。整包 + 边车一起作废，下次干净重来。
             // 以前这里只 saveMeta() 保留，结果每次打开都从坏块继续 → 无限重下。
             discardPartial(dest);
-            throw new Error(`分块失败（${c.start}-${c.end}）：${e.message}`);
+            throw new Error(t('download.chunkFailed', [c.start, c.end, e.message]));
           }
           // 换一个源再试：一个镜像抽风不该拖垮整个下载
           c.src += 1;
@@ -636,7 +637,7 @@ async function downloadMulti(urls, dest, opt = {}) {
   tick(true);
   if (size !== total) {
     discardPartial(dest);
-    throw new Error(`下载不完整：${size}/${total} 字节`);
+    throw new Error(t('download.incomplete', [size, total]));
   }
   return { file: dest, size, parallel: n, sources: same.length, multi: true, resumed: resume };
 }
@@ -657,7 +658,7 @@ async function downloadAnyParallel(urls, dest, opt = {}) {
       discardPartial(dest);
     }
   }
-  throw new Error(`所有下载源均失败：\n${errors.join('\n')}`);
+  throw new Error(t('download.allSourcesFailed', [errors.join('\n')]));
 }
 
 module.exports = {

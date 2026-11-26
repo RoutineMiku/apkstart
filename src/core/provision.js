@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
+const { t } = require('./i18n');
 const store = require('./store');
 const doctor = require('./doctor');
 const { download, downloadAny, downloadAnyParallel, downloadMulti, head, discardPartial } = require('./download');
@@ -352,7 +353,7 @@ class Provisioner {
 
   async hypervisor() {
     if (this._hypervisor !== null) return this._hypervisor;
-    if (!IS_WIN) { this._hypervisor = { whpx: false, note: '非 Windows 平台' }; return this._hypervisor; }
+    if (!IS_WIN) { this._hypervisor = { whpx: false, note: t('provision.hv.notWindows') }; return this._hypervisor; }
     // 只做毫秒级的文件检查。真正"WHPX 是否可用"由 emulator -accel-check 给出权威答案，
     // 避免在这里拉起 PowerShell（冷启动 1-2 秒）拖慢每次状态轮询。
     const dll = fs.existsSync('C:\\Windows\\System32\\WinHvPlatform.dll');
@@ -361,8 +362,8 @@ class Provisioner {
       dll,
       hypervisorPresent: false,
       note: dll
-        ? '虚拟机平台组件存在（可用性由运行时引擎检测）'
-        : '未检测到 Windows Hypervisor Platform 组件：可在「启用或关闭 Windows 功能」中勾选「虚拟机平台」后重启',
+        ? t('provision.hv.present')
+        : t('provision.hv.missing'),
     };
     return this._hypervisor;
   }
@@ -1046,16 +1047,16 @@ class Provisioner {
     let result;
     if (usable) {
       const kind = hasAehdFile && /aehd/i.test(text) ? 'aehd' : 'whpx';
-      result = { ok: true, kind, note: kind === 'whpx' ? 'WHPX 硬件加速已启用' : 'AEHD 硬件加速已启用' };
+      result = { ok: true, kind, note: t(kind === 'whpx' ? 'provision.accel.whpx' : 'provision.accel.aehd') };
     } else if (/can't find the emulator-check|corrupted tools installation/i.test(text) && hasAehdFile) {
       // 部分精简运行时包会漏掉 emulator-check.exe，导致 -accel-check 无法给出结论。
       // 此时只要 AEHD 驱动已安装，就按「可用」处理：启动时 emulator 自己会挂载驱动，
       // 避免被误判成无加速而强行 -accel off（软件模拟在部分机器上会直接崩溃）。
-      result = { ok: true, kind: 'aehd', note: 'AEHD 硬件加速已启用（emulator-check 缺失，按驱动判定）' };
+      result = { ok: true, kind: 'aehd', note: t('provision.accel.aehdNoCheck') };
     } else if (hasAehdFile && /aehd/i.test(text) && !/ERROR_ACCESS_DENIED/i.test(text)) {
-      result = { ok: true, kind: 'aehd', note: 'AEHD 硬件加速已启用' };
+      result = { ok: true, kind: 'aehd', note: t('provision.accel.aehd') };
     } else if (hv.dll && /whpx/i.test(text) && !/error|denied/i.test(text)) {
-      result = { ok: true, kind: 'whpx', note: 'WHPX 硬件加速已启用' };
+      result = { ok: true, kind: 'whpx', note: t('provision.accel.whpx') };
     } else {
       result = {
         ok: false,
