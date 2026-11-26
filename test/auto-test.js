@@ -90,6 +90,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(v[v.length - 1].memoryMB <= 2048, '最后一档应降到最小内存');
     const keys = v.map((x) => `${x.gpu}|${x.accel}|${x.wipe}|${x.memoryMB}|${x.snapshot !== false}`);
     assert(new Set(keys).size === keys.length, '重试方案不应重复');
+    // 方案名要随界面语言走（开机日志和失败摘要都会把它显示给用户），且两种语言都不能是空的
+    const i18n = require('../src/core/i18n');
+    const labelsOf = (lang) => { i18n.setLocale(lang); try { return doctor.planVariants(p).map((x) => x.label); } finally { i18n.setLocale('zh-CN'); } };
+    const zhLabels = labelsOf('zh-CN');
+    const enLabels = labelsOf('en');
+    assert(zhLabels.every((l) => /[\u3400-\u9fff]/.test(l)), `简体中文方案名应保持中文：${zhLabels}`);
+    assert(enLabels.length === zhLabels.length && enLabels.every((l) => l && !/[\u3400-\u9fff]/.test(l)), `英文方案名不应含中文：${enLabels}`);
+    assert(zhLabels.some((l) => l.includes('硬件加速')) && enLabels.some((l) => /hardware acceleration/.test(l)), '第一档应标明硬件加速');
+    assert(zhLabels.some((l) => l.includes('保守冷启动')) && enLabels.some((l) => /cold start/i.test(l)), '最后一档应标明冷启动');
   });
 
   await test('镜像换盘不算换镜像：sysdir 换了目录不该清用户数据', () => {
@@ -2036,6 +2045,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(s.blockedReason('github') === null, '没出错的源不应被熔断');
     // 熔断期内的请求应被直接跳过（不再打网络）
     assert(/暂时跳过/.test(reason), `跳过原因要能看懂，实际：${reason}`);
+    // 英文界面下同样要能看懂（且不能残留中文）
+    const i18n = require('../src/core/i18n');
+    i18n.setLocale('en');
+    const reasonEn = s.blockedReason('gitee');
+    i18n.setLocale('zh-CN');
+    assert(/temporarily skipped/i.test(reasonEn) && !/[\u3400-\u9fff]/.test(reasonEn), `英文跳过原因要能看懂，实际：${reasonEn}`);
     s.reset();
     assert(s.blockedReason('gitee') === null, 'reset 后熔断应解除');
   });

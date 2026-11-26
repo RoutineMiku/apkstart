@@ -310,13 +310,13 @@ function planVariants(profile) {
   const safeGpu = gpus.find((g) => /software|swiftshader/.test(g)) || firstGpu;
   const ordered = [firstGpu, ...gpus.filter((g) => g !== firstGpu && /swiftshader|swangle/.test(g))].slice(0, 2);
   for (const gpu of ordered) {
-    out.push({ ...profile, gpu, label: `${gpu} / ${profile.accel === 'auto' ? '硬件加速' : '软件模拟'}`, wipe: false, snapshot: true });
+    out.push({ ...profile, gpu, label: t(profile.accel === 'auto' ? 'doctor.plan.hardware' : 'doctor.plan.software', [gpu]), wipe: false, snapshot: true });
   }
   out.push({
     ...profile,
     gpu: safeGpu,
     accel: 'off',
-    label: '关闭加速的软件模拟（慢，但兼容性最好）',
+    label: t('doctor.plan.noAccel'),
     wipe: false,
     snapshot: false,
   });
@@ -327,7 +327,7 @@ function planVariants(profile) {
     memoryMB: 2048,
     cores: 2,
     dataMB: Math.min(profile.dataMB, 2048),
-    label: '保守冷启动（最小内存 + 清快照）',
+    label: t('doctor.plan.conservative'),
     // 这里**绝对不能** wipe：以前写的是 wipe:true，而磁盘写满时每次尝试都会失败，
     // 于是连续重试把用户已装的应用和存档一起「清快照 + 清数据」了 ——
     // 「磁盘满了，结果打开 ApkStart 应用全没了」就是这么发生的。
