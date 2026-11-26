@@ -2304,6 +2304,47 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!fs.existsSync(dir), '失败时应清理临时目录');
   });
 
+  await test('启动时用本地备份自动重装：.xapk/.apks 拆分包要走 install-multiple', async () => {
+    const store = require('../src/core/store');
+    const { Installer } = require('../src/core/installer');
+    const { buildApkBytes, buildStoredZip } = require('./lib/make-apk');
+    const apk = buildApkBytes();
+    // finishInstall 把整个拆分包原样备份成 apks/<pkg>-<ver>.apk，并标记 bundle:true
+    const backup = path.join(TMP, 'com.example.test-7.apk');
+    fs.writeFileSync(backup, buildStoredZip([
+      { name: 'base.apk', data: apk },
+      { name: 'split_config.arm64_v8a.apk', data: apk },
+      { name: 'manifest.json', data: Buffer.from('{}') },
+    ]));
+    store.upsertApp({ package: 'com.example.test', label: 'Test', activity: null, apkPath: backup, bundle: true });
+    const calls = [];
+    const client = {
+      isInstalled: async () => false, // 快照与数据不一致：pm path 在、文件没了
+      install: async (f) => { calls.push(`install(${path.basename(f)})`); throw new Error('adb: failed to install'); },
+      installMultiple: async (files) => {
+        assert(files.every((f) => fs.existsSync(f)), '分片应已解出');
+        calls.push(`installMultiple(${files.length})`);
+      },
+      resetDisplayOverrides: async () => {},
+      grantRuntimePermissions: async () => {},
+      startApp: async () => {},
+      setOrientation: async () => {},
+      shell: async () => '1234',
+      forceStop: async () => {},
+      dismissPermissionDialog: async () => {},
+    };
+    const runtime = { ensure: async () => ({ ok: true, engine: 'stub', client }), touch: () => {} };
+    const logs = [];
+    const inst = new Installer(runtime, {});
+    try {
+      await inst.launch('com.example.test', { onLog: (m) => logs.push(m) });
+    } finally {
+      store.removeApp('com.example.test');
+    }
+    assert(calls.includes('installMultiple(2)') && !calls.some((c) => c.startsWith('install(')),
+      `拆分包备份应走 installMultiple，实际：${calls.join(', ')}；日志：${logs.join(' | ')}`);
+  });
+
   await test('materializeImages：展开 .img.gz、已展开跳过、坏镜像上报失败且不留半截', async () => {
     const zlib = require('zlib');
     const store = require('../src/core/store');

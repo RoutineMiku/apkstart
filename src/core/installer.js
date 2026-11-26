@@ -128,6 +128,13 @@ class Installer {
     return true;
   }
 
+  /** 用本地备份重装：拆分包（.apks/.xapk）的备份是整个压缩包，必须解开后走 install-multiple */
+  async reinstallFromBackup(client, app) {
+    if (!app.bundle) return client.install(app.apkPath);
+    const b = await parseBundle(app.apkPath);
+    try { return await client.installMultiple(b.files); } finally { b.cleanup(); }
+  }
+
   /** 切换镜像必须重启运行时；重启后把已装应用从本地 APK 备份重新灌回去 */
   async switchToCompat(onProgress) {
     const apps = store.getApps();
@@ -567,7 +574,7 @@ class Installer {
         onLog('应用文件缺失（快照与数据不一致），正在用本地备份自动重装…');
         // 重装前作废快照：否则旧快照的 packages.xml 仍说「已装」，下次又不对
         try { this.runtime.emulator?.invalidateSnapshot(); } catch (_) { /* ignore */ }
-        await rt.client.install(app.apkPath).catch((e) => onLog(`自动安装失败：${e.message}`));
+        await this.reinstallFromBackup(rt.client, app).catch((e) => onLog(`自动安装失败：${e.message}`));
       }
     }
     // 观察 25 秒并要求「连续存活 5 秒」才算启动成功。
@@ -679,7 +686,7 @@ class Installer {
           await this.ensureCompatImage((m) => onLog(m.message || ''));
           const rt2 = await this.switchToCompat((m) => onLog(m.message || ''));
           if (app && app.apkPath && fs.existsSync(app.apkPath)) {
-            try { await rt2.client.install(app.apkPath); } catch (_) { /* 保留原包 */ }
+            try { await this.reinstallFromBackup(rt2.client, app); } catch (_) { /* 保留原包 */ }
           }
           await rt2.client.startApp(app ? app.package : pkg, app ? app.activity : null, {
             freeform: settings.freeform,
