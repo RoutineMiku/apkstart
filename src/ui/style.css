@@ -1008,3 +1008,10 @@ kbd {
 
 /* 行内按钮不要折行（空间紧张时「立即扩容」会被拆成两行） */
 .row .btn { white-space: nowrap; flex: 0 0 auto; }
+
+/* 英文界面：break-all 是给中文和长路径用的，英文单词会被拦腰截断。
+   换成按词换行，长路径/长 URL 仍可在任意处断开。 */
+html:lang(en) .toast .t-body,
+html:lang(en) .step .d,
+html:lang(en) .dbg-item .dbg-detail,
+html:lang(en) .about-links a { word-break: normal; overflow-wrap: break-word; }

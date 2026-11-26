@@ -690,7 +690,10 @@ class EmulatorEngine {
     // 时，一次解析能拖到几百毫秒，表现为「页面转圈半天才开始加载」。给一份国内公共
     // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景）。
     if (this.settings?.engine?.fastDns !== false) {
-      args.push('-dns-server', '223.5.5.5,119.29.29.29');
+      // 中文界面用国内公共 DNS；英文界面（多半在国外）用 Cloudflare / Google
+      let en = false;
+      try { en = require('../i18n').getLang() === 'en-US'; } catch (_) { /* ignore */ }
+      args.push('-dns-server', en ? '1.1.1.1,8.8.8.8' : '223.5.5.5,119.29.29.29');
     }
     if (lcd) args.push('-skin', `${lcd.w}x${lcd.h}`);
     if (headless) {

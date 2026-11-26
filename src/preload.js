@@ -1,6 +1,14 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// 界面语言：同步拿一次主进程决定的语言，页面里的 ui/i18n-dom.js 用它翻译文字
+try {
+  const i18n = require('./i18n');
+  const lang = ipcRenderer.sendSync('i18n:get');
+  i18n.setLang(lang);
+  contextBridge.exposeInMainWorld('apkstartI18n', { lang: i18n.getLang(), t: (s) => i18n.t(String(s)) });
+} catch (_) { /* 翻译不可用时界面保持中文 */ }
+
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('apkstart', {

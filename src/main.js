@@ -6,6 +6,17 @@
 const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage, screen, globalShortcut } = require('electron');
 const fs = require('fs');
 const path = require('path');
+// 界面语言：先按系统区域设置猜一次（命令行路径可能在 ready 之前就弹对话框），
+// whenReady 里再用 Electron 的系统语言校正。见 src/i18n/index.js。
+const i18n = require('./i18n');
+require('./i18n/electron').install(require('electron'));
+function applyUiLanguage(systemLocale) {
+  let pref = 'auto';
+  try { pref = require('./core/store').getSettings().language || 'auto'; } catch (_) { /* ignore */ }
+  return i18n.setLang(i18n.resolveLang(pref, systemLocale));
+}
+applyUiLanguage(Intl.DateTimeFormat().resolvedOptions().locale);
+ipcMain.on('i18n:get', (e) => { e.returnValue = i18n.getLang(); });
 
 const store = require('./core/store');
 const { Runtime } = require('./core/engine');
@@ -928,7 +939,7 @@ const manualAutoAt = new Map();
  * 或批量安装失败时把用户淹没在手册窗口里。
  */
 function openManual(payload = {}) {
-  const target = manual.resolve(payload);
+  const target = manual.resolve(payload, i18n.getLang());
   const now = Date.now();
   const last = manualAutoAt.get(target.id) || 0;
   if (target.reason === 'fix-failed' && now - last < 60000) {
@@ -970,8 +981,8 @@ function openManual(payload = {}) {
         if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       });
     }
-    manualWindow.setTitle(`ApkStart 使用手册 · ${target.title}`);
-    manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
+    manualWindow.setTitle(i18n.t(`ApkStart 使用手册 · ${target.title}`));
+    manualWindow.loadFile(path.join(__dirname, 'ui', target.file), { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
       manualWindow.show();
@@ -992,6 +1003,7 @@ function notify(title, body) {
   if (store.getSettings().notifyOnInstall === false) return;
   try {
     const { Notification } = require('electron');
+    title = i18n.t(title); body = i18n.t(body);
     if (Notification.isSupported()) new Notification({ title, body, icon: nativeImage.createFromBuffer(ICON_PNG) }).show();
   } catch (_) { /* ignore */ }
 }
@@ -1763,6 +1775,16 @@ function registerIpc() {
   ipcMain.handle('settings:set', (_e, rawPatch) => {
     const patch = sanitizeResourcePatch(rawPatch);
     const next = store.saveSettings(patch);
+    if (patch && 'language' in patch) {
+      // 换了界面语言：重新加载所有页面，托盘菜单由定时 refresh 跟上
+      applyUiLanguage((app.getPreferredSystemLanguages && app.getPreferredSystemLanguages()[0]) || app.getLocale());
+      if (tray) tray.setToolTip('ApkStart — 安卓应用运行器');
+      setTimeout(() => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          try { if (!w.isDestroyed()) w.webContents.reload(); } catch (_) { /* ignore */ }
+        }
+      }, 150);
+    }
     if (patch && patch.autoStart !== undefined) applyAutoStart();
     if (patch && patch.display && appWin && appWin.isOpen) {
       // 竖屏基准尺寸变了：只影响后续打开的窗口大小，不打断正在跑的应用
@@ -2929,6 +2951,10 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store.ensureDirs();
+    try {
+      const pref = (app.getPreferredSystemLanguages && app.getPreferredSystemLanguages()[0]) || app.getLocale();
+      applyUiLanguage(pref);
+    } catch (_) { /* ignore */ }
     /**
      * 记下「当前是谁在管这台运行时」。
      *

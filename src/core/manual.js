@@ -9,23 +9,26 @@
  * 用户手点的「教程」按钮。三路都汇到 resolve()，保证落到同一节。
  */
 
-/** 章节 id 与 src/ui/manual.html 的锚点一一对应（由 docs/build-manual-html.py 生成） */
+/**
+ * 章节 id 与 src/ui/manual.html 的锚点一一对应（由 docs/build-manual-html.py 生成）。
+ * anchorEn 对应英文译本 src/ui/manual.en-US.html（界面语言为 English 时打开）。
+ */
 const TOPICS = Object.freeze({
-  overview: { id: 'overview', anchor: 'apkstart-产品使用手册与问题解决方案', title: '使用手册 · 目录' },
-  accel: { id: 'accel', anchor: '6-1-提示-未启用硬件加速-开机很慢', title: '未启用硬件加速 / 开机很慢' },
-  install: { id: 'install', anchor: '6-2-安装失败-install_failed_', title: '安装失败（INSTALL_FAILED_*）' },
-  arm: { id: 'arm', anchor: '6-3-系统镜像没有-arm-转译层-arm-应用装不上或闪退', title: 'ARM 转译层 / ARM 应用装不上' },
-  adb: { id: 'adb', anchor: '6-4-adb-未授权-允许-usb-调试', title: 'adb 未授权（允许 USB 调试）' },
-  startup: { id: 'startup', anchor: '6-5-双击图标没反应-一直转圈-出现带旋转按钮的窗口', title: '打不开 / 带旋转按钮的窗口' },
-  other: { id: 'other', anchor: '6-6-其它启动类问题速查表', title: '其它启动类问题速查表' },
-  sound: { id: 'sound', anchor: '6-7-应用没有声音-声音很小', title: '应用没有声音 / 声音很小' },
-  dll: { id: 'dll', anchor: '6-8-商店版启动失败-0xc0000135-dll-加载失败', title: '商店版启动失败 / 0xC0000135（DLL 加载失败）' },
-  mic: { id: 'mic', anchor: '6-9-应用用不到麦克风-无法语音通话录音', title: '应用用不到麦克风 / 无法语音通话录音' },
-  gpu: { id: 'gpu', anchor: '6-10-独显-核显渲染-显卡偏好', title: '独显 / 核显渲染（显卡偏好）' },
-  diagnose: { id: 'diagnose', anchor: '5-4-内置使用手册与自动教程', title: '内置手册与自动教程' },
-  settings: { id: 'settings', anchor: '3-6-设置页导航', title: '设置页导航' },
-  storage: { id: 'storage', anchor: '8-数据与目录说明', title: '数据与目录说明' },
-  network: { id: 'network', anchor: '5-2-自动检测-自动-debug', title: '自动检测与网络修复' },
+  overview: { id: 'overview', anchor: 'apkstart-产品使用手册与问题解决方案', anchorEn: 'apkstart-user-manual-and-troubleshooting-guide', title: '使用手册 · 目录' },
+  accel: { id: 'accel', anchor: '6-1-提示-未启用硬件加速-开机很慢', anchorEn: '6-1-hardware-acceleration-not-enabled-slow-startup', title: '未启用硬件加速 / 开机很慢' },
+  install: { id: 'install', anchor: '6-2-安装失败-install_failed_', anchorEn: '6-2-install-failed-install_failed_', title: '安装失败（INSTALL_FAILED_*）' },
+  arm: { id: 'arm', anchor: '6-3-系统镜像没有-arm-转译层-arm-应用装不上或闪退', anchorEn: '6-3-no-arm-translation-layer-arm-apps-won-t-install-or-crash', title: 'ARM 转译层 / ARM 应用装不上' },
+  adb: { id: 'adb', anchor: '6-4-adb-未授权-允许-usb-调试', anchorEn: '6-4-adb-unauthorized-allow-usb-debugging', title: 'adb 未授权（允许 USB 调试）' },
+  startup: { id: 'startup', anchor: '6-5-双击图标没反应-一直转圈-出现带旋转按钮的窗口', anchorEn: '6-5-nothing-happens-on-double-click-endless-spinner-a-window-with-a-rotate-button', title: '打不开 / 带旋转按钮的窗口' },
+  other: { id: 'other', anchor: '6-6-其它启动类问题速查表', anchorEn: '6-6-quick-reference-for-other-startup-problems', title: '其它启动类问题速查表' },
+  sound: { id: 'sound', anchor: '6-7-应用没有声音-声音很小', anchorEn: '6-7-no-sound-in-apps-sound-is-very-quiet', title: '应用没有声音 / 声音很小' },
+  dll: { id: 'dll', anchor: '6-8-商店版启动失败-0xc0000135-dll-加载失败', anchorEn: '6-8-store-version-won-t-start-0xc0000135-dll-failed-to-load', title: '商店版启动失败 / 0xC0000135（DLL 加载失败）' },
+  mic: { id: 'mic', anchor: '6-9-应用用不到麦克风-无法语音通话录音', anchorEn: '6-9-apps-can-t-use-the-microphone-voice-calls-and-recording-don-t-work', title: '应用用不到麦克风 / 无法语音通话录音' },
+  gpu: { id: 'gpu', anchor: '6-10-独显-核显渲染-显卡偏好', anchorEn: '6-10-discrete-vs-integrated-gpu-rendering-graphics-preference', title: '独显 / 核显渲染（显卡偏好）' },
+  diagnose: { id: 'diagnose', anchor: '5-4-内置使用手册与自动教程', anchorEn: '5-4-built-in-manual-and-automatic-guides', title: '内置手册与自动教程' },
+  settings: { id: 'settings', anchor: '3-6-设置页导航', anchorEn: '3-6-settings-navigation', title: '设置页导航' },
+  storage: { id: 'storage', anchor: '8-数据与目录说明', anchorEn: '8-data-and-folders', title: '数据与目录说明' },
+  network: { id: 'network', anchor: '5-2-自动检测-自动-debug', anchorEn: '5-2-automatic-detection-auto-debug', title: '自动检测与网络修复' },
 });
 
 // 反模拟 / 安全校验导致的启动退出也归到 6.3：该章节末尾已说明这类应用属于限制。
@@ -108,9 +111,9 @@ function topicForError(text) {
 
 /**
  * 统一入口：渲染层只传它手里有的东西（code / error / topic），
- * 主进程永远拿回一个受信任的章节锚点。
+ * 主进程永远拿回一个受信任的章节锚点。lang 为 'en-US' 时给英文手册的文件与锚点。
  */
-function resolve(payload) {
+function resolve(payload, lang) {
   const p = typeof payload === 'string' ? { error: payload } : (payload || {});
   let topic = TOPICS.overview;
   if (p.topic && TOPICS[p.topic]) topic = TOPICS[p.topic];
@@ -120,9 +123,11 @@ function resolve(payload) {
       : (p.issue || { code: p.code, title: p.title, detail: p.detail });
     topic = topicForIssue(issue);
   } else if (p.error || p.message || p.text) topic = topicForError(p.error || p.message || p.text);
+  const en = lang === 'en-US';
   return {
     id: topic.id,
-    anchor: topic.anchor,
+    anchor: en ? topic.anchorEn : topic.anchor,
+    file: en ? 'manual.en-US.html' : 'manual.html',
     title: topic.title,
     reason: String(p.reason || ''),
   };
