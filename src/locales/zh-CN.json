@@ -1260,5 +1260,8 @@
   "installer.exitedRetry": "应用启动后退出（第 {0} 次），正在自动重试…",
   "installer.exitedReset": "应用连续退出，正在重置应用数据后重试…",
   "installer.unstable": "应用启动后立即退出，已自动重试并重置应用数据仍未成功",
-  "installer.armDisabledSwitching": "当前运行时未启用 ARM 翻译层，正在自动切换兼容镜像后重试…"
+  "installer.armDisabledSwitching": "当前运行时未启用 ARM 翻译层，正在自动切换兼容镜像后重试…",
+  "provision.accel.whpx": "WHPX 硬件加速已启用",
+  "provision.accel.aehd": "AEHD 硬件加速已启用",
+  "provision.accel.aehdNoCheck": "AEHD 硬件加速已启用（emulator-check 缺失，按驱动判定）"
 }

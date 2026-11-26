@@ -1260,5 +1260,8 @@
   "installer.exitedRetry": "The app exited after launch (attempt {0}); retrying automatically…",
   "installer.exitedReset": "The app keeps exiting; resetting its data and retrying…",
   "installer.unstable": "The app exits right after launch; automatic retries and resetting its data did not help",
-  "installer.armDisabledSwitching": "The current runtime has no ARM translation layer enabled; switching to the compatibility image automatically and retrying…"
+  "installer.armDisabledSwitching": "The current runtime has no ARM translation layer enabled; switching to the compatibility image automatically and retrying…",
+  "provision.accel.whpx": "WHPX hardware acceleration enabled",
+  "provision.accel.aehd": "AEHD hardware acceleration enabled",
+  "provision.accel.aehdNoCheck": "AEHD hardware acceleration enabled (emulator-check missing; judged from the driver)"
 }
