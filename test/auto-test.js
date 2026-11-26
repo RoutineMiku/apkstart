@@ -2457,12 +2457,15 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 冷启动都误报；而以前的补救建议是「重置安卓数据」（会删掉已装应用）。
     assert(/checkNetwork\('', \{ waitMs: \d+, interval: \d+ \}\)/.test(emuJs),
       '开机后的网络体检要给等待窗口，不能查一次就下结论');
-    const boot = emuJs.slice(emuJs.indexOf('运行时就绪'));
+    const boot = emuJs.slice(emuJs.indexOf('emulator.boot.ready'));
     const warn = boot.slice(0, 4000);
     // 只看代码行：上面解释「以前这里建议重置数据」的注释不算
     const warnCode = warn.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    assert(!/重置安卓数据/.test(warnCode), '这条提示不能建议「重置安卓数据」（会丢已装应用）');
-    assert(/暂时没连上网/.test(warnCode), '要改成不吓人、不误导的说法');
+    assert(/emulator\.boot\.noNetwork/.test(warnCode), '开机后的网络体检要有提示');
+    // 提示文案已移到语言包：以简体中文原文为准检查
+    const warnText = require('../src/core/i18n').getCatalog('zh-CN')['emulator.boot.noNetwork'];
+    assert(!/重置安卓数据/.test(warnCode + warnText), '这条提示不能建议「重置安卓数据」（会丢已装应用）');
+    assert(/暂时没连上网/.test(warnText), '要改成不吓人、不误导的说法');
   });
 
   await test('开机时那个控制台黑窗要用高频通道压掉', () => {
