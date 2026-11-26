@@ -176,5 +176,36 @@ test('0xC0000135 不再被一刀切成杀毒删 DLL / 缺 VC++', () => {
   assert(/原因待查/.test(JSON.parse(zh)['emulator.exit.dllLoad']) && /具体原因待定位/.test(zh), '应标明原因待定位');
 });
 
+console.log('\n[内置手册 · 英文版]');
+const htmlEn = fs.readFileSync(path.join(ROOT, 'src/ui/manual.en.html'), 'utf8');
+const idsOf = (s) => [...s.matchAll(/\sid="([^"]*)"/g)].map((m) => m[1]);
+const tagsOf = (s) => [...s.matchAll(/<\/?([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[0].toLowerCase());
+
+test('English manual has the same ids, in the same order, as the Chinese manual', () => {
+  assert(JSON.stringify(idsOf(htmlEn)) === JSON.stringify(idsOf(html)), 'id lists differ');
+  for (const topic of Object.values(manual.TOPICS)) {
+    assert(htmlEn.includes(`id="${topic.anchor}"`), `${topic.id} anchor ${topic.anchor} missing in manual.en.html`);
+  }
+});
+
+test('English manual has the same tag sequence as the Chinese manual', () => {
+  assert(JSON.stringify(tagsOf(htmlEn)) === JSON.stringify(tagsOf(html)), 'tag sequences differ');
+});
+
+test('English manual has no Han characters or CJK punctuation outside id/href anchor slugs', () => {
+  const text = htmlEn.replace(/\sid="[^"]*"/g, ' id=""').replace(/\shref="#[^"]*"/g, ' href="#"');
+  assert(!/[㐀-䶿一-鿿豈-﫿]/.test(text), 'Han characters found');
+  assert(!/[　-〿＀-￯]/.test(text), 'CJK or full-width punctuation found');
+});
+
+test('manual file follows the UI locale and main.js uses it with a zh fallback', () => {
+  assert(manual.fileForLocale('zh-CN') === 'manual.html', 'zh-CN should use manual.html');
+  for (const l of ['en', 'pt-BR']) assert(manual.fileForLocale(l) === 'manual.en.html', `${l} should use manual.en.html`);
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main.js'), 'utf8');
+  assert(/manual\.fileForLocale\(resolveLocale\(store\.getSettings\(\)\.language, app\.getLocale\(\)\)\)/.test(main),
+    'main.js does not pick the manual file from the resolved locale');
+  assert(/existsSync\(manualFile\)[\s\S]{0,80}'manual\.html'/.test(main), 'main.js lacks the manual.html fallback');
+});
+
 console.log(`\n内置手册测试：${passed} 通过，${failed} 失败\n`);
 process.exitCode = failed ? 1 : 0;

@@ -972,7 +972,9 @@ function openManual(payload = {}) {
       });
     }
     manualWindow.setTitle(t('v062.m0007', [target.title]));
-    manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
+    let manualFile = path.join(__dirname, 'ui', manual.fileForLocale(resolveLocale(store.getSettings().language, app.getLocale())));
+    if (!fs.existsSync(manualFile)) manualFile = path.join(__dirname, 'ui', 'manual.html');
+    manualWindow.loadFile(manualFile, { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
       manualWindow.show();

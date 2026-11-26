@@ -128,4 +128,9 @@ function resolve(payload) {
   };
 }
 
-module.exports = { TOPICS, ISSUE_MAP, topicForIssue, topicForError, topicByText, resolve };
+/** 手册文件：简体中文用 manual.html，其余界面语言（含 pt-BR）用英文版 manual.en.html */
+function fileForLocale(locale) {
+  return locale === 'zh-CN' ? 'manual.html' : 'manual.en.html';
+}
+
+module.exports = { TOPICS, ISSUE_MAP, topicForIssue, topicForError, topicByText, resolve, fileForLocale };
