@@ -1031,5 +1031,8 @@
   "v064.m0034": "1 · Equilibrado (recomendado)",
   "v064.m0035": "2 · Alternância entre apps mais estável",
   "v064.m0036": "3 · Máximo de apps mantidos",
-  "v064.m0037": "No modo de vários apps, os apps em segundo plano além desse limite são suspensos para liberar memória, preservando os dados para alternar rapidamente."
+  "v064.m0037": "No modo de vários apps, os apps em segundo plano além desse limite são suspensos para liberar memória, preservando os dados para alternar rapidamente.",
+  "settings.dnsServers": "Servidores DNS",
+  "settings.dnsServersCn": "DNS públicos da China (Alibaba / Tencent)",
+  "settings.dnsServersNote": "Usados quando a aceleração de rede está ativada. Fora da China ou com VPN estrangeira, Cloudflare ou Google resolvem mais rápido. Aplica-se na próxima inicialização do runtime Android."
 }

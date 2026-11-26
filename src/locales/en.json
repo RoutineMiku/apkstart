@@ -1031,5 +1031,8 @@
   "v064.m0034": "1 · Balanced (recommended)",
   "v064.m0035": "2 · More stable app switching",
   "v064.m0036": "3 · Maximum app retention",
-  "v064.m0037": "In multiple-app mode, background apps beyond this limit are suspended to free memory while preserving data for fast switching."
+  "v064.m0037": "In multiple-app mode, background apps beyond this limit are suspended to free memory while preserving data for fast switching.",
+  "settings.dnsServers": "DNS servers",
+  "settings.dnsServersCn": "China public DNS (Alibaba / Tencent)",
+  "settings.dnsServersNote": "Used when Network acceleration is on. Outside China or with an overseas VPN, Cloudflare or Google resolve faster. Applies the next time the Android runtime starts."
 }

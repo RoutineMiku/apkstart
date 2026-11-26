@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { resolveLocale, format, getCatalog, setLocale, t } = require('../src/core/i18n');
-const locales = ['zh-CN', 'en', 'pt-BR'];
+const locales = ['zh-CN', 'en', 'pt-BR', 'ru'];
 const source = getCatalog('zh-CN');
 const parameters = (s) => [...s.matchAll(/\{\d+\}/g)].map(m => m[0]).sort();
 for (const locale of locales) {
@@ -21,6 +21,8 @@ assert.equal(resolveLocale('auto', 'pt_PT'), 'pt-BR');
 assert.equal(resolveLocale('auto', 'zh-TW'), 'zh-CN');
 assert.equal(resolveLocale('auto', 'en-GB'), 'en');
 assert.equal(resolveLocale('auto', 'de-DE'), 'en');
+assert.equal(resolveLocale('auto', 'ru-RU'), 'ru');
+assert.equal(resolveLocale('auto', 'ru'), 'ru');
 assert.equal(resolveLocale('en', 'pt-BR'), 'en');
 assert.equal(resolveLocale('invalid', 'pt-BR'), 'pt-BR');
 assert.equal(format('{0} / {1}', ['$&', '{0}']), '$& / {0}');

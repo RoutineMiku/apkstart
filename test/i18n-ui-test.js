@@ -23,7 +23,7 @@ app.whenReady().then(async () => {
   const waitReady = () => win.webContents.executeJavaScript(`new Promise((resolve, reject) => { let tries = 0; const tick = () => { if (window.i18n && document.documentElement.lang === '${locale}' && document.querySelector('.card')) resolve(true); else if (++tries > 100) reject(new Error('UI did not initialize')); else setTimeout(tick, 50); }; tick(); })`);
   try {
     await win.loadFile(path.join(sourceRoot, 'ui/index.html'));
-    for (const next of ['pt-BR', 'en', 'zh-CN', 'pt-BR']) {
+    for (const next of ['pt-BR', 'en', 'ru', 'zh-CN', 'pt-BR']) {
       if (locale !== next) {
         const loaded = new Promise(resolve => win.webContents.once('did-finish-load', resolve));
         await win.webContents.executeJavaScript(`document.getElementById('setLanguage').value = '${next}'; document.getElementById('setLanguage').dispatchEvent(new Event('change')); true;`);
@@ -110,7 +110,7 @@ app.whenReady().then(async () => {
       nodeIntegration: false, sandbox: false, additionalArguments: ['--splash-test'],
     } });
     splash.webContents.on('console-message', (_event, level, message) => { if (level === 3) errors.push(message); });
-    for (const next of ['pt-BR', 'en', 'zh-CN']) {
+    for (const next of ['pt-BR', 'en', 'ru', 'zh-CN']) {
       locale = next;
       for (const isBundled of [false, true]) {
         bundled = isBundled;
