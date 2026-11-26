@@ -38,6 +38,24 @@ test('每个主题的锚点都存在于随包 HTML', () => {
   }
 });
 
+test('英文手册：每个主题的 anchorEn 都存在，目录内链不断', () => {
+  const en = fs.readFileSync(path.join(ROOT, 'src/ui/manual.en-US.html'), 'utf8');
+  const ids = new Set([...en.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+  for (const topic of Object.values(manual.TOPICS)) {
+    assert(topic.anchorEn && ids.has(topic.anchorEn), `${topic.id} 的英文锚点 ${topic.anchorEn} 在英文手册里不存在`);
+  }
+  const broken = [...en.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]).filter((h) => !ids.has(h));
+  assert(!broken.length, `英文手册有断开的内链：${broken.slice(0, 3).join(' | ')}`);
+  assert(en.includes('v0.6.4') && en.includes('lang="en-US"'), '英文手册应标注 v0.6.4 与 lang');
+});
+
+test('resolve 按界面语言给手册文件与锚点', () => {
+  const zh = manual.resolve({ issue: 'audio.disabled' });
+  const en = manual.resolve({ issue: 'audio.disabled' }, 'en-US');
+  assert(zh.file === 'manual.html' && zh.anchor === manual.TOPICS.sound.anchor, '中文应打开 manual.html');
+  assert(en.file === 'manual.en-US.html' && en.anchor === manual.TOPICS.sound.anchorEn, '英文应打开 manual.en-US.html');
+});
+
 test('手册正文包含 0.6.4 版本号与声音章节', () => {
   assert(html.includes('v0.6.4'), '手册应标注 v0.6.4');
   assert(html.includes('应用没有声音'), '手册应有声音排障章节');
@@ -138,7 +156,8 @@ test('主进程注册了 manual:open，preload 暴露了 openManual', () => {
   const preload = fs.readFileSync(path.join(ROOT, 'src', 'preload.js'), 'utf8');
   assert(/ipcMain\.handle\('manual:open'/.test(main), '主进程未注册 manual:open');
   assert(/openManual:\s*\(payload\)/.test(preload), 'preload 未暴露 openManual');
-  assert(/new BrowserWindow\([\s\S]*manual\.html/.test(main), '主进程未创建手册窗口');
+  // 手册文件按界面语言由 manual.resolve() 给出（manual.html / manual.en-US.html）
+  assert(/new BrowserWindow\([\s\S]*loadFile\(path\.join\(__dirname, 'ui', target\.file\)/.test(main), '主进程未创建手册窗口');
 });
 
 test('标题栏 / 关于页都有手册入口', () => {

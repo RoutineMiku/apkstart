@@ -939,7 +939,7 @@ const manualAutoAt = new Map();
  * 或批量安装失败时把用户淹没在手册窗口里。
  */
 function openManual(payload = {}) {
-  const target = manual.resolve(payload);
+  const target = manual.resolve(payload, i18n.getLang());
   const now = Date.now();
   const last = manualAutoAt.get(target.id) || 0;
   if (target.reason === 'fix-failed' && now - last < 60000) {
@@ -982,7 +982,7 @@ function openManual(payload = {}) {
       });
     }
     manualWindow.setTitle(i18n.t(`ApkStart 使用手册 · ${target.title}`));
-    manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
+    manualWindow.loadFile(path.join(__dirname, 'ui', target.file), { hash: target.anchor });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
       manualWindow.show();

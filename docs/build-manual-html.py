@@ -8,14 +8,29 @@ import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SRC = os.path.join(HERE, 'USER-MANUAL.md')
-OUT = os.path.join(HERE, 'ApkStart-用户手册.html')
+# 每种语言一份：中文是原文；英文译本 USER-MANUAL.en.md 在界面语言为 English 时打开。
 # 0.6.2 起手册内嵌进软件：同一份 HTML 也要落到 src/ui，随包分发。
 # 主进程打开的就是这一份，绝不依赖 docs/ 或外部文件。
-APP_OUT = os.path.join(ROOT, 'src', 'ui', 'manual.html')
-
-with open(SRC, encoding='utf-8') as f:
-    lines = f.read().split('\n')
+BUILDS = [
+    {
+        'lang': 'zh-CN',
+        'src': os.path.join(HERE, 'USER-MANUAL.md'),
+        'outs': [os.path.join(HERE, 'ApkStart-用户手册.html'), os.path.join(ROOT, 'src', 'ui', 'manual.html')],
+        'title': 'ApkStart 产品使用手册与问题解决方案',
+        'toc': '目录',
+        'search': '筛选目录（Ctrl+F 全文搜索）',
+        'print': '打印 / 存为 PDF',
+    },
+    {
+        'lang': 'en-US',
+        'src': os.path.join(HERE, 'USER-MANUAL.en.md'),
+        'outs': [os.path.join(HERE, 'ApkStart-User-Manual.html'), os.path.join(ROOT, 'src', 'ui', 'manual.en-US.html')],
+        'title': 'ApkStart User Manual and Troubleshooting Guide',
+        'toc': 'Contents',
+        'search': 'Filter (Ctrl+F to search all)',
+        'print': 'Print / save as PDF',
+    },
+]
 
 
 def inline(s):
@@ -37,125 +52,120 @@ def slug(text, used):
     return s
 
 
-out = []
-toc = []
-used = set()
-i = 0
-n = len(lines)
-in_code = False
-code_buf = []
+def render(lines):
+    out = []
+    toc = []
+    used = set()
+    i = 0
+    n = len(lines)
+    in_code = False
+    code_buf = []
 
-while i < n:
-    line = lines[i]
+    while i < n:
+        line = lines[i]
 
-    # 代码块
-    if line.startswith('```'):
-        if not in_code:
-            in_code = True
-            code_buf = []
-        else:
-            out.append('<pre><code>' + html.escape('\n'.join(code_buf)) + '</code></pre>')
-            in_code = False
-        i += 1
-        continue
-    if in_code:
-        code_buf.append(line)
-        i += 1
-        continue
-
-    # 水平线
-    if re.match(r'^---+\s*$', line):
-        out.append('<hr/>')
-        i += 1
-        continue
-
-    # 标题
-    m = re.match(r'^(#{1,4})\s+(.*)$', line)
-    if m:
-        lvl = len(m.group(1))
-        text = m.group(2).strip()
-        anchor = slug(text, used)
-        if lvl in (2, 3):
-            toc.append((lvl, anchor, text))
-        out.append('<h%d id="%s">%s</h%d>' % (lvl, anchor, inline(text), lvl))
-        i += 1
-        continue
-
-    # 表格
-    if line.strip().startswith('|') and i + 1 < n and re.match(r'^\s*\|?[\s:\-|]+\|?\s*$', lines[i + 1]):
-        def cells(row):
-            return [c.strip() for c in row.strip().strip('|').split('|')]
-        header = cells(line)
-        i += 2
-        rows = []
-        while i < n and lines[i].strip().startswith('|'):
-            rows.append(cells(lines[i]))
+        # 代码块
+        if line.startswith('```'):
+            if not in_code:
+                in_code = True
+                code_buf = []
+            else:
+                out.append('<pre><code>' + html.escape('\n'.join(code_buf)) + '</code></pre>')
+                in_code = False
             i += 1
-        t = ['<div class="tw"><table><thead><tr>']
-        t += ['<th>' + inline(c) + '</th>' for c in header]
-        t.append('</tr></thead><tbody>')
-        for r in rows:
-            t.append('<tr>')
-            t += ['<td>' + inline(c) + '</td>' for c in r]
-            t.append('</tr>')
-        t.append('</tbody></table></div>')
-        out.append(''.join(t))
-        continue
-
-    # 引用
-    if line.startswith('> '):
-        q = []
-        while i < n and lines[i].startswith('>'):
-            q.append(lines[i].lstrip('>').strip())
+            continue
+        if in_code:
+            code_buf.append(line)
             i += 1
-        out.append('<blockquote>' + inline(' '.join(q)) + '</blockquote>')
-        continue
+            continue
 
-    # 有序列表
-    if re.match(r'^\d+\.\s+', line):
-        items = []
-        while i < n and re.match(r'^\d+\.\s+', lines[i]):
-            items.append(re.sub(r'^\d+\.\s+', '', lines[i]))
+        # 水平线
+        if re.match(r'^---+\s*$', line):
+            out.append('<hr/>')
             i += 1
-        out.append('<ol>' + ''.join('<li>' + inline(x) + '</li>' for x in items) + '</ol>')
-        continue
+            continue
 
-    # 无序列表
-    if re.match(r'^\s*[-*]\s+', line):
-        items = []
-        while i < n and re.match(r'^\s*[-*]\s+', lines[i]):
-            items.append(re.sub(r'^\s*[-*]\s+', '', lines[i]))
+        # 标题
+        m = re.match(r'^(#{1,4})\s+(.*)$', line)
+        if m:
+            lvl = len(m.group(1))
+            text = m.group(2).strip()
+            anchor = slug(text, used)
+            if lvl in (2, 3):
+                toc.append((lvl, anchor, text))
+            out.append('<h%d id="%s">%s</h%d>' % (lvl, anchor, inline(text), lvl))
             i += 1
-        out.append('<ul>' + ''.join('<li>' + inline(x) + '</li>' for x in items) + '</ul>')
-        continue
+            continue
 
-    # 空行
-    if not line.strip():
+        # 表格
+        if line.strip().startswith('|') and i + 1 < n and re.match(r'^\s*\|?[\s:\-|]+\|?\s*$', lines[i + 1]):
+            def cells(row):
+                return [c.strip() for c in row.strip().strip('|').split('|')]
+            header = cells(line)
+            i += 2
+            rows = []
+            while i < n and lines[i].strip().startswith('|'):
+                rows.append(cells(lines[i]))
+                i += 1
+            t = ['<div class="tw"><table><thead><tr>']
+            t += ['<th>' + inline(c) + '</th>' for c in header]
+            t.append('</tr></thead><tbody>')
+            for r in rows:
+                t.append('<tr>')
+                t += ['<td>' + inline(c) + '</td>' for c in r]
+                t.append('</tr>')
+            t.append('</tbody></table></div>')
+            out.append(''.join(t))
+            continue
+
+        # 引用
+        if line.startswith('> '):
+            q = []
+            while i < n and lines[i].startswith('>'):
+                q.append(lines[i].lstrip('>').strip())
+                i += 1
+            out.append('<blockquote>' + inline(' '.join(q)) + '</blockquote>')
+            continue
+
+        # 有序列表
+        if re.match(r'^\d+\.\s+', line):
+            items = []
+            while i < n and re.match(r'^\d+\.\s+', lines[i]):
+                items.append(re.sub(r'^\d+\.\s+', '', lines[i]))
+                i += 1
+            out.append('<ol>' + ''.join('<li>' + inline(x) + '</li>' for x in items) + '</ol>')
+            continue
+
+        # 无序列表
+        if re.match(r'^\s*[-*]\s+', line):
+            items = []
+            while i < n and re.match(r'^\s*[-*]\s+', lines[i]):
+                items.append(re.sub(r'^\s*[-*]\s+', '', lines[i]))
+                i += 1
+            out.append('<ul>' + ''.join('<li>' + inline(x) + '</li>' for x in items) + '</ul>')
+            continue
+
+        # 空行
+        if not line.strip():
+            i += 1
+            continue
+
+        # 段落（合并连续普通行）
+        para = [line.strip()]
         i += 1
-        continue
+        while i < n and lines[i].strip() and not re.match(r'^(#{1,4})\s|^\s*[-*]\s+|^\d+\.\s+|^>|^\s*\||^```|^---+\s*$', lines[i]):
+            para.append(lines[i].strip())
+            i += 1
+        out.append('<p>' + inline(' '.join(para)) + '</p>')
+    return '\n'.join(out), toc
 
-    # 段落（合并连续普通行）
-    para = [line.strip()]
-    i += 1
-    while i < n and lines[i].strip() and not re.match(r'^(#{1,4})\s|^\s*[-*]\s+|^\d+\.\s+|^>|^\s*\||^```|^---+\s*$', lines[i]):
-        para.append(lines[i].strip())
-        i += 1
-    out.append('<p>' + inline(' '.join(para)) + '</p>')
 
-body = '\n'.join(out)
-
-toc_html = []
-for lvl, anchor, text in toc:
-    cls = 'toc-l2' if lvl == 2 else 'toc-l3'
-    toc_html.append('<a class="%s" href="#%s">%s</a>' % (cls, anchor, html.escape(text)))
-toc_html = '\n'.join(toc_html)
-
-doc = '''<!DOCTYPE html>
-<html lang="zh-CN">
+TEMPLATE = '''<!DOCTYPE html>
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ApkStart 产品使用手册与问题解决方案</title>
+<title>__TITLE__</title>
 <style>
 :root{--bg:#ffffff;--fg:#1f2328;--mut:#57606a;--line:#d0d7de;--code:#eff1f3;--accent:#0969da;--accent-soft:#ddf4ff;--warn:#9a6700;--warn-bg:#fff8c5;--head:#f6f8fa;--tbl:#f6f8fa}
 *{box-sizing:border-box}
@@ -197,15 +207,15 @@ tbody tr:nth-child(even){background:#fbfcfd}
 </head>
 <body>
 <div class="wrap">
-<aside><h2>目录</h2>
-<input id="tocSearch" type="search" placeholder="筛选目录（Ctrl+F 全文搜索）" autocomplete="off" />
+<aside><h2>__TOCTITLE__</h2>
+<input id="tocSearch" type="search" placeholder="__SEARCH__" autocomplete="off" />
 <div id="tocList">__TOC__</div>
 </aside>
 <main>
 __BODY__
 </main>
 </div>
-<div class="btnbar"><button onclick="window.print()">打印 / 存为 PDF</button></div>
+<div class="btnbar"><button onclick="window.print()">__PRINT__</button></div>
 <script>
 (function () {
   var input = document.getElementById('tocSearch');
@@ -226,9 +236,20 @@ __BODY__
 </html>
 '''
 
-doc = doc.replace('__TOC__', toc_html).replace('__BODY__', body)
-for target in (OUT, APP_OUT):
-    with open(target, 'w', encoding='utf-8') as f:
-        f.write(doc)
-    print('生成:', target)
-    print('大小: %d KB' % (os.path.getsize(target) // 1024))
+for b in BUILDS:
+    with open(b['src'], encoding='utf-8') as f:
+        body, toc = render(f.read().split('\n'))
+    toc_html = []
+    for lvl, anchor, text in toc:
+        cls = 'toc-l2' if lvl == 2 else 'toc-l3'
+        toc_html.append('<a class="%s" href="#%s">%s</a>' % (cls, anchor, html.escape(text)))
+    doc = (TEMPLATE.replace('__LANG__', b['lang']).replace('__TITLE__', b['title'])
+           .replace('__TOCTITLE__', b['toc']).replace('__SEARCH__', b['search'])
+           .replace('__PRINT__', b['print'])
+           .replace('__TOC__', '\n'.join(toc_html)).replace('__BODY__', body))
+    for target in b['outs']:
+        # newline='\n'：仓库按 LF 存，Windows 上默认写 CRLF 会让整份 HTML 显示为改动
+        with open(target, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(doc)
+        print('生成:', target)
+        print('大小: %d KB' % (os.path.getsize(target) // 1024))
