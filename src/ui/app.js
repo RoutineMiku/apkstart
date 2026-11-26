@@ -506,7 +506,7 @@ function friendlyInstallErrorText(msg) {
   // 只有真正失败才走到这里：切换镜像是「进行中」的进度提示（install:progress），
   // 绝不能在红色失败横幅里再说「正在重试」——那会让用户以为还在处理，其实是真的失败了。
   if (/NO_MATCHING_ABIS/i.test(s)) {
-    return /已切换到.*仍然安装失败|abiRetried/i.test(s)
+    return /已切换到.*仍然安装失败|Switched to the Android 14.*still failed to install|abiRetried/i.test(s)
       ? tr('v062.m0016', [s])
       : tr('v062.m0017', [s]);
   }
