@@ -2943,10 +2943,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   });
 
   console.log('\n[多语言 / 自定义镜像 / 内存优化]');
-  await test('多语言：8 语种词典齐全，UI 语言选择卡与下拉都覆盖', () => {
+  await test('多语言：9 语种词典齐全，UI 语言选择卡与下拉都覆盖', () => {
     const root = path.join(__dirname, '..');
     const i18n = require('../src/core/i18n');
-    const langs = ['en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko'];
+    const langs = ['en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko', 'it'];
     for (const l of langs) {
       const f = path.join(root, 'src', 'i18n', l + '.json');
       assert(fs.existsSync(f), '缺 ' + l + ' 词典');
@@ -2954,7 +2954,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       assert(Object.keys(dict).length >= 30, l + ' 词条太少');
     }
     const codes = i18n.LANGUAGES.map((x) => x.code);
-    assert(['auto','zh','en','ru','vi','es','pt','ja','ko'].every((c) => codes.includes(c)), '语言清单不全');
+    assert(['auto','zh','en','ru','vi','es','pt','ja','ko','it'].every((c) => codes.includes(c)), '语言清单不全');
     const html = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
     assert(/id="langMask"/.test(html), '首次语言选择卡缺失');
     assert(/id="langGrid"/.test(html), '语言选项网格缺失');

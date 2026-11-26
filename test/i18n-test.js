@@ -97,7 +97,7 @@ test('跨行拼接的整句能拼装成英文', () => {
 });
 
 console.log('\n[i18n · 多语种]');
-for (const lang of ['ru', 'vi', 'es', 'pt', 'ja', 'ko']) {
+for (const lang of ['ru', 'vi', 'es', 'pt', 'ja', 'ko', 'it']) {
   test(lang + ' 词典可用且能翻译核心文案', () => {
     assert(i18n.hasDictionary(lang), lang + ' 应有词典');
     i18n.setLanguage(lang);

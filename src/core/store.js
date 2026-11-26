@@ -284,7 +284,7 @@ const store = {
      * 中文界面；全新安装（没有 settings.json）才默认 auto，按系统语言选。
      * 非法值一律回落到中文，避免手改配置把界面搞成空白。
      */
-    const VALID_LANGS = ['auto', 'zh', 'en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko'];
+    const VALID_LANGS = ['auto', 'zh', 'en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko', 'it'];
     const freshInstall = !fs.existsSync(SETTINGS_FILE);
     if (existing.uiLanguage === undefined) {
       s.uiLanguage = freshInstall ? 'auto' : 'zh';
