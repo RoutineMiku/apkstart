@@ -213,6 +213,98 @@ console.log('\n[合成 APK：axml + apk 全链路]');
   });
 }
 
+console.log('\n[arsc.js FLAG_COMPACT 与边界校验]');
+{
+  const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16LE(v, 0); return b; };
+  const u32 = (v) => { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0, 0); return b; };
+  const makePool = (strings) => {
+    const offsets = [];
+    const data = [];
+    let off = 0;
+    for (const s of strings) {
+      offsets.push(off);
+      const chars = Buffer.from(s, 'utf16le');
+      data.push(u16(s.length), chars, u16(0));
+      off += 2 + chars.length + 2;
+    }
+    const stringsStart = 28 + offsets.length * 4;
+    const body = Buffer.concat([...offsets.map(u32), ...data]);
+    return Buffer.concat([
+      u16(0x0001), u16(28), u32(28 + body.length),
+      u32(strings.length), u32(0), u32(0), u32(stringsStart), u32(0),
+      body,
+    ]);
+  };
+
+  test('支持 FLAG_COMPACT (0x0008) 紧凑资源条目及引用链', () => {
+    const pool = makePool(['CompactApp']);
+    // ResTable_config (28 bytes) + header (20 bytes) = 48 bytes
+    const cfg = Buffer.alloc(28);
+    cfg.writeUInt32LE(28, 0);
+    // entry 0: FLAG_COMPACT + TYPE_STRING (key=512 > chunk 长度，旧逻辑会误当成 entrySize 越界)
+    const entry0 = Buffer.concat([u16(512), u16((0x03 << 8) | 0x0008), u32(0)]);
+    // entry 1: FLAG_COMPACT + TYPE_REFERENCE -> 0x7f010000
+    const entry1 = Buffer.concat([u16(513), u16((0x01 << 8) | 0x0008), u32(0x7f010000)]);
+    // entry 2: 标准条目但 entrySize 过大导致 valueAt 越界，应返回 null 而不抛异常
+    const entry2 = Buffer.concat([u16(0x0100), u16(0x0000), u32(0)]);
+    const entries = Buffer.concat([entry0, entry1, entry2]);
+
+    const typeHeaderSize = 20 + cfg.length;
+    const offsets = Buffer.concat([u32(0), u32(8), u32(16)]);
+    const entriesStart = typeHeaderSize + offsets.length;
+    const typeHead = Buffer.alloc(20);
+    typeHead.writeUInt16LE(0x0201, 0);
+    typeHead.writeUInt16LE(typeHeaderSize, 2);
+    typeHead.writeUInt32LE(entriesStart + entries.length, 4);
+    typeHead.writeUInt8(1, 8); // typeId = 1
+    typeHead.writeUInt32LE(3, 12); // entryCount = 3
+    typeHead.writeUInt32LE(entriesStart, 16);
+    const typeChunk = Buffer.concat([typeHead, cfg, offsets, entries]);
+
+    const pkgHeader = Buffer.alloc(288);
+    pkgHeader.writeUInt16LE(0x0200, 0);
+    pkgHeader.writeUInt16LE(288, 2);
+    pkgHeader.writeUInt32LE(288 + typeChunk.length, 4);
+    pkgHeader.writeUInt32LE(0x7f, 8);
+    const pkgChunk = Buffer.concat([pkgHeader, typeChunk]);
+
+    const total = 12 + pool.length + pkgChunk.length;
+    const header = Buffer.concat([u16(0x0002), u16(12), u32(total), u32(1)]);
+    const table = new ResTable(Buffer.concat([header, pool, pkgChunk]));
+
+    assert(table.resolve(0x7f010000, 'string') === 'CompactApp', '应直接解析紧凑字符串条目');
+    assert(table.resolve(0x7f010001, 'string') === 'CompactApp', '应支持紧凑引用条目链');
+    assert(table.resolve(0x7f010002, 'string') === null, '越界标准条目应安全忽略并返回 null');
+  });
+
+  test('ResTable_config size=29 贴合缓冲区末尾时不越界', () => {
+    const pool = makePool(['Edge']);
+    const cfg = Buffer.alloc(29);
+    cfg.writeUInt32LE(29, 0);
+    const typeHeaderSize = 20 + cfg.length;
+    const typeHead = Buffer.alloc(20);
+    typeHead.writeUInt16LE(0x0201, 0);
+    typeHead.writeUInt16LE(typeHeaderSize, 2);
+    typeHead.writeUInt32LE(typeHeaderSize, 4);
+    typeHead.writeUInt8(1, 8);
+    typeHead.writeUInt32LE(0, 12);
+    typeHead.writeUInt32LE(typeHeaderSize, 16);
+    const typeChunk = Buffer.concat([typeHead, cfg]);
+
+    const pkgHeader = Buffer.alloc(288);
+    pkgHeader.writeUInt16LE(0x0200, 0);
+    pkgHeader.writeUInt16LE(288, 2);
+    pkgHeader.writeUInt32LE(288 + typeChunk.length, 4);
+    pkgHeader.writeUInt32LE(0x7f, 8);
+    const pkgChunk = Buffer.concat([pkgHeader, typeChunk]);
+
+    const total = 12 + pool.length + pkgChunk.length;
+    const header = Buffer.concat([u16(0x0002), u16(12), u32(total), u32(1)]);
+    const table = new ResTable(Buffer.concat([header, pool, pkgChunk]));
+    assert(table.packages.length === 1, 'size=29 不应越界读取第 30 字节');
+  });
+}
+
 console.log('\n[gpupref.js 独显/核显偏好]');
 const gpupref = require('../src/core/gpupref');
 test('模式归一化：非法值一律回退 auto，不拼进注册表命令', () => {

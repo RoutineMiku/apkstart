@@ -56,7 +56,7 @@ function parseConfig(buf, off) {
   }
   if (size >= 16) cfg.density = buf.readUInt16LE(off + 14);
   if (size >= 28) cfg.sdkVersion = buf.readUInt16LE(off + 24);
-  if (size >= 29) cfg.uiMode = buf.readUInt8(off + 29);
+  if (size >= 30 && off + 30 <= buf.length) cfg.uiMode = buf.readUInt8(off + 29);
   cfg.isDefault = !cfg.language && !cfg.country && cfg.density === 0 && !cfg.sdkVersion;
   return cfg;
 }
@@ -180,11 +180,20 @@ class ResTable {
 
   _readValue(at) {
     const buf = this.buf;
-    if (at + 8 > buf.length) return null;
+    if (at < 0 || at + 8 > buf.length) return null;
     const entrySize = buf.readUInt16LE(at);
     const flags = buf.readUInt16LE(at + 2);
+    if (flags & 0x0008) {
+      // FLAG_COMPACT（aapt2 --enable-compact-entries）：8 字节紧凑条目，高 8 位为 dataType，后 4 字节为 data
+      return {
+        dataType: (flags >>> 8) & 0xff,
+        data: buf.readUInt32LE(at + 4),
+      };
+    }
     if (flags & 0x0001) return null; // 复杂资源（bag/map），此处不处理
+    if (entrySize < 8) return null;
     const valueAt = at + entrySize;
+    if (valueAt + 8 > buf.length) return null;
     return {
       dataType: buf.readUInt8(valueAt + 3),
       data: buf.readUInt32LE(valueAt + 4),
