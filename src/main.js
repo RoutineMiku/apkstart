@@ -245,6 +245,8 @@ let appWin = null;
 let notifier = null;
 let androidSet = null;
 let updater = null;
+// 按键映射引擎：whenReady 里创建，registerIpc 里的 keymap:* 处理要用，所以放模块级
+let keymapEngine = null;
 let updateBusy = false;
 let updateInfo = null;
 
@@ -3127,7 +3129,7 @@ if (!gotLock) {
     androidSet = new AndroidSettings(runtime);
 
     // ---- 按键映射引擎 ----
-    const keymapEngine = new KeymapEngine({
+    keymapEngine = new KeymapEngine({
       execInput: (cmd) => runtime.client().shell(cmd, { timeout: 4000 }),
       getSize: () => {
         // 用当前面板尺寸（横屏 1280x720 / 竖屏 720x1280）

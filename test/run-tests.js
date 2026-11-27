@@ -239,5 +239,18 @@ test('读取注册表值能识别模式（兼容大小写与多键串）', () =>
   assert(gpupref.parseValue('') === 'auto');
 });
 
+console.log('\n[main.js 按键映射]');
+test('按键映射 IPC 用到的 keymapEngine 必须是模块级变量（否则每次调用都抛 ReferenceError）', () => {
+  const mainJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  const at = mainJs.indexOf('function registerIpc(');
+  assert(at > 0, '找不到 registerIpc');
+  const ipc = mainJs.slice(at, mainJs.indexOf('\n}\n', at));
+  assert(/keymapEngine/.test(ipc), 'registerIpc 里应有按键映射处理');
+  // registerIpc 是独立的顶层函数，看不到 whenReady 回调里的块级 const
+  const decls = mainJs.match(/\b(?:const|let|var)\s+keymapEngine\b/g) || [];
+  assert(decls.length === 1 && /^let keymapEngine\b/m.test(mainJs),
+    `keymapEngine 应只在模块级声明一次，实际声明：${decls.join(', ') || '无'}`);
+});
+
 console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
 process.exit(failed ? 1 : 0);
