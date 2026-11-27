@@ -161,8 +161,8 @@
 
   const HTML_LANG = { zh: 'zh-CN', en: 'en', ru: 'ru', vi: 'vi', es: 'es', pt: 'pt-BR', ja: 'ja', ko: 'ko' };
   function setHtmlLang() {
-    const lang = api.getLanguage ? api.getLanguage() : 'zh';
-    document.documentElement.lang = HTML_LANG[lang] || 'zh-CN';
+    const lang = api.getLanguage ? api.getLanguage() : 'en';
+    document.documentElement.lang = HTML_LANG[lang] || 'en';
   }
 
   function start() {
@@ -202,7 +202,7 @@
     t: (s, vars) => api.t(s, vars),
     apply: walk,
     retranslateAll,
-    getLanguage: () => (api.getLanguage ? api.getLanguage() : 'zh'),
+    getLanguage: () => (api.getLanguage ? api.getLanguage() : 'en'),
   };
 
   if (document.readyState === 'loading') {

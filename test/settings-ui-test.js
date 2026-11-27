@@ -21,7 +21,7 @@ const OUT = path.join(__dirname, 'out', LANG === 'en' ? 'en' : 'zh');
 const UI = path.join(__dirname, '..', 'src', 'ui');
 
 const SETTINGS = {
-  uiLanguage: 'zh', uiLanguageSelected: true,
+  uiLanguage: LANG, uiLanguageSelected: true,
   adbPath: '',
   runtime: { isoPath: '', customSysImgDir: '', sourcePreference: 'auto', autoMirror: true, giteeToken: '', mirrorPrefix: '', downloadConnections: 8 },
   engine: {
@@ -198,6 +198,8 @@ app.whenReady().then(async () => {
   step('性能页有自定义系统镜像目录输入框与选择按钮', customImg.has && customImg.pick, `input=${customImg.has} btn=${customImg.pick}`);
   const uiLangs = await evalJs(`(() => { const s = document.getElementById('setUiLanguage'); return s ? Array.from(s.options).map(o => o.value) : []; })()`);
   step('界面语言下拉含全部 8 语种 + 自动', ['auto','zh','en','ru','vi','es','pt','ja','ko'].every((v) => uiLangs.includes(v)), uiLangs.join(','));
+  const selectedLanguage = await evalJs(`({ selected: document.getElementById('setUiLanguage').value, html: document.documentElement.lang })`);
+  step('Selected language matches the rendered UI', selectedLanguage.selected === LANG && selectedLanguage.html === (LANG === 'zh' ? 'zh-CN' : LANG));
 
   // 点「实验室」，看多开开关
   await evalJs(`document.querySelector('#setNav .set-nav-item[data-cat="lab"]').click()`);

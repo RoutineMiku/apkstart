@@ -36,9 +36,9 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
   // 界面语言：auto = 跟随系统；zh / en / ru / vi / es / pt / ja / ko = 固定。
-  // 老用户升级时若配置里没有这个字段，会迁移成 zh（保持升级前的中文界面）。
+  // Follow the system language unless the user selects a language in Settings.
   uiLanguage: 'auto',
-  // 首次语言选择引导是否已处理：全新安装为 false，UI 首次打开弹出选择卡后置 true。
+  // Start directly in the system language; no first-run language prompt is needed.
   uiLanguageSelected: true,
   adbPath: '',
   device: '127.0.0.1:5555',
@@ -280,23 +280,18 @@ const store = {
     const existing = readJson(SETTINGS_FILE, {});
     const s = deepMerge(DEFAULT_SETTINGS, existing);
     /**
-     * 界面语言迁移：设置文件里没有 uiLanguage 的是老用户，保持他们看到的
-     * 中文界面；全新安装（没有 settings.json）才默认 auto，按系统语言选。
-     * 非法值一律回落到中文，避免手改配置把界面搞成空白。
+     * Follow the system when no valid language has been saved. Keep explicit choices,
+     * including auto (follow system), so Settings can still change the language.
      */
     const VALID_LANGS = ['auto', 'zh', 'en', 'ru', 'vi', 'es', 'pt', 'ja', 'ko'];
-    const freshInstall = !fs.existsSync(SETTINGS_FILE);
-    if (existing.uiLanguage === undefined) {
-      s.uiLanguage = freshInstall ? 'auto' : 'zh';
-    } else if (!VALID_LANGS.includes(s.uiLanguage)) {
-      s.uiLanguage = 'zh';
+    if (!VALID_LANGS.includes(s.uiLanguage)) {
+      s.uiLanguage = DEFAULT_SETTINGS.uiLanguage;
     }
     /**
-     * 首次语言选择引导：全新安装且用户还没选过语言时置 false，UI 会在第一次
-     * 打开时弹出语言选择卡。老用户/已选过的保持 true，不重复打扰。
+     * Skip the first-run language picker unless it was explicitly requested.
      */
     if (existing.uiLanguageSelected === undefined) {
-      s.uiLanguageSelected = freshInstall ? false : true;
+      s.uiLanguageSelected = DEFAULT_SETTINGS.uiLanguageSelected;
     }
     /**
      * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
@@ -342,7 +337,7 @@ const store = {
         writeJson(SETTINGS_FILE, {
           ...raw,
           // 全新安装首次读设置时这里会写盘；把刚算出的语言字段一起落盘，
-          // 否则第二次读会把「自己刚创建的文件」误判成老用户配置，语言被迁成中文。
+          // Keep language preferences consistent on subsequent reads.
           uiLanguage: s.uiLanguage,
           uiLanguageSelected: s.uiLanguageSelected,
           display: { ...d, windowEmbed: false, windowEmbedMigrated2: true },
