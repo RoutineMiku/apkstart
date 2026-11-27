@@ -30,6 +30,58 @@ const ROOT = path.join(__dirname, '..');
 const i18n = require('../src/core/i18n');
 const { run } = require('../tools/check-i18n');
 
+test('English is available before the language bootstrap', () => {
+  assert(i18n.getLanguage() === 'en', 'The initial UI language should be English');
+  assert(i18n.t('设置') === 'Settings', 'The initial dictionary should be English');
+});
+test('Missing or invalid language falls back to English', () => {
+  for (const value of [undefined, '', 'xx-YY']) {
+    i18n.setLanguage(value);
+    assert(i18n.getLanguage() === 'en', 'Invalid language should fall back to English');
+    assert(i18n.t('安装 APK') === 'Install APK', 'Fallback should translate UI text');
+  }
+});
+test('The system language is used when no supported language is selected', () => {
+  for (const value of [undefined, '', 'xx-YY']) {
+    assert(i18n.resolveLanguage(value, ['zh-CN']) === 'zh', 'Default should follow the system language');
+    assert(i18n.resolveLanguage(value, ['es-BO', 'en-US']) === 'es', 'Spanish systems should use Spanish');
+    assert(i18n.resolveLanguage(value, ['en-US']) === 'en', 'English systems should use English');
+    assert(i18n.resolveLanguage(value, ['fr-FR']) === 'en', 'Unsupported languages should use English');
+  }
+});
+test('Settings follow the system by default and preserve explicit language choices', () => {
+  const os = require('os');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-i18n-'));
+  const settingsDir = path.join(temp, 'apkstart');
+  const settingsFile = path.join(settingsDir, 'settings.json');
+  const storeModule = require.resolve('../src/core/store');
+  const previousModule = require.cache[storeModule];
+  const previousAppData = process.env.APPDATA;
+  try {
+    process.env.APPDATA = temp;
+    delete require.cache[storeModule];
+    const store = require(storeModule);
+    const readSettings = () => store.getSettings();
+    const fresh = readSettings();
+    assert(fresh.uiLanguage === 'auto', 'Fresh installs should follow the system');
+    assert(fresh.uiLanguageSelected === true, 'The UI should be ready without a language prompt');
+    assert(readSettings().uiLanguage === 'auto', 'Repeated reads should keep following the system');
+    fs.mkdirSync(settingsDir, { recursive: true });
+    for (const value of [undefined, 'invalid', 'en', 'zh', 'es', 'auto']) {
+      fs.writeFileSync(settingsFile, JSON.stringify({ uiLanguage: value }), 'utf8');
+      const settings = readSettings();
+      const expected = value === undefined || value === 'invalid' ? 'auto' : value;
+      assert(settings.uiLanguage === expected, `Unexpected migration for ${value}`);
+    }
+  } finally {
+    if (previousAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = previousAppData;
+    if (previousModule) require.cache[storeModule] = previousModule;
+    else delete require.cache[storeModule];
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 console.log('\n[i18n · 语言解析]');
 test('中文系统自动选中文', () => {
   assert(i18n.resolveLanguage('auto', ['zh-CN']) === 'zh', 'zh-CN 应选中 zh');

@@ -6,7 +6,8 @@
  * - 源码里的界面文案仍然是中文（CONTRIBUTING 的历史约定），词典以「中文原文」为 key，
  *   只在**显示层**翻译。逻辑判断、正则、adb/emulator 命令、包名、路径、配置键、
  *   IPC 通道一律不经过这里，因此翻译不会改变程序行为。
- * - 默认中文：没有词典条目时原样返回中文；非中文条目缺失时逐条回退中文。
+ * - Follow the system language by default, with English as the unsupported-language fallback.
+ *   Missing translations retain the source text.
  * - 带插值的文案（如「已安装 {n} 个应用」）支持精确查表与按骨架反查两种方式，
  *   动态拼出来的字符串也能命中。
  *
@@ -48,8 +49,8 @@ const LANGUAGES = [
 
 const CJK_RE = /[\u4e00-\u9fff]/;
 
-let lang = 'zh';
-let dict = {};
+let lang = 'en';
+let dict = EN;
 let patterns = null;
 let literalKeys = null;
 const patternCache = new Map();
@@ -98,7 +99,7 @@ function resolveLanguage(setting, systemLanguages) {
 
 function setLanguage(next) {
   const n = normalizeLang(next);
-  lang = n || 'zh';
+  lang = n || 'en';
   dict = DICTS[lang] || {};
   patterns = null;
   literalKeys = null;

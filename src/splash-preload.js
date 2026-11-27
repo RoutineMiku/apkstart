@@ -4,8 +4,8 @@ const appI18n = require('./core/i18n');
 
 try {
   const boot = ipcRenderer.sendSync('i18n:bootstrap');
-  appI18n.setLanguage((boot && boot.lang) || 'zh');
-} catch (_) { /* 按中文 */ }
+  appI18n.setLanguage((boot && boot.lang) || 'en');
+} catch (_) { /* Keep the default English dictionary if bootstrap fails. */ }
 const langListeners = new Set();
 ipcRenderer.on('i18n:lang', (_e, next) => {
   appI18n.setLanguage(next);

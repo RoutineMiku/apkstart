@@ -8,8 +8,8 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 // 不重载窗口、不打断正在运行的应用。
 try {
   const boot = ipcRenderer.sendSync('i18n:bootstrap');
-  appI18n.setLanguage((boot && boot.lang) || 'zh');
-} catch (_) { /* 非 Electron 环境下按中文 */ }
+  appI18n.setLanguage((boot && boot.lang) || 'en');
+} catch (_) { /* Keep the default English dictionary if bootstrap fails. */ }
 const langListeners = new Set();
 ipcRenderer.on('i18n:lang', (_e, next) => {
   appI18n.setLanguage(next);
